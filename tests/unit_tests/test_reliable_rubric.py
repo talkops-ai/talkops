@@ -3,13 +3,13 @@
 from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from opscloud.middleware.goal_state_notice import build_goal_state_notice
-from opscloud.middleware.reliable_rubric import (
+from talkops.middleware.goal_state_notice import build_goal_state_notice
+from talkops.middleware.reliable_rubric import (
     ReliableRubricMiddleware,
     _is_transient_grader_transport_error,
     _without_internal_control_messages,
 )
-from opscloud.rubrics.evaluator import _validate_rubric_grader_read_path
+from talkops.rubrics.evaluator import _validate_rubric_grader_read_path
 
 
 def test_validate_rubric_grader_read_path():

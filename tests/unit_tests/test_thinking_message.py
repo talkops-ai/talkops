@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from opscloud.ui.widgets.messages import ThinkingMessage, _thinking_heading
+from talkops.ui.widgets.messages import ThinkingMessage, _thinking_heading
 
 THOUGHT = """**Investigating pod restarts**
 

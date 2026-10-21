@@ -9,7 +9,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 
-from opscloud.ui.widgets.plugin_manager import (
+from talkops.ui.widgets.plugin_manager import (
     PluginManagerScreen,
     _ManagerState,
     _MarketplaceRow,
@@ -101,7 +101,7 @@ async def test_plugin_manager_search_input_updates_view() -> None:
     marketplaces = (_MarketplaceRow(name="talkops-devops-plugins", source="local", plugin_count=3, installed_count=0),)
     mock_state = _ManagerState(available_plugins=plugins, installed_plugins=(), marketplaces=marketplaces, errors=())
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
         app = DummyPluginManagerApp(screen)
         async with app.run_test() as pilot:
             # Let initial state load
@@ -155,7 +155,7 @@ async def test_plugin_manager_cancel_clears_search() -> None:
     marketplaces = (_MarketplaceRow(name="talkops-devops-plugins", source="local", plugin_count=3, installed_count=0),)
     mock_state = _ManagerState(available_plugins=plugins, installed_plugins=(), marketplaces=marketplaces, errors=())
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
         app = DummyPluginManagerApp(screen)
         async with app.run_test() as pilot:
             await pilot.pause()

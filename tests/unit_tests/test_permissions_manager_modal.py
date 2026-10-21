@@ -6,8 +6,8 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import OptionList
 
-from opscloud.ui.permission_store import PermissionStore
-from opscloud.ui.widgets.permissions_manager import PermissionsManagerScreen, _AddRuleScreen
+from talkops.ui.permission_store import PermissionStore
+from talkops.ui.widgets.permissions_manager import PermissionsManagerScreen, _AddRuleScreen
 
 
 class DummyPermApp(App[None]):

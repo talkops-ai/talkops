@@ -1,16 +1,16 @@
-"""Unit tests for OpsCloud security module: unicode security, shell safety, and approval modes."""
+"""Unit tests for TalkOps security module: unicode security, shell safety, and approval modes."""
 
 from typing import Any
 from unittest.mock import MagicMock
 import pytest
-from opscloud.approval_mode import ApprovalMode
-from opscloud.security.unicode_security import (
+from talkops.approval_mode import ApprovalMode
+from talkops.security.unicode_security import (
     check_url_safety,
     detect_dangerous_unicode,
     sanitize_control_chars,
     strip_dangerous_unicode,
 )
-from opscloud.security.shell_safety import (
+from talkops.security.shell_safety import (
     classify_command,
     contains_dangerous_patterns,
     is_safe_command,
@@ -39,7 +39,7 @@ def test_sanitize_control_chars():
 
 
 def test_check_url_safety_and_ssrf():
-    from opscloud.security.url_validation import _validate_url, UrlValidationError
+    from talkops.security.url_validation import _validate_url, UrlValidationError
 
     # Unicode deceptive URL
     result_deceptive = check_url_safety("http://exam\u200Bple.com/path")
@@ -95,7 +95,7 @@ def test_approval_mode_parsing():
 
 
 def test_next_approval_mode_cycle():
-    from opscloud.security.approval_mode import next_approval_mode
+    from talkops.security.approval_mode import next_approval_mode
 
     assert next_approval_mode(ApprovalMode.MANUAL) == ApprovalMode.AUTO
     assert next_approval_mode(ApprovalMode.AUTO) == ApprovalMode.SMART
@@ -128,7 +128,7 @@ def test_shell_safety_multicloud_safe_commands():
 
 
 def test_cli_ast_multicloud_destructive_detection():
-    from opscloud.security.cli_ast_evaluator import CliAstEvaluator, evaluate_cli_safety
+    from talkops.security.cli_ast_evaluator import CliAstEvaluator, evaluate_cli_safety
 
     evaluator = CliAstEvaluator()
 
@@ -164,7 +164,7 @@ def test_cli_ast_multicloud_destructive_detection():
 
 
 def test_approval_mode_payload():
-    from opscloud.approval_mode import approval_mode_payload
+    from talkops.approval_mode import approval_mode_payload
     import pytest
 
     assert approval_mode_payload(mode=ApprovalMode.AUTO) == {"mode": "auto"}
@@ -182,7 +182,7 @@ def test_approval_mode_payload():
 
 
 async def test_awrite_and_read_approval_mode():
-    from opscloud.approval_mode import (
+    from talkops.approval_mode import (
         APPROVAL_MODE_NAMESPACE,
         aread_approval_mode_from_store,
         awrite_approval_mode,
@@ -213,7 +213,7 @@ async def test_awrite_and_read_approval_mode():
 
 
 def test_auto_mode_notice(tmp_path):
-    from opscloud.approval_mode import (
+    from talkops.approval_mode import (
         has_auto_mode_notice,
         save_auto_mode_notice,
     )
@@ -227,14 +227,14 @@ def test_auto_mode_notice(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resolve_approval_mode_signatures():
-    from opscloud.security.approval_mode_source import (
+    from talkops.security.approval_mode_source import (
         _aresolve_approval_mode,
         _resolve_approval_mode,
         ApprovalPolicyResolver,
         _DecidedMode,
         _LiveLookup,
     )
-    from opscloud.approval_mode import ApprovalMode
+    from talkops.approval_mode import ApprovalMode
 
     # 1. 0 positional arguments
     assert _resolve_approval_mode() in {ApprovalMode.MANUAL, ApprovalMode.AUTO, ApprovalMode.SMART}
@@ -260,7 +260,7 @@ async def test_resolve_approval_mode_signatures():
 
 
 def test_web_search_unconfigured_error():
-    from opscloud.tools.web_search import web_search
+    from talkops.tools.web_search import web_search
 
     # Calling web_search without api key should return helpful dict error, not raise
     result = web_search.invoke({"query": "test query"})
@@ -274,12 +274,12 @@ def test_web_search_unconfigured_error():
 async def test_batched_store_event_loop_safety(caplog):
     import asyncio
     import logging
-    from opscloud.approval_mode import (
+    from talkops.approval_mode import (
         ApprovalMode,
         aread_approval_mode_from_store,
         read_approval_mode_from_store,
     )
-    from opscloud.security.approval_mode_source import (
+    from talkops.security.approval_mode_source import (
         _aresolve_approval_mode,
         _resolve_approval_mode,
     )
@@ -291,7 +291,7 @@ async def test_batched_store_event_loop_safety(caplog):
         def __init__(self):
             self._loop = current_loop
             self.data = {
-                ("opscloud", "approval_mode"): {
+                ("talkops", "approval_mode"): {
                     "thread:test-loop-1:mode": {"mode": "auto"}
                 }
             }
@@ -339,13 +339,13 @@ async def test_batched_store_event_loop_safety(caplog):
 @pytest.mark.asyncio
 async def test_auto_mode_hitl_aafter_model():
     from unittest.mock import MagicMock
-    from opscloud.middleware.auto_mode_hitl import (
+    from talkops.middleware.auto_mode_hitl import (
         AutoModeHITLMiddleware,
         _ASYNC_APPROVAL_ROUTING_KEY,
         _RoutingDecision,
         _async_routing_mode,
     )
-    from opscloud.approval_mode import ApprovalMode
+    from talkops.approval_mode import ApprovalMode
     from langchain_core.messages import AIMessage, HumanMessage
 
     mw = AutoModeHITLMiddleware()

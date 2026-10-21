@@ -3,8 +3,8 @@
 from pathlib import Path
 import tempfile
 import pytest
-from opscloud.cli.main import _resolve_rubric_text, build_parser, main
-from opscloud.state.goal_state_limits import RUBRIC_CHAR_LIMIT, GoalStateSizeError
+from talkops.cli.main import _resolve_rubric_text, build_parser, main
+from talkops.state.goal_state_limits import RUBRIC_CHAR_LIMIT, GoalStateSizeError
 
 
 def test_resolve_rubric_text_none():

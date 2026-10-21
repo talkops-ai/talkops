@@ -9,8 +9,8 @@ from textual.app import App, ComposeResult
 from textual.widgets import Static
 from textual.widgets.option_list import Option
 
-from opscloud.ui.widgets.modal_base import PillTabs
-from opscloud.ui.widgets.plugin_manager import (
+from talkops.ui.widgets.modal_base import PillTabs
+from talkops.ui.widgets.plugin_manager import (
     PluginManagerScreen,
     _ManagerState,
     _MarketplaceRow,
@@ -87,7 +87,7 @@ async def test_plugin_manager_modal_chrome_and_counters() -> None:
     screen = PluginManagerScreen()
     mock_state = _mock_state()
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
         app = DummyModalApp(screen)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -122,7 +122,7 @@ async def test_plugin_manager_tab_navigation_and_subtitles() -> None:
     screen = PluginManagerScreen()
     mock_state = _mock_state()
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
         app = DummyModalApp(screen)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -160,7 +160,7 @@ async def test_plugin_manager_details_mode_and_escape_back() -> None:
     screen = PluginManagerScreen()
     mock_state = _mock_state()
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
         app = DummyModalApp(screen)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -212,7 +212,7 @@ async def test_plugin_manager_close_reload_prompt_flow() -> None:
     screen = PluginManagerScreen()
     mock_state = _mock_state()
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
         app = TrackingApp()
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -260,7 +260,7 @@ async def test_plugin_manager_check_reload_required_detects_changes() -> None:
 
             await self.push_screen(screen, on_close)
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
         app = TrackingApp()
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -290,8 +290,8 @@ async def test_refresh_all_marketplaces_shows_intermediate_status_and_completes(
     class DummyEvent:
         option = Option("Refresh", id="refresh-all-marketplaces")
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state), \
-         patch("opscloud.plugins.discovery.refresh_all_marketplaces", side_effect=fake_refresh):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state), \
+         patch("talkops.plugins.discovery.refresh_all_marketplaces", side_effect=fake_refresh):
         app = DummyModalApp(screen)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -325,8 +325,8 @@ async def test_refresh_single_marketplace_shows_intermediate_status_and_complete
     class DummyEvent:
         option = Option("Refresh", id="action:refresh-marketplace")
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state), \
-         patch("opscloud.plugins.discovery.refresh_marketplace", return_value=mock_mp):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state), \
+         patch("talkops.plugins.discovery.refresh_marketplace", return_value=mock_mp):
         app = DummyModalApp(screen)
         async with app.run_test() as pilot:
             await pilot.pause()

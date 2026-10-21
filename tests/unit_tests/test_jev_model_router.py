@@ -12,12 +12,12 @@ from langchain_core.messages import HumanMessage
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_typesafe import TypeSafeClassifier
 
-from opscloud.middleware.jev_model_router import (
+from talkops.middleware.jev_model_router import (
     JevDynamicModelRouterMiddleware,
     ModelChoice,
     ModelRouterMiddleware,
 )
-from opscloud.model.pool import DynamicModelPoolManager
+from talkops.model.pool import DynamicModelPoolManager
 
 
 class DummyRuntime:
@@ -27,7 +27,7 @@ class DummyRuntime:
 
 @pytest.fixture(autouse=True)
 def isolate_agent_pool(monkeypatch):
-    from opscloud.config import toml_config
+    from talkops.config import toml_config
 
     orig_load = toml_config.load_agent_pool
 
@@ -36,7 +36,7 @@ def isolate_agent_pool(monkeypatch):
             return None
         return orig_load(config_path)
 
-    monkeypatch.setattr("opscloud.config.toml_config.load_agent_pool", _safe_load)
+    monkeypatch.setattr("talkops.config.toml_config.load_agent_pool", _safe_load)
 
 
 @pytest.fixture
@@ -83,7 +83,7 @@ def test_dynamic_tiering_with_single_reasoning_base_spec(pool_manager):
 
 
 def test_dynamic_tier_discovery_all_22_providers(pool_manager):
-    from opscloud.model.config import AVAILABLE_MODELS
+    from talkops.model.config import AVAILABLE_MODELS
 
     for prov in AVAILABLE_MODELS:
         tiers = pool_manager.discover_tiers(provider=prov)
@@ -174,7 +174,7 @@ async def test_middleware_sends_candidate_models_in_question_choices():
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
 
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 result = await middleware.abefore_agent(state, smart_runtime)
                 assert result is not None
 
@@ -199,20 +199,20 @@ async def test_middleware_sends_candidate_models_in_question_choices():
 
 
 def test_auto_detect_provider_with_various_credentials(pool_manager):
-    with patch("opscloud.model.pool.has_provider_credentials", side_effect=lambda p: p == "xai"):
-        with patch("opscloud.model.config.ModelConfig.load") as mock_cfg:
+    with patch("talkops.model.pool.has_provider_credentials", side_effect=lambda p: p == "xai"):
+        with patch("talkops.model.config.ModelConfig.load") as mock_cfg:
             mock_cfg.return_value.default_model = None
             mock_cfg.return_value.recent_model = None
             assert pool_manager._resolve_provider() == "xai"
 
-    with patch("opscloud.model.pool.has_provider_credentials", side_effect=lambda p: p == "mistralai"):
-        with patch("opscloud.model.config.ModelConfig.load") as mock_cfg:
+    with patch("talkops.model.pool.has_provider_credentials", side_effect=lambda p: p == "mistralai"):
+        with patch("talkops.model.config.ModelConfig.load") as mock_cfg:
             mock_cfg.return_value.default_model = None
             mock_cfg.return_value.recent_model = None
             assert pool_manager._resolve_provider() == "mistralai"
 
-    with patch("opscloud.model.pool.has_provider_credentials", side_effect=lambda p: p == "cohere"):
-        with patch("opscloud.model.config.ModelConfig.load") as mock_cfg:
+    with patch("talkops.model.pool.has_provider_credentials", side_effect=lambda p: p == "cohere"):
+        with patch("talkops.model.config.ModelConfig.load") as mock_cfg:
             mock_cfg.return_value.default_model = None
             mock_cfg.return_value.recent_model = None
             assert pool_manager._resolve_provider() == "cohere"
@@ -309,7 +309,7 @@ async def test_middleware_activates_in_smart_mode_tier0():
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
 
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()) as mock_event:
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()) as mock_event:
                 result = await middleware.abefore_agent(state, smart_runtime)
 
                 assert result is not None
@@ -342,7 +342,7 @@ async def test_middleware_activates_in_smart_mode_tier2():
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
 
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 result = await middleware.abefore_agent(state, smart_runtime)
 
                 assert result is not None
@@ -418,8 +418,8 @@ async def test_fallback_on_classifier_failure():
 
 
 def test_pool_manager_instantiates_tier0_with_effort_off(pool_manager):
-    with patch("opscloud.model.config.has_provider_credentials", return_value=True):
-        with patch("opscloud.model.factory.has_provider_credentials", return_value=True):
+    with patch("talkops.model.config.has_provider_credentials", return_value=True):
+        with patch("talkops.model.factory.has_provider_credentials", return_value=True):
             model, spec, effort, settings = pool_manager.get_model_for_tier(
                 tier=0, base_spec="google_genai:gemini-3.7-flash"
             )
@@ -446,7 +446,7 @@ async def test_middleware_activates_in_smart_mode_tier1_for_ops_execution(caplog
             with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
                 mock_inv.return_value = mock_response
 
-                with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+                with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                     result = await middleware.abefore_agent(state, smart_runtime)
 
                     assert result is not None
@@ -481,7 +481,7 @@ async def test_middleware_detects_smart_mode_from_configurable_or_store():
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
 
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 result = await middleware.abefore_agent(state, ConfigRuntime())
                 assert result is not None
                 assert result["_dynamic_model_route"]["tier"] == 1
@@ -491,7 +491,7 @@ async def test_middleware_detects_smart_mode_from_configurable_or_store():
 
 @pytest.mark.asyncio
 async def test_message_extraction_helper():
-    from opscloud.middleware.jev_model_router import _extract_last_user_text
+    from talkops.middleware.jev_model_router import _extract_last_user_text
 
     assert _extract_last_user_text({"messages": [{"role": "user", "content": "hello"}]}) == "hello"
 
@@ -510,7 +510,7 @@ async def test_message_extraction_helper():
 
 
 def test_user_configured_agent_pool_in_toml(tmp_path, pool_manager):
-    from opscloud.config.toml_config import (
+    from talkops.config.toml_config import (
         clear_agent_pool,
         load_agent_pool,
         save_agent_pool,
@@ -536,7 +536,7 @@ def test_user_configured_agent_pool_in_toml(tmp_path, pool_manager):
     assert loaded["powerful"] == "google_genai:gemini-2.5-pro"
 
     # Pool manager respects user-configured pool
-    with patch("opscloud.config.toml_config.load_agent_pool", return_value=loaded):
+    with patch("talkops.config.toml_config.load_agent_pool", return_value=loaded):
         tiers = pool_manager.discover_tiers(provider="google_genai")
         assert tiers[0][0] == "google_genai:gemini-2.5-flash-lite"
         assert tiers[1][0] == "google_genai:gemini-2.5-flash"
@@ -561,8 +561,8 @@ def test_user_configured_agent_pool_in_toml(tmp_path, pool_manager):
 
 @pytest.mark.asyncio
 async def test_pool_command_handler(tmp_path):
-    from opscloud.commands._base import CommandContext
-    from opscloud.commands.core.pool import PoolHandler
+    from talkops.commands._base import CommandContext
+    from talkops.commands.core.pool import PoolHandler
 
     handler = PoolHandler()
     assert handler.name == "/pool"
@@ -578,7 +578,7 @@ async def test_pool_command_handler(tmp_path):
     assert res_status.message is not None and "Agent Model Pool Status" in res_status.message
 
     # 2. Set command
-    with patch("opscloud.commands.core.pool.save_agent_pool") as mock_save:
+    with patch("talkops.commands.core.pool.save_agent_pool") as mock_save:
         ctx_set = CommandContext(
             app=mock_app,
             raw_command="/pool set fast=gemini-3.6-flash standard=gemini-3.7-flash powerful=gemini-3.1-pro-preview",
@@ -593,7 +593,7 @@ async def test_pool_command_handler(tmp_path):
         assert saved_dict["powerful"] == "gemini-3.1-pro-preview"
 
     # 3. Clear command
-    with patch("opscloud.commands.core.pool.clear_agent_pool") as mock_clear:
+    with patch("talkops.commands.core.pool.clear_agent_pool") as mock_clear:
         ctx_clear = CommandContext(app=mock_app, raw_command="/pool clear", args="clear")
         res_clear = await handler.execute(ctx_clear)
         assert res_clear.success is True
@@ -607,7 +607,7 @@ async def test_pool_command_handler(tmp_path):
     mock_app._show_pool_selector.assert_called_once()
 
 
-# ── Benchmark Test Suite & Safeguard Tests (OPSCLOUD-JEV-09) ───────────────────
+# ── Benchmark Test Suite & Safeguard Tests (TALKOPS-JEV-09) ───────────────────
 
 
 @pytest.mark.parametrize(
@@ -683,7 +683,7 @@ async def test_operational_benchmark_classification(
     with patch.object(middleware, "is_available", return_value=True):
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 res = await middleware.abefore_agent(state, runtime)
                 assert res is not None
                 route_info = res["_dynamic_model_route"]
@@ -706,7 +706,7 @@ async def test_confidence_safeguard_escalates_incident_prompt():
     with patch.object(middleware, "is_available", return_value=True):
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 res = await middleware.abefore_agent(state, runtime)
                 assert res is not None
                 route_info = res["_dynamic_model_route"]
@@ -728,7 +728,7 @@ async def test_confidence_safeguard_for_subagent_escalates_to_standard():
     with patch.object(middleware, "is_available", return_value=True):
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 res = await middleware.abefore_agent(state, runtime)
                 assert res is not None
                 route_info = res["_dynamic_model_route"]
@@ -750,7 +750,7 @@ async def test_confidence_safeguard_promotes_ambiguous_fast_to_standard():
     with patch.object(middleware, "is_available", return_value=True):
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 res = await middleware.abefore_agent(state, runtime)
                 assert res is not None
                 route_info = res["_dynamic_model_route"]
@@ -761,7 +761,7 @@ async def test_confidence_safeguard_promotes_ambiguous_fast_to_standard():
 @pytest.mark.asyncio
 async def test_enriched_routing_state_orchestrator_vs_subagent():
     """Verify enriched state payload has subagent_ecosystem on orchestrator and None (nil) on subagent."""
-    from opscloud.middleware.jev_model_router import _build_jev_routing_state
+    from talkops.middleware.jev_model_router import _build_jev_routing_state
 
     user_msg = HumanMessage(content="can you help me in optimizing my aws cost")
 
@@ -774,7 +774,7 @@ async def test_enriched_routing_state_orchestrator_vs_subagent():
     )
     assert orch_state["is_subagent"] is False
     assert orch_state["agent_role"] == "orchestrator"
-    assert orch_state["agent_name"] == "opscloud-supervisor"
+    assert orch_state["agent_name"] == "talkops-supervisor"
     assert isinstance(orch_state["subagent_ecosystem"], list)
     assert "software_and_devops_coding" in orch_state["agent_context"]["active_capabilities"]
     assert "multi_agent_delegation" in orch_state["agent_context"]["active_capabilities"]
@@ -804,7 +804,7 @@ def test_multi_provider_agent_pool_tier_discovery(tmp_path, pool_manager, monkey
     monkeypatch.setenv("OPENAI_API_KEY", "mock-test-key-openai")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "mock-test-key-anthropic")
     monkeypatch.setenv("GOOGLE_API_KEY", "mock-test-key-google")
-    from opscloud.config.toml_config import clear_agent_pool, load_agent_pool, save_agent_pool
+    from talkops.config.toml_config import clear_agent_pool, load_agent_pool, save_agent_pool
 
     tmp_config = tmp_path / "config.toml"
     multi_pool = {
@@ -821,7 +821,7 @@ def test_multi_provider_agent_pool_tier_discovery(tmp_path, pool_manager, monkey
     assert loaded["powerful"] == "anthropic:claude-sonnet-4-6"
     assert loaded["provider"] == "multi"
 
-    with patch("opscloud.config.toml_config.load_agent_pool", return_value=loaded):
+    with patch("talkops.config.toml_config.load_agent_pool", return_value=loaded):
         # 1. Resolves multi-provider pool regardless of passed provider
         for prov in ("google_genai", "openai", "anthropic", None):
             tiers = pool_manager.discover_tiers(provider=prov)

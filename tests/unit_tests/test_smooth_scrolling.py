@@ -9,19 +9,19 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.geometry import Offset
 
-from opscloud.ui.theme import get_css_variable_defaults
-from opscloud.ui.widgets.messages import (
+from talkops.ui.theme import get_css_variable_defaults
+from talkops.ui.widgets.messages import (
     MessageList,
     ToolCallMessage,
     UserMessage,
     compute_wheel_speed,
 )
-from opscloud.ui.widgets.status import StatusBar
-from opscloud.ui.widgets.subagent_panel import SubagentPanel
+from talkops.ui.widgets.status import StatusBar
+from talkops.ui.widgets.subagent_panel import SubagentPanel
 
 
 class _ThemedTestApp(App[None]):
-    """Minimal test App providing OpsCloud custom CSS variables."""
+    """Minimal test App providing TalkOps custom CSS variables."""
 
     def get_css_variables(self) -> dict[str, str]:
         return {**super().get_css_variables(), **get_css_variable_defaults()}
@@ -266,8 +266,8 @@ async def test_scroll_reflows_welcome_banner_and_markdown_children_in_compositor
     leaving ``WelcomeBanner`` (``#welcome-card``, ``_InfoPanel``) and Markdown
     blocks with stale off-screen coordinates when scrolling back up.
     """
-    from opscloud.ui.widgets.messages import AssistantMessage
-    from opscloud.ui.widgets.welcome import WelcomeBanner, _InfoPanel, _LeftPanel
+    from talkops.ui.widgets.messages import AssistantMessage
+    from talkops.ui.widgets.welcome import WelcomeBanner, _InfoPanel, _LeftPanel
 
     class WelcomeScrollApp(_ThemedTestApp):
         def compose(self) -> ComposeResult:
@@ -310,4 +310,69 @@ async def test_scroll_reflows_welcome_banner_and_markdown_children_in_compositor
         assert welcome_card.region.y >= 0
         assert left_panel.region.width > 0
         assert info_panel.region.width > 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_assistant_response_keeps_auto_scrolling_to_bottom() -> None:
+    """Verify loading spinner removal, thinking collapse, and streaming markdown keep auto-scrolling down."""
+    from talkops.ui.widgets.loading import LoadingWidget
+    from talkops.ui.widgets.welcome import WelcomeBanner
+
+    class StreamingScrollApp(_ThemedTestApp):
+        def compose(self) -> ComposeResult:
+            with MessageList(id="messages"):
+                yield WelcomeBanner(id="welcome")
+
+    app = StreamingScrollApp()
+    async with app.run_test(size=(100, 24)) as pilot:
+        messages = app.query_one("#messages", MessageList)
+        messages.add_user_message(
+            "Explain Kubernetes pod scheduling and show a sample manifest."
+        )
+        loading = LoadingWidget("Thinking")
+        app._loading_widget = loading  # type: ignore[attr-defined]
+        await messages.mount(loading)
+        messages._scroll_to_end()
+        await pilot.pause(0.05)
+
+        assert messages._auto_scroll_locked is True
+        assert messages.max_scroll_y > 0
+        assert messages.scroll_y == messages.max_scroll_y
+
+        # Stream thinking tokens, then remove loading spinner as assistant text starts
+        messages.append_thinking_token("**Analyzing scheduling phases**\nInspecting predicates...", 0.5)
+        await pilot.pause(0.05)
+        assert messages._auto_scroll_locked is True
+        assert messages.scroll_y == messages.max_scroll_y
+
+        await loading.remove()
+        app._loading_widget = None  # type: ignore[attr-defined]
+        await pilot.pause(0.05)
+
+        # Removing LoadingWidget clamps scroll_y downward; must NOT unlock auto-scroll!
+        assert messages._auto_scroll_locked is True
+        assert messages.scroll_y == messages.max_scroll_y
+
+        chunks = [
+            "# Kubernetes Scheduling\n\n",
+            "The scheduler watches for newly created Pods and assigns them to nodes.\n\n",
+            "- Filtering phase (Predicates)\n",
+            "- Scoring phase (Priorities)\n",
+            "- Binding phase\n\n",
+            "```yaml\napiVersion: v1\nkind: Pod\nmetadata:\n  name: nginx\n```\n\n",
+            "Line A\n\nLine B\n\nLine C\n\nLine D\n\nLine E\n",
+        ]
+        for chunk in chunks:
+            messages.append_assistant_token(chunk)
+            if messages._current_assistant is not None:
+                await messages._current_assistant._flush_pending_append()
+            await pilot.pause(0.05)
+            assert messages._auto_scroll_locked is True
+            assert messages.scroll_y == messages.max_scroll_y
+
+        messages.finish_assistant_message()
+        await pilot.pause(0.1)
+        assert messages._auto_scroll_locked is True
+        assert messages.scroll_y == messages.max_scroll_y
+
 

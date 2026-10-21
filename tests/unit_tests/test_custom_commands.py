@@ -9,9 +9,9 @@ from unittest.mock import MagicMock
 from langchain_core.messages import SystemMessage
 import pytest
 
-from opscloud.commands._base import CommandContext
-from opscloud.commands._router import CommandRouter
-from opscloud.commands.custom import (
+from talkops.commands._base import CommandContext
+from talkops.commands._router import CommandRouter
+from talkops.commands.custom import (
     CustomCommandHandler,
     CustomCommandWatcher,
     activate_conditional_commands_for_paths,
@@ -33,7 +33,7 @@ from opscloud.commands.custom import (
     sanitize_command_arguments,
     substitute_arguments,
 )
-from opscloud.middleware.custom_commands import (
+from talkops.middleware.custom_commands import (
     CustomCommandsMiddleware,
     create_custom_command_skill_tool,
     is_tool_disallowed,
@@ -41,11 +41,11 @@ from opscloud.middleware.custom_commands import (
     matches_tool_permission_rule,
     resolve_command_model_spec,
 )
-from opscloud.prompts.custom_commands import (
+from talkops.prompts.custom_commands import (
     build_skill_tool_prompt,
     format_commands_for_budget,
 )
-from opscloud.ui.command_registry import build_custom_commands
+from talkops.ui.command_registry import build_custom_commands
 
 
 # ── 1. Frontmatter, Brace Expansion & Fallback Description ───────────────
@@ -177,7 +177,7 @@ And inline code ``!`printf "nope"` `` is untouched.
 
 
 def test_full_expand_custom_command_prompt(tmp_path: Path) -> None:
-    cmd_dir = tmp_path / ".opscloud" / "commands"
+    cmd_dir = tmp_path / ".talkops" / "commands"
     cmd_dir.mkdir(parents=True)
     cmd_file = cmd_dir / "check.md"
     cmd_file.write_text(
@@ -190,7 +190,7 @@ effort: low
 ---
 Inspecting $target in ${CLAUDE_PROJECT_DIR} (session ${CLAUDE_SESSION_ID}, effort ${CLAUDE_EFFORT}).
 Shell check: !`printf "ok"`
-See @src/opscloud/agent/factory.py for details.
+See @src/talkops/agent/factory.py for details.
 """,
         encoding="utf-8",
     )
@@ -206,7 +206,7 @@ See @src/opscloud/agent/factory.py for details.
     )
     assert f"Inspecting auth-module in {tmp_path.as_posix()} (session sess-123, effort low)." in expanded.expanded_prompt
     assert "Shell check: ok" in expanded.expanded_prompt
-    assert "src/opscloud/agent/factory.py" in expanded.referenced_files
+    assert "src/talkops/agent/factory.py" in expanded.referenced_files
     assert "<command-message>check</command-message>" in expanded.xml_command_message
     assert "<command-name>/check</command-name>" in expanded.xml_command_message
     assert "<command-args>auth-module</command-args>" in expanded.xml_command_message
@@ -248,7 +248,7 @@ def test_subdirectory_colon_namespacing_and_skill_md_priority(tmp_path: Path) ->
 
 def test_conditional_paths_activation_and_watcher(tmp_path: Path) -> None:
     clear_custom_command_cache(reset_conditional=True)
-    cmd_root = tmp_path / ".opscloud" / "commands"
+    cmd_root = tmp_path / ".talkops" / "commands"
     cmd_root.mkdir(parents=True)
 
     (cmd_root / "always.md").write_text("---\ndescription: Always active\n---\nAlways.", encoding="utf-8")
@@ -301,7 +301,7 @@ def test_conditional_paths_activation_and_watcher(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_router_space_to_colon_and_stacked_commands(tmp_path: Path) -> None:
     clear_custom_command_cache(reset_conditional=True)
-    cmd_root = tmp_path / ".opscloud" / "commands"
+    cmd_root = tmp_path / ".talkops" / "commands"
     (cmd_root / "frontend").mkdir(parents=True)
     (cmd_root / "frontend" / "component.md").write_text(
         "---\ndescription: Build UI component\nallowed-tools: Read, Write\n---\nComponent: $ARGUMENTS",
@@ -352,7 +352,7 @@ async def test_router_space_to_colon_and_stacked_commands(tmp_path: Path) -> Non
 
 def test_middleware_permissions_model_override_and_turn_reset(tmp_path: Path) -> None:
     clear_custom_command_cache(reset_conditional=True)
-    cmd_root = tmp_path / ".opscloud" / "commands"
+    cmd_root = tmp_path / ".talkops" / "commands"
     cmd_root.mkdir(parents=True)
     (cmd_root / "deploy.md").write_text(
         "---\ndescription: Deploy command\nwhen_to_use: When shipping to prod\n---\nDeploy.",
@@ -454,7 +454,7 @@ def test_middleware_permissions_model_override_and_turn_reset(tmp_path: Path) ->
 
 def test_skill_tool_and_usage_priority_budgeting(tmp_path: Path) -> None:
     clear_custom_command_cache(reset_conditional=True)
-    cmd_root = tmp_path / ".opscloud" / "commands"
+    cmd_root = tmp_path / ".talkops" / "commands"
     cmd_root.mkdir(parents=True)
     (cmd_root / "alpha.md").write_text("---\ndescription: Alpha command\n---\nAlpha $ARGUMENTS", encoding="utf-8")
     (cmd_root / "beta.md").write_text(
@@ -490,7 +490,7 @@ def test_forked_command_isolates_messages_and_expands_anthropic_cache_control(tm
     from langchain_anthropic.middleware.prompt_caching import AnthropicPromptCachingMiddleware
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from opscloud.model.factory import _ensure_anthropic_block_level_cache_control
+    from talkops.model.factory import _ensure_anthropic_block_level_cache_control
 
     _ensure_anthropic_block_level_cache_control()
     anthropic_kwargs: dict[str, Any] = {"model": "claude-sonnet-4-5", "api_key": "test-key"}

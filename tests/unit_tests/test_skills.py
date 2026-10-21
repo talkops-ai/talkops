@@ -1,10 +1,10 @@
-"""Unit tests for OpsCloud skill system, parser, loader, trust store, and commands."""
+"""Unit tests for TalkOps skill system, parser, loader, trust store, and commands."""
 
 import argparse
 from pathlib import Path
 import pytest
 
-from opscloud.skills.commands import (
+from talkops.skills.commands import (
     _create,
     _delete,
     _format_info_fields,
@@ -14,25 +14,25 @@ from opscloud.skills.commands import (
     execute_skills_command,
     setup_skills_parser,
 )
-from opscloud.skills.invocation import (
+from talkops.skills.invocation import (
     build_skill_invocation_envelope,
     discover_skills_and_roots,
     parse_skill_command,
 )
-from opscloud.skills.load import (
+from talkops.skills.load import (
     _parse_skill_file,
     get_skill_by_name,
     get_skill_content_by_name,
     list_skills,
     load_skill_content,
 )
-from opscloud.skills.merge import merge_skill
-from opscloud.skills.registry import (
+from talkops.skills.merge import merge_skill
+from talkops.skills.registry import (
     SkillRegistry,
     SkillSource,
     _parse_skill_frontmatter,
 )
-from opscloud.skills.trust import (
+from talkops.skills.trust import (
     RevokeResult,
     SkillTrustStore,
     clear_trusted_skill_dirs,
@@ -310,7 +310,7 @@ def test_parse_skill_command():
 
 
 def test_format_and_match_plugin_skills():
-    from opscloud.skills.invocation import format_skill_slash_name, match_discovered_skill
+    from talkops.skills.invocation import format_skill_slash_name, match_discovered_skill
 
     aws_skill = {
         "name": "aws-core@agent-toolkit-for-aws:signing-in-to-aws",
@@ -345,9 +345,9 @@ def test_format_and_match_plugin_skills():
 
 
 def test_skills_create_and_delete(tmp_path: Path, monkeypatch):
-    from opscloud.config.settings import settings
+    from talkops.config.settings import settings
 
-    monkeypatch.setattr("opscloud.config.paths.DATA_DIR", tmp_path)
+    monkeypatch.setattr("talkops.config.paths.DATA_DIR", tmp_path)
     monkeypatch.setattr(settings, "project_root", tmp_path)
 
     # Template generation
@@ -356,17 +356,17 @@ def test_skills_create_and_delete(tmp_path: Path, monkeypatch):
     assert "## Overview" in template
 
     # Create skill
-    _create("karpenter-scale", agent="opscloud", project=False, output_format="json")
+    _create("karpenter-scale", agent="talkops", project=False, output_format="json")
     created_skill_dir = tmp_path / "skills" / "karpenter-scale"
     assert created_skill_dir.is_dir()
     assert (created_skill_dir / "SKILL.md").is_file()
 
     # Dry-run delete
-    _delete("karpenter-scale", agent="opscloud", project=False, dry_run=True, output_format="json")
+    _delete("karpenter-scale", agent="talkops", project=False, dry_run=True, output_format="json")
     assert created_skill_dir.is_dir()
 
     # Actual delete
-    _delete("karpenter-scale", agent="opscloud", project=False, force=True, output_format="json")
+    _delete("karpenter-scale", agent="talkops", project=False, force=True, output_format="json")
     assert not created_skill_dir.exists()
 
 
@@ -427,7 +427,7 @@ def test_skill_registry_discover_directories(tmp_path: Path):
 
 def test_plugin_skills_middleware_handles_none_metadata(tmp_path: Path):
     from unittest.mock import MagicMock
-    from opscloud.middleware.skills import PluginSkillsMiddleware
+    from talkops.middleware.skills import PluginSkillsMiddleware
 
     middleware = PluginSkillsMiddleware(
         sources=[(str(tmp_path), "test")],
@@ -449,7 +449,7 @@ def test_plugin_skills_middleware_handles_none_metadata(tmp_path: Path):
 
 
 def test_built_in_remember_skill_discovered():
-    from opscloud.skills.load import list_skills
+    from talkops.skills.load import list_skills
     skills = list_skills()
     remember = next((s for s in skills if s["name"] == "remember"), None)
     assert remember is not None, "Built-in remember skill should be discovered"
@@ -464,7 +464,7 @@ def test_built_in_remember_skill_discovered():
 
 
 def test_built_in_skill_creator_discovered():
-    from opscloud.skills.load import list_skills
+    from talkops.skills.load import list_skills
     skills = list_skills()
     creator = next((s for s in skills if s["name"] == "skill-creator"), None)
     assert creator is not None, "Built-in skill-creator should be discovered"
@@ -489,7 +489,7 @@ def test_skill_invocation_envelope_remember():
 
 
 def test_strip_frontmatter_and_skill_message():
-    from opscloud.ui.widgets.messages import _strip_frontmatter, SkillMessage
+    from talkops.ui.widgets.messages import _strip_frontmatter, SkillMessage
     raw = """---
 name: remember
 description: Some desc
@@ -519,7 +519,7 @@ Body text goes here.
 
 
 def test_plugin_skill_envelope_and_adapter_stream_input():
-    from opscloud.ui.textual_adapter import TextualAdapter
+    from talkops.ui.textual_adapter import TextualAdapter
 
     skill = {
         "name": "aws-core@agent-toolkit-for-aws:signing-in-to-aws",
@@ -561,14 +561,14 @@ def test_plugin_skill_envelope_and_adapter_stream_input():
     assert human_msg.additional_kwargs["__skill"]["slash_command"] == "/aws-core:signing-in-to-aws"
     assert human_msg.additional_kwargs["__skill"]["kind"] == "SLASH_COMMAND_KIND_SKILL"
     assert (
-        human_msg.additional_kwargs["opscloud_user_prompt"]["literal_user_text"]
+        human_msg.additional_kwargs["talkops_user_prompt"]["literal_user_text"]
         == "/aws-core:signing-in-to-aws"
     )
 
 
 def test_lean_core_built_in_skills_registered() -> None:
     """Verify only the lean core built-in skills (commit, remember, simplify, skill-creator) are shipped."""
-    built_in_dir = Path(__file__).resolve().parents[2] / "src" / "opscloud" / "built_in_skills"
+    built_in_dir = Path(__file__).resolve().parents[2] / "src" / "talkops" / "built_in_skills"
     skills = list_skills(built_in_skills_dir=built_in_dir)
     names = {s["name"] for s in skills if s.get("source") == "built-in"}
 
@@ -598,7 +598,7 @@ def test_lean_core_built_in_skills_registered() -> None:
 
 
 def test_skill_invocation_envelope_dynamic_precomputation(tmp_path: Path) -> None:
-    """Verify $ARGUMENTS, ${OPSCLOUD_SKILL_DIR}, and inline !`cmd` shell pre-computation in SKILL.md."""
+    """Verify $ARGUMENTS, ${TALKOPS_SKILL_DIR}, and inline !`cmd` shell pre-computation in SKILL.md."""
     skill_dir = tmp_path / "custom-skill"
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_md_path = skill_dir / "SKILL.md"
@@ -607,7 +607,7 @@ def test_skill_invocation_envelope_dynamic_precomputation(tmp_path: Path) -> Non
         "name: custom-skill\n"
         "description: Test dynamic skill expansion\n"
         "---\n"
-        "Skill dir: ${OPSCLOUD_SKILL_DIR}\n"
+        "Skill dir: ${TALKOPS_SKILL_DIR}\n"
         "Inline output: !`printf 'hello-dynamic-skill'`\n"
         "Target arg: $ARGUMENTS"
     )
@@ -627,12 +627,12 @@ def test_skill_invocation_envelope_dynamic_precomputation(tmp_path: Path) -> Non
 
 def test_skill_tool_resolves_built_in_skills() -> None:
     """Verify the Skill tool resolves built-in skills such as simplify and verify."""
-    from opscloud.middleware.custom_commands import create_custom_command_skill_tool
+    from talkops.middleware.custom_commands import create_custom_command_skill_tool
 
     skill_tool = create_custom_command_skill_tool()
-    output = skill_tool.invoke({"skill": "simplify", "args": "src/opscloud"})
+    output = skill_tool.invoke({"skill": "simplify", "args": "src/talkops"})
     assert "<command-name>/simplify</command-name>" in output
     assert "Phase 1 — Review (4 cleanup angles)" in output
-    assert "src/opscloud" in output
+    assert "src/talkops" in output
 
 

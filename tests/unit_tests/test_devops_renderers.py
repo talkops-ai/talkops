@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from opscloud.ui.theme import DARK_COLORS, LIGHT_COLORS
-from opscloud.ui.widgets.devops_renderers import (
+from talkops.ui.theme import DARK_COLORS, LIGHT_COLORS
+from talkops.ui.widgets.devops_renderers import (
     AnsiblePlaybookRenderer,
     HelmDiffRenderer,
     KubectlRenderer,
@@ -11,7 +11,7 @@ from opscloud.ui.widgets.devops_renderers import (
     detect_devops_renderer,
     get_devops_renderer_for_command,
 )
-from opscloud.ui.widgets.messages import ToolCallMessage
+from talkops.ui.widgets.messages import ToolCallMessage
 
 
 def test_kubectl_renderer_header_and_statuses():

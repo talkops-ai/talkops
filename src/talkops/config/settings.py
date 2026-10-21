@@ -1,0 +1,1184 @@
+"""Runtime settings state, environment detection, and bootstrap for TalkOps.
+
+The ``Settings`` dataclass holds all runtime configuration.
+It can be hydrated from:
+1. **ConfigStore** (primary when DB is available): ``Settings.from_store(store)``
+   resolves settings through the DB → env → TOML → manifest defaults chain.
+2. **Environment & TOML** (bootstrap fallback): ``Settings.from_env()`` for early
+   startup and CLI initialization before the store is initialized.
+"""
+
+from __future__ import annotations
+
+from collections.abc import MutableMapping
+import contextlib
+from dataclasses import dataclass, field
+from enum import StrEnum
+from talkops.utils.logger import get_logger
+import os
+from pathlib import Path
+import sys
+import threading
+from typing import Any
+
+from talkops.config import paths
+from talkops.config.manifest import (
+    get_config_options,
+    load_config_toml,
+    resolve_scalar,
+)
+from talkops.config.paths import (
+    CONFIG_PATH,
+    DATA_DIR,
+    DEFAULT_AGENT_NAME,
+    DOTENV_DENIED_ENV_KEYS,
+    ENV_PREFIX,
+    GLOBAL_ENV_PATH,
+    PROJECT_DOTENV_DENIED_ENV_KEYS,
+    RELOADABLE_FIELDS,
+    find_project_root,
+)
+
+logger = get_logger(__name__)
+
+# Snapshot of environment keys present at import time from shell/calling process
+_INITIAL_SHELL_ENV: frozenset[str] = frozenset(os.environ.keys())
+
+
+# ── Bootstrap State ──────────────────────────────────────
+
+
+@dataclass
+class _BootstrapState:
+    """Internal state tracker for settings initialization lifecycle."""
+
+    done: bool = False
+    start_path: Path | None = None
+
+
+_bootstrap_state = _BootstrapState()
+_bootstrap_lock = threading.Lock()
+
+
+def sync_aws_env_aliases() -> None:
+    """Harmonize environment variable aliases for AWS CLI and SDK compatibility.
+
+    Ensures bidirectional synchronization between standard AWS config keys:
+    - AWS_REGION <-> AWS_DEFAULT_REGION
+    - AWS_PROFILE <-> AWS_DEFAULT_PROFILE
+    - Ensures AWS_PAGER is set to empty to disable interactive paging in subprocesses.
+    """
+    # Region synchronization
+    reg = os.environ.get("AWS_REGION")
+    def_reg = os.environ.get("AWS_DEFAULT_REGION")
+    if reg and not def_reg:
+        os.environ["AWS_DEFAULT_REGION"] = reg
+    elif def_reg and not reg:
+        os.environ["AWS_REGION"] = def_reg
+
+    # Profile synchronization
+    prof = os.environ.get("AWS_PROFILE")
+    def_prof = os.environ.get("AWS_DEFAULT_PROFILE")
+    if prof and not def_prof:
+        os.environ["AWS_DEFAULT_PROFILE"] = prof
+    elif def_prof and not prof:
+        os.environ["AWS_PROFILE"] = def_prof
+
+    # Ensure non-interactive pager for AWS CLI
+    if "AWS_PAGER" not in os.environ:
+        os.environ["AWS_PAGER"] = ""
+
+
+def sync_cloud_env_aliases() -> None:
+    """Harmonize environment variable aliases across cloud providers."""
+    sync_aws_env_aliases()
+
+
+def _ensure_bootstrap() -> None:
+    """One-time bootstrap: dotenv loading and env sync. Idempotent and thread-safe."""
+    if _bootstrap_state.done:
+        return
+    with _bootstrap_lock:
+        if _bootstrap_state.done:
+            return
+        try:
+            from talkops.project_utils import get_server_project_context
+
+            ctx = get_server_project_context()
+            _bootstrap_state.start_path = ctx.user_cwd if ctx else None
+            _load_dotenv(start_path=_bootstrap_state.start_path)
+            sync_aws_env_aliases()
+        except Exception:
+            logger.exception("Bootstrap failed; proceeding with env as-is.")
+        finally:
+            _bootstrap_state.done = True
+
+
+# ── Env-Var Resolution ───────────────────────────────────
+
+
+def resolve_env_var(name: str, fallback_names: tuple[str, ...] = ()) -> str | None:
+    """Resolve an environment variable with TALKOPS_ prefix precedence and Settings fallback.
+
+    Precedence:
+    1. TALKOPS_{name}
+    2. {name}
+    3. Fallback names in order
+    4. Current Settings singleton attribute if populated
+    """
+    _ensure_bootstrap()
+    prefixed = f"{ENV_PREFIX}{name}"
+    val = os.environ.get(prefixed)
+    if val is not None and val != "":
+        return val
+
+    val = os.environ.get(name)
+    if val is not None and val != "":
+        return val
+
+    for alt in fallback_names:
+        val = os.environ.get(alt)
+        if val is not None and val != "":
+            return val
+
+    # Fallback to _settings singleton if populated
+    if _settings is not None:
+        field_name = name.lower()
+        if hasattr(_settings, field_name):
+            field_val = getattr(_settings, field_name)
+            if field_val is not None and str(field_val).strip() != "":
+                return str(field_val)
+
+    return None
+
+
+def _resolve_env_var_from(env: dict[str, str], name: str) -> str | None:
+    """Helper to resolve env vars from a specific dictionary mapping."""
+    prefixed = f"{ENV_PREFIX}{name}"
+    val = env.get(prefixed)
+    if val is not None and val != "":
+        return val
+    val = env.get(name)
+    return val if val != "" else None
+
+
+# ── Dotenv Loading ───────────────────────────────────────
+
+# Tracks values injected by _load_dotenv into os.environ (mapping key -> value)
+_dotenv_loaded_values: dict[str, str] = {}
+
+
+def _strip_dotenv_loaded_values(env: MutableMapping[str, str]) -> None:
+    """Remove values this loader injected, keeping any modified since.
+
+    Callers that build a child environment or reload the stack have to start
+    from the shell's own values rather than from a previous application.
+    """
+    for key, value in list(_dotenv_loaded_values.items()):
+        if env.get(key) == value:
+            env.pop(key, None)
+
+
+def resolve_read_project_dotenv() -> bool:
+    """Determine whether project-level .env files should be loaded.
+
+    Checked in order of trust:
+    1. Shell/process environment: TALKOPS_READ_PROJECT_DOTENV or READ_PROJECT_DOTENV
+    2. User config: ~/.talkops/config.toml [startup] read_project_dotenv
+    3. User global env: ~/.talkops/.env READ_PROJECT_DOTENV or TALKOPS_READ_PROJECT_DOTENV
+    Defaults to True.
+    """
+    for key in ("TALKOPS_READ_PROJECT_DOTENV", "READ_PROJECT_DOTENV"):
+        val = os.environ.get(key)
+        if val is not None and val.strip() != "":
+            return val.strip().lower() not in ("0", "false", "no", "off")
+
+    try:
+        toml_data = load_config_toml(CONFIG_PATH)
+        startup_sec = toml_data.get("startup")
+        if isinstance(startup_sec, dict) and "read_project_dotenv" in startup_sec:
+            raw = startup_sec["read_project_dotenv"]
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, str):
+                return raw.strip().lower() not in ("0", "false", "no", "off")
+    except Exception:
+        pass
+
+    if GLOBAL_ENV_PATH.is_file():
+        try:
+            from dotenv import dotenv_values
+
+            global_vals = dotenv_values(GLOBAL_ENV_PATH)
+            for key in ("TALKOPS_READ_PROJECT_DOTENV", "READ_PROJECT_DOTENV"):
+                val = global_vals.get(key)
+                if val is not None and str(val).strip() != "":
+                    return str(val).strip().lower() not in ("0", "false", "no", "off")
+        except Exception:
+            pass
+
+    return True
+
+
+def _load_dotenv(*, start_path: Path | None = None, refresh_loaded: bool = False) -> None:
+    """Load .env files with documented precedence:
+    Shell exports > project .talkops/.env > ~/.talkops/.env > project .env.
+    """
+    try:
+        from dotenv import dotenv_values
+    except ImportError:
+        return
+
+    if refresh_loaded:
+        _strip_dotenv_loaded_values(os.environ)
+        _dotenv_loaded_values.clear()
+
+    effective_start = start_path
+    if effective_start is None:
+        try:
+            from talkops.project_utils import get_server_project_context
+
+            ctx = get_server_project_context()
+            if ctx is not None:
+                effective_start = ctx.user_cwd
+        except Exception:
+            pass
+
+    search = (effective_start or Path.cwd()).expanduser().resolve()
+    home = Path.home().resolve()
+
+    # Determine project root if inside a recognized project repository
+    root = find_project_root(search)
+
+    should_read_project = resolve_read_project_dotenv()
+
+    # Walk up to find nearest generic project .env, strictly bounded by project root
+    project_env: Path | None = None
+    if should_read_project:
+        if root is not None:
+            # Check from search directory up to root (inclusive), avoiding home directory
+            current = search
+            while True:
+                if current != home:
+                    candidate = current / ".env"
+                    if candidate.is_file():
+                        project_env = candidate
+                        break
+                if current == root or current == current.parent:
+                    break
+                current = current.parent
+        else:
+            # Not in a recognizable project root: check search folder directly if not home
+            if search != home:
+                candidate = search / ".env"
+                if candidate.is_file():
+                    project_env = candidate
+    else:
+        logger.debug("Skipping project .env: read_project_dotenv is disabled")
+
+    loaded_vals: dict[str, str | None] = {}
+
+    # 1. Project/CWD .env (lowest precedence baseline, filtered by PROJECT_DOTENV_DENIED_ENV_KEYS)
+    if project_env:
+        with contextlib.suppress(Exception):
+            p_vals = dotenv_values(project_env)
+            for k, v in p_vals.items():
+                if k.upper() in PROJECT_DOTENV_DENIED_ENV_KEYS:
+                    logger.warning("Denied key in project .env: %s", k)
+                    continue
+                loaded_vals[k] = v
+
+    # 2. Global ~/.talkops/.env (user-level credentials, overwrites project .env)
+    global_env = paths.GLOBAL_ENV_PATH
+    if global_env.is_file():
+        with contextlib.suppress(Exception):
+            loaded_vals.update(dotenv_values(global_env))
+
+    # 3. Project-scoped TalkOps .env (e.g. {project_root}/.talkops/.env)
+    # Allows repo authors to supply TalkOps-specific configuration for that repository
+    if root is not None:
+        project_talkops_env = paths.project_talkops_dir(root) / ".env"
+        if project_talkops_env.is_file():
+            with contextlib.suppress(Exception):
+                po_vals = dotenv_values(project_talkops_env)
+                for k, v in po_vals.items():
+                    if k.upper() in PROJECT_DOTENV_DENIED_ENV_KEYS:
+                        logger.warning("Denied key in project .talkops/.env: %s", k)
+                        continue
+                    loaded_vals[k] = v
+
+    # Filter out system-level denied keys from any dotenv
+    for key in DOTENV_DENIED_ENV_KEYS:
+        if key in loaded_vals:
+            logger.warning("Denied .env key in dotenv file: %s", key)
+            loaded_vals.pop(key, None)
+
+    # Apply to os.environ:
+    # Outer shell exports take ultimate precedence.
+    for k, v in loaded_vals.items():
+        if v is not None:
+            if refresh_loaded:
+                # On refresh, update unless key was originally in initial shell exports
+                if k not in _INITIAL_SHELL_ENV:
+                    os.environ[k] = v
+                    _dotenv_loaded_values[k] = v
+            else:
+                # On initial load, only set if not already in os.environ
+                if k not in os.environ:
+                    os.environ[k] = v
+                    _dotenv_loaded_values[k] = v
+
+
+def parse_shell_allow_list(val: str | list[str] | None) -> list[str] | None:
+    """Parse comma-separated or list representation of allowed shell commands."""
+    if val is None:
+        return None
+    if isinstance(val, list):
+        return [item.strip() for item in val if item.strip()]
+    if not val.strip():
+        return []
+    return [cmd.strip() for cmd in val.split(",") if cmd.strip()]
+
+
+# ── Settings Dataclass ───────────────────────────────────
+
+
+@dataclass
+class Settings:
+    """Runtime configuration state for TalkOps."""
+
+    # ── Active Model State ────────────────────────────────
+    model_name: str | None = None
+    model_provider: str | None = None
+    reasoning_effort: str | None = None
+    model_context_limit: int | None = 128_000
+    model_unsupported_modalities: frozenset[str] = field(default_factory=frozenset)
+    agent_pool: dict[str, str] | None = None
+
+    # ── Assistant / Agent Identity ────────────────────────
+    assistant_id: str = DEFAULT_AGENT_NAME
+
+    # ── Security & Approvals ──────────────────────────────
+    approval_mode: str = "manual"
+    shell_allow_list: list[str] | None = None
+    read_project_dotenv: bool = True
+
+    # ── Execution Sandbox ─────────────────────────────────
+    sandbox_provider: str = "local"
+
+    # ── Cloud Provider Configuration ──────────────────────
+    cloud_provider: str = "aws"
+
+    # ── AWS Cloud Configuration ───────────────────────────
+    aws_region: str = "us-east-1"
+    aws_profile: str = "default"
+    aws_role_arn: str | None = None
+
+    # ── Provider Credentials ──────────────────────────────
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    google_api_key: str | None = None
+    groq_api_key: str | None = None
+    deepseek_api_key: str | None = None
+    tavily_api_key: str | None = None
+    azure_openai_api_key: str | None = None
+    typesafe_api_key: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+
+    # ── State Checkpointing & DB ──────────────────────────
+    checkpoint_backend: str = "sqlite"
+    postgres_uri: str | None = None
+
+    # ── Tracing & Telemetry ───────────────────────────────
+    langchain_api_key: str | None = None
+    langchain_tracing: bool = False
+    langchain_project: str = "talkops"
+    langchain_endpoint: str = "https://api.smith.langchain.com"
+    user_langchain_project: str | None = "talkops"
+
+    # ── Interpreter & PTC Execution ───────────────────────
+    enable_interpreter: bool = True
+    interpreter_ptc: str | list[str] | None = "safe"
+    interpreter_ptc_acknowledge_unsafe: bool = False
+    interpreter_timeout_seconds: int = 30
+    interpreter_memory_limit_mb: int = 64
+    interpreter_max_ptc_calls: int = 50
+    interpreter_max_result_chars: int = 50000
+
+    # ── UI / Display ──────────────────────────────────────
+    theme: str = "dark"
+    show_timestamps: bool = True
+    auto_scroll: bool = True
+    notifications_enabled: bool = True
+    show_turn_duration: bool = True
+    verbose_output: bool = False
+    auto_compact: bool = False
+    show_scrollbar: bool = False
+    auto_update: bool = True
+
+    # ── System & Filesystem Paths ─────────────────────────
+    config_dir: Path = DATA_DIR
+    cwd: Path | None = None
+    project_root: Path | None = None
+    extra_skills_dirs: list[str] | str | None = None
+    debug: bool = False
+    log_level: str = "INFO"
+    log_mode: str = "text"
+    log_to_console: bool = False
+    log_to_file: bool = True
+    log_dir: Path = Path("/tmp/talkops_logs")
+    log_file: str = "talkops.log"
+
+    # ── Webhooks & Event Ingestion ────────────────────────
+    webhook_host: str = "0.0.0.0"
+    webhook_port: int = 2024
+    webhook_secret: str | None = None
+    webhook_pagerduty_secret: str | None = None
+    webhook_github_secret: str | None = None
+    webhook_gitlab_token: str | None = None
+    webhook_jenkins_token: str | None = None
+    webhook_dedupe_ttl_seconds: int = 300
+    webhook_max_concurrent_runs: int = 5
+    webhook_sns_auto_confirm: bool = True
+    webhook_slack_url: str | None = None
+    webhook_pagerduty_api_key: str | None = None
+    webhook_pagerduty_from_email: str | None = None
+    webhook_github_token: str | None = None
+    webhook_callback_url: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.cwd is None or self.project_root is None:
+            try:
+                from talkops.project_utils import get_server_project_context
+
+                ctx = get_server_project_context()
+                if ctx is not None:
+                    if self.cwd is None:
+                        self.cwd = ctx.user_cwd
+                    if self.project_root is None:
+                        self.project_root = ctx.project_root
+            except Exception:
+                pass
+
+        if self.project_root is None and self.cwd is not None:
+            self.project_root = find_project_root(self.cwd)
+
+        if not self.langchain_project and self.user_langchain_project:
+            self.langchain_project = self.user_langchain_project
+
+
+    # ── Model Property Compatibility ──────────────────────
+
+    @property
+    def model(self) -> str | None:
+        """Alias for model_name for parity with model selector."""
+        return self.model_name
+
+    @model.setter
+    def model(self, value: str | None) -> None:
+        self.model_name = value
+
+    @property
+    def config_path(self) -> Path:
+        """Return the active configuration file path."""
+        return paths.CONFIG_PATH
+
+    @property
+    def user_talkops_dir(self) -> Path:
+        return paths.DATA_DIR
+
+    @property
+    def has_openai(self) -> bool:
+        return self.openai_api_key is not None
+
+    @property
+    def has_anthropic(self) -> bool:
+        return self.anthropic_api_key is not None
+
+    @property
+    def has_tavily(self) -> bool:
+        return bool(self.tavily_api_key or os.environ.get("TAVILY_API_KEY"))
+
+    @property
+    def effective_cwd(self) -> Path:
+        try:
+            from talkops.project_utils import get_server_project_context
+
+            ctx = get_server_project_context()
+            if ctx is not None and ctx.user_cwd is not None:
+                return ctx.user_cwd
+        except Exception:
+            pass
+        if self.cwd is not None:
+            return self.cwd
+        return Path.cwd().resolve()
+
+    @property
+    def effective_project_root(self) -> Path | None:
+        if self.project_root is not None:
+            return self.project_root
+        try:
+            from talkops.project_utils import get_server_project_context
+
+            ctx = get_server_project_context()
+            if ctx is not None and ctx.project_root is not None:
+                return ctx.project_root
+        except Exception:
+            pass
+        return find_project_root(self.effective_cwd)
+
+    # ── Display & Mutator Helpers ─────────────────────────
+
+    def to_display_dict(self) -> dict[str, str]:
+        """Return all non-None fields as a display-friendly dict."""
+        import dataclasses
+
+        result = {}
+        for f in dataclasses.fields(self):
+            value = getattr(self, f.name)
+            if value is not None:
+                result[f.name] = str(value)
+        return result
+
+    def set_field(self, key: str, value: str) -> tuple[bool, str]:
+        """Set a settings field by name with type coercion, persisting to config.toml."""
+        import dataclasses
+        from talkops.config.manifest import get_option, get_option_by_settings_field
+        from talkops.config.toml_config import save_toml_field
+
+        field_names = {f.name for f in dataclasses.fields(self)}
+        target_field = key
+        opt = None
+        if target_field not in field_names:
+            opt = get_option(key)
+            if opt and opt.settings_field and opt.settings_field in field_names:
+                target_field = opt.settings_field
+            else:
+                return False, f"Unknown setting: {key}. Available: {', '.join(sorted(field_names))}"
+        else:
+            opt = get_option_by_settings_field(target_field) or get_option(target_field)
+
+        field_obj = next(f for f in dataclasses.fields(self) if f.name == target_field)
+        type_str = (
+            field_obj.type
+            if isinstance(field_obj.type, str)
+            else getattr(field_obj.type, "__name__", str(field_obj.type))
+        )
+
+        try:
+            if "bool" in type_str:
+                coerced: Any = value.lower() in ("true", "1", "yes", "on")
+            elif "int" in type_str:
+                coerced = int(value)
+            elif "float" in type_str:
+                coerced = float(value)
+            elif "Path" in type_str:
+                coerced = Path(value).expanduser().resolve()
+            elif "list" in type_str:
+                coerced = [item.strip() for item in value.split(",") if item.strip()]
+            else:
+                coerced = value
+
+            setattr(self, target_field, coerced)
+
+            if opt and opt.toml_keys:
+                try:
+                    if len(opt.toml_keys) == 2:
+                        sec, fld = opt.toml_keys[0], opt.toml_keys[1]
+                        toml_val = str(coerced) if isinstance(coerced, Path) else coerced
+                        save_toml_field(sec, fld, toml_val)
+                except Exception:
+                    logger.debug("Could not persist setting %s to config.toml", key, exc_info=True)
+
+            self._sync_field_to_cli_settings(target_field, coerced)
+            self.export_to_environment()
+            return True, f"Set {key} = {value}"
+        except (ValueError, TypeError) as exc:
+            return False, f"Invalid value for {key}: {exc}"
+
+    def reset_field(self, key: str) -> tuple[bool, str]:
+        """Reset a settings field to its default value, clearing it in config.toml."""
+        import dataclasses
+        from talkops.config.manifest import get_option, get_option_by_settings_field
+        from talkops.config.toml_config import delete_toml_field
+
+        field_names = {f.name: f for f in dataclasses.fields(self)}
+        target_field = key
+        opt = None
+        if target_field not in field_names:
+            opt = get_option(key)
+            if opt and opt.settings_field and opt.settings_field in field_names:
+                target_field = opt.settings_field
+            else:
+                return False, f"Unknown setting: {key}"
+        else:
+            opt = get_option_by_settings_field(target_field) or get_option(target_field)
+
+        f = field_names[target_field]
+        default = f.default if f.default is not dataclasses.MISSING else None
+        setattr(self, target_field, default)
+
+        if opt and opt.toml_keys:
+            try:
+                if len(opt.toml_keys) == 2:
+                    sec, fld = opt.toml_keys[0], opt.toml_keys[1]
+                    delete_toml_field(sec, fld)
+            except Exception:
+                logger.debug("Could not clear setting %s from config.toml", key, exc_info=True)
+
+        self._sync_field_to_cli_settings(target_field, None, reset=True)
+        self.export_to_environment()
+        return True, f"Reset {key} to default"
+
+    @staticmethod
+    def _sync_field_to_cli_settings(
+        target_field: str,
+        value: Any,
+        *,
+        reset: bool = False,
+    ) -> None:
+        """Synchronize a Settings field update to ~/.talkops/settings.json."""
+        field_map = {
+            "model_name": "model",
+            "model_provider": "model_provider",
+            "reasoning_effort": "reasoning_effort",
+            "theme": "color_scheme",
+            "approval_mode": "tool_permission",
+            "model_context_limit": "context_window",
+            "notifications_enabled": "notifications",
+            "aws_profile": "aws_profile",
+            "aws_region": "aws_region",
+        }
+        cli_attr = field_map.get(target_field)
+        if not cli_attr:
+            return
+        try:
+            import copy
+            from talkops.config.cli_settings import (
+                default_cli_settings,
+                get_cli_settings_manager,
+            )
+
+            mgr = get_cli_settings_manager()
+            if mgr.settings_load_error is not None:
+                return
+            updated = copy.deepcopy(mgr.settings)
+            defaults = default_cli_settings()
+            if reset or value is None:
+                setattr(updated, cli_attr, getattr(defaults, cli_attr))
+            else:
+                setattr(updated, cli_attr, value)
+            mgr.write_cli_settings(updated)
+        except Exception:
+            logger.debug("Could not sync field %s to settings.json", target_field, exc_info=True)
+
+    @staticmethod
+    def _cli_settings_overrides() -> dict[str, Any]:
+        """Extract non-default values from ~/.talkops/settings.json mapped to Settings fields."""
+        overrides: dict[str, Any] = {}
+        try:
+            from talkops.config.cli_settings import get_cli_settings_manager
+
+            s = get_cli_settings_manager().settings
+            if s.model:
+                overrides["model_name"] = s.model
+            if s.model_provider:
+                overrides["model_provider"] = s.model_provider
+            if s.reasoning_effort:
+                overrides["reasoning_effort"] = s.reasoning_effort
+            if s.color_scheme:
+                overrides["theme"] = s.color_scheme
+            if s.tool_permission:
+                overrides["approval_mode"] = s.tool_permission
+            if s.context_window > 0:
+                overrides["model_context_limit"] = s.context_window
+            if s.notifications is not None:
+                overrides["notifications_enabled"] = s.notifications
+            if s.verbosity in {"verbose", "debug"}:
+                overrides["verbose_output"] = True
+            if s.aws_profile:
+                overrides["aws_profile"] = s.aws_profile
+            if s.aws_region:
+                overrides["aws_region"] = s.aws_region
+            if s.agent_pool:
+                overrides["agent_pool"] = dict(s.agent_pool)
+        except Exception:
+            pass
+        return overrides
+
+    def export_to_environment(self) -> None:
+        """Export active settings values to os.environ for child processes, SDKs, and CLI tools.
+
+        Iterates over all canonical manifest options. If an option specifies an environment
+        variable and the setting has a resolved value, exports it. Also synchronizes cloud
+        environment aliases.
+        """
+        from talkops.config.manifest import get_config_options, serialize_typed_value
+
+        for opt in get_config_options():
+            if not opt.settings_field or not hasattr(self, opt.settings_field):
+                continue
+            val = getattr(self, opt.settings_field, None)
+            if val is None:
+                continue
+            env_key = opt.effective_env_var
+            if env_key:
+                str_val = serialize_typed_value(opt.kind, val)
+                if str_val:
+                    os.environ[env_key] = str_val
+
+        sync_cloud_env_aliases()
+
+    # ── Path & Agent Helpers ──────────────────────────────
+
+    def ensure_agent_dir(self, assistant_id: str | None = None) -> Path:
+        target_id = assistant_id or self.assistant_id or DEFAULT_AGENT_NAME
+        return paths.ensure_agent_dir(target_id)
+
+    def get_user_agents_dir(self, assistant_id: str | None = None) -> Path:
+        target_id = assistant_id or self.assistant_id or DEFAULT_AGENT_NAME
+        return paths.user_agents_dir(target_id)
+
+    def get_project_agents_dir(self) -> Path | None:
+        root = self.effective_project_root
+        return paths.project_agents_dir(root) if root else None
+
+    def get_user_agent_md_path(self, assistant_id: str | None = None) -> Path:
+        target_id = assistant_id or self.assistant_id or DEFAULT_AGENT_NAME
+        return paths.user_agent_md(target_id)
+
+    def get_user_skills_dir(self, assistant_id: str | None = None) -> Path:
+        target_id = assistant_id or self.assistant_id or DEFAULT_AGENT_NAME
+        return paths.user_skills_dir(target_id)
+
+    def ensure_user_skills_dir(self, assistant_id: str | None = None) -> Path:
+        d = self.get_user_skills_dir(assistant_id)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def get_project_skills_dir(self) -> Path | None:
+        root = self.effective_project_root
+        return paths.project_skills_dir(root) if root else None
+
+    def ensure_project_skills_dir(self) -> Path | None:
+        root = self.effective_project_root
+        if not root:
+            return None
+        d = self.get_project_skills_dir()
+        if d:
+            d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def get_extra_skills_dirs(self) -> list[Path]:
+        if isinstance(self.extra_skills_dirs, list):
+            return [Path(p).expanduser().resolve() for p in self.extra_skills_dirs]
+        if isinstance(self.extra_skills_dirs, str):
+            return [
+                Path(p.strip()).expanduser().resolve()
+                for p in self.extra_skills_dirs.split(",")
+                if p.strip()
+            ]
+        return []
+
+    # ── Factory & Hydration Methods ───────────────────────
+
+    @classmethod
+    async def from_store(cls, store: Any) -> Settings:
+        """Create settings by resolving every manifest option through the ConfigStore."""
+        kwargs: dict[str, Any] = {}
+        for option in get_config_options():
+            if option.settings_field:
+                val, _ = await store.resolve(option)
+                if val is not None:
+                    kwargs[option.settings_field] = val
+
+        if "project_root" not in kwargs or kwargs.get("project_root") is None:
+            kwargs["project_root"] = find_project_root()
+
+        return cls(**kwargs)
+
+    @classmethod
+    def from_env(cls, start_path: Path | None = None) -> Settings:
+        """Create settings from environment variables, config.toml, and settings.json."""
+        _ensure_bootstrap()
+        try:
+            from talkops.project_utils import get_server_project_context
+
+            ctx = get_server_project_context()
+        except Exception:
+            ctx = None
+
+        effective_start = start_path or (ctx.user_cwd if ctx else None)
+        root = ctx.project_root if (ctx and ctx.project_root) else find_project_root(effective_start)
+        toml_data = load_config_toml(CONFIG_PATH)
+        cli_overrides = cls._cli_settings_overrides()
+
+        kwargs: dict[str, Any] = {"project_root": root}
+        if ctx and ctx.user_cwd:
+            kwargs["cwd"] = ctx.user_cwd
+
+        for opt in get_config_options():
+            if opt.settings_field:
+                val, src = resolve_scalar(opt, toml_data=toml_data)
+                if src == "default" and opt.settings_field in cli_overrides:
+                    kwargs[opt.settings_field] = cli_overrides[opt.settings_field]
+                elif val is not None:
+                    kwargs[opt.settings_field] = val
+
+        # Handle shell allow list if string
+        if "shell_allow_list" in kwargs and isinstance(kwargs["shell_allow_list"], str):
+            kwargs["shell_allow_list"] = parse_shell_allow_list(kwargs["shell_allow_list"])
+
+        return cls(**kwargs)
+
+    async def sync_to_store(self, store: Any) -> int:
+        """Persist current settings values back to the ConfigStore."""
+        written = 0
+        for option in get_config_options():
+            if option.settings_field:
+                cur_val = getattr(self, option.settings_field, None)
+                if cur_val is not None:
+                    await store.set_typed(option, cur_val)
+                    written += 1
+        return written
+
+    def reload_from_environment(self, start_path: Path | str | None = None) -> list[str]:
+        """Hot-reload reloadable settings (API keys, project root, etc.)."""
+        p = Path(start_path) if start_path else None
+        _load_dotenv(start_path=p, refresh_loaded=True)
+
+        try:
+            from talkops.config.cli_settings import get_cli_settings_manager
+
+            get_cli_settings_manager().init_cli_settings()
+        except Exception:
+            pass
+
+        # Clear process-cached environment variables for options that were neither
+        # explicitly exported in the initial shell environment nor defined in dotenv.
+        # This guarantees that config.toml edits take effect and are not shadowed by
+        # runtime in-memory state.
+        for opt in get_config_options():
+            env_key = opt.effective_env_var
+            if env_key and env_key in os.environ:
+                if env_key not in _INITIAL_SHELL_ENV and env_key not in _dotenv_loaded_values:
+                    os.environ.pop(env_key, None)
+
+        previous = {field_name: getattr(self, field_name, None) for field_name in RELOADABLE_FIELDS}
+        toml_data = load_config_toml(CONFIG_PATH)
+        cli_overrides = self._cli_settings_overrides()
+
+        changes: list[str] = []
+        for opt in get_config_options():
+            if opt.settings_field and hasattr(self, opt.settings_field):
+                val, src = resolve_scalar(opt, toml_data=toml_data)
+                if src == "default" and opt.settings_field in cli_overrides:
+                    setattr(self, opt.settings_field, cli_overrides[opt.settings_field])
+                elif val is not None:
+                    setattr(self, opt.settings_field, val)
+
+        # Re-export active resolved settings to environment
+        self.export_to_environment()
+
+        for field_name in RELOADABLE_FIELDS:
+            old_val = previous.get(field_name)
+            new_val = getattr(self, field_name, None)
+            if old_val != new_val:
+                if "api_key" in field_name or "secret" in field_name:
+                    old_disp = "set" if old_val else "unset"
+                    new_disp = "set" if new_val else "unset"
+                elif field_name == "agent_pool":
+                    from talkops.config.toml_config import format_agent_pool_summary
+
+                    old_disp = format_agent_pool_summary(old_val)
+                    new_disp = format_agent_pool_summary(new_val)
+                else:
+                    old_disp = str(old_val)
+                    new_disp = str(new_val)
+                changes.append(f"{field_name}: {old_disp} -> {new_disp}")
+
+        return changes
+
+
+
+
+# ── Lazy Singleton ───────────────────────────────────────
+
+_settings: Settings | None = None
+_settings_lock = threading.RLock()
+
+
+def get_settings() -> Settings:
+    """Return the global Settings instance."""
+    global _settings
+    if _settings is None:
+        with _settings_lock:
+            if _settings is None:
+                _settings = Settings.from_env()
+    return _settings
+
+
+def reload_settings() -> Settings:
+    """Reload settings from environment, config.toml, and settings.json."""
+    global _settings
+    with _settings_lock:
+        _bootstrap_state.done = False
+        with contextlib.suppress(Exception):
+            from talkops.config.cli_settings import get_cli_settings_manager
+
+            get_cli_settings_manager().init_cli_settings()
+        _settings = Settings.from_env()
+        sync_aws_env_aliases()
+    return _settings
+
+
+def reset_settings_for_testing() -> None:
+    """Reset the global Settings singleton and bootstrap state (for tests)."""
+    global _settings, _glyphs_cache, _charset_mode_cache
+    with _settings_lock:
+        _settings = None
+        _bootstrap_state.done = False
+        _dotenv_loaded_values.clear()
+        _glyphs_cache = None
+        _charset_mode_cache = None
+        with contextlib.suppress(Exception):
+            from talkops.config.cli_settings import reset_cli_settings_manager_for_testing
+
+            reset_cli_settings_manager_for_testing()
+
+
+async def reload_from_store(store: Any) -> Settings:
+    """Replace the global Settings instance with one hydrated from the store."""
+    global _settings
+    with _settings_lock:
+        _settings = await Settings.from_store(store)
+        sync_aws_env_aliases()
+
+        from talkops.config.manifest import get_config_options
+
+        for option in get_config_options():
+            if option.settings_field and option.effective_env_var:
+                val = getattr(_settings, option.settings_field, None)
+                if val is not None and str(val).strip() != "":
+                    os.environ[option.effective_env_var] = str(val)
+
+        from talkops.config.langsmith import apply_tracing_settings
+
+        apply_tracing_settings(_settings)
+    return _settings
+
+
+# Module-level settings export for direct access
+settings: Settings = get_settings()
+
+
+# ── UI Glyphs & Charset Helpers ──────────────────────────
+
+
+@dataclass(frozen=True)
+class Glyphs:
+    tool_prefix: str = "⏺"
+    ellipsis: str = "…"
+    checkmark: str = "✓"
+    error: str = "✗"
+    circle_empty: str = "○"
+    circle_filled: str = "●"
+    output_prefix: str = "⎿"
+    spinner_frames: tuple[str, ...] = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+    pause: str = "⏸"
+    newline: str = "⏎"
+    warning: str = "⚠"
+    question: str = "?"
+    hourglass: str = "⧗"
+    retry: str = "↻"
+    arrow_up: str = "↑"
+    arrow_down: str = "↓"
+    bullet: str = "•"
+    cursor: str = "›"
+    disclosure_collapsed: str = "▸"
+    disclosure_expanded: str = "▾"
+    box_vertical: str = "│"
+    box_horizontal: str = "─"
+    box_double_horizontal: str = "═"
+    gutter_bar: str = "▌"
+    selection_bar: str = "▌"
+    meter_filled: str = "▰"
+    meter_empty: str = "▱"
+    git_branch: str = "↗"
+    cross: str = "✗"
+    arrow_right: str = "➜"
+    separator: str = "·"
+    tree_branch: str = "├"
+    tree_last: str = "└"
+    square_filled: str = "■"
+    checkbox_empty: str = "☐"
+    checkbox_checked: str = "☑"
+    box_horizontal_heavy: str = "━"
+    hunk_break: str = "⋮"
+    line_continuation: str = "…"
+    tool: str = "[T]"
+    file: str = "[F]"
+    search: str = "⌕"
+
+
+UNICODE_GLYPHS = Glyphs(
+    tool_prefix="⏺",
+    ellipsis="…",
+    checkmark="✓",
+    error="✗",
+    circle_empty="○",
+    circle_filled="●",
+    output_prefix="⎿",
+    spinner_frames=("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"),
+    pause="⏸",
+    newline="⏎",
+    warning="⚠",
+    question="?",
+    hourglass="⧗",
+    retry="↻",
+    arrow_up="↑",
+    arrow_down="↓",
+    bullet="•",
+    cursor="›",
+    disclosure_collapsed="▸",
+    disclosure_expanded="▾",
+    box_vertical="│",
+    box_horizontal="─",
+    box_double_horizontal="═",
+    gutter_bar="▌",
+    selection_bar="▌",
+    meter_filled="▰",
+    meter_empty="▱",
+    git_branch="↗",
+    cross="✗",
+    arrow_right="➜",
+    separator="·",
+    tree_branch="├",
+    tree_last="└",
+    square_filled="■",
+    checkbox_empty="☐",
+    checkbox_checked="☑",
+    box_horizontal_heavy="━",
+    hunk_break="⋮",
+    line_continuation="…",
+    tool="[T]",
+    file="[F]",
+    search="⌕",
+)
+
+ASCII_GLYPHS = Glyphs(
+    tool_prefix="(*)",
+    ellipsis="...",
+    checkmark="[OK]",
+    error="[X]",
+    circle_empty="[ ]",
+    circle_filled="[*]",
+    output_prefix="L",
+    spinner_frames=("(-)", "(\\)", "(|)", "(/)"),
+    pause="||",
+    newline="\\n",
+    warning="[!]",
+    question="[?]",
+    hourglass="[~]",
+    retry="[R]",
+    arrow_up="^",
+    arrow_down="v",
+    bullet="-",
+    cursor=">",
+    disclosure_collapsed=">",
+    disclosure_expanded="v",
+    box_vertical="|",
+    box_horizontal="-",
+    box_double_horizontal="=",
+    gutter_bar="|",
+    selection_bar=">",
+    meter_filled="#",
+    meter_empty="-",
+    git_branch="git:",
+    cross="[X]",
+    arrow_right="->",
+    separator="|",
+    tree_branch="|-",
+    tree_last="`-",
+    square_filled="[#]",
+    checkbox_empty="[ ]",
+    checkbox_checked="[x]",
+    box_horizontal_heavy="=",
+    hunk_break=":",
+    line_continuation=".",
+    tool="[T]",
+    file="[F]",
+    search="/",
+)
+
+_glyphs_cache: Glyphs | None = None
+_charset_mode_cache: CharsetMode | None = None
+
+
+class CharsetMode(StrEnum):
+    UNICODE = "unicode"
+    ASCII = "ascii"
+    AUTO = "auto"
+
+
+def _compute_charset_mode() -> CharsetMode:
+    env_mode = (resolve_env_var("UI_CHARSET_MODE") or "auto").lower()
+    if env_mode == "unicode":
+        return CharsetMode.UNICODE
+    if env_mode == "ascii":
+        return CharsetMode.ASCII
+    encoding = getattr(sys.stdout, "encoding", "") or ""
+    if "utf" in encoding.lower():
+        return CharsetMode.UNICODE
+    lang = os.environ.get("LANG", "") or os.environ.get("LC_ALL", "")
+    if "utf" in lang.lower():
+        return CharsetMode.UNICODE
+    return CharsetMode.ASCII
+
+
+def _detect_charset_mode() -> CharsetMode:
+    global _charset_mode_cache
+    if _charset_mode_cache is not None:
+        return _charset_mode_cache
+    _charset_mode_cache = _compute_charset_mode()
+    return _charset_mode_cache
+
+
+def get_glyphs() -> Glyphs:
+    global _glyphs_cache
+    if _glyphs_cache is not None:
+        return _glyphs_cache
+    mode = _detect_charset_mode()
+    _glyphs_cache = ASCII_GLYPHS if mode == CharsetMode.ASCII else UNICODE_GLYPHS
+    return _glyphs_cache
+
+
+def is_ascii_mode() -> bool:
+    return _detect_charset_mode() == CharsetMode.ASCII
+
+
+def newline_shortcut() -> str:
+    """Return terminal-appropriate label for newline shortcut (Option+Enter on Mac, Ctrl+J elsewhere)."""
+    return "Option+Enter" if sys.platform == "darwin" else "Ctrl+J"
+
+
+__all__ = [
+    "ASCII_GLYPHS",
+    "CharsetMode",
+    "Glyphs",
+    "Settings",
+    "UNICODE_GLYPHS",
+    "get_glyphs",
+    "get_settings",
+    "is_ascii_mode",
+    "newline_shortcut",
+    "parse_shell_allow_list",
+    "reload_from_store",
+    "reload_settings",
+    "reset_settings_for_testing",
+    "resolve_env_var",
+    "settings",
+    "sync_aws_env_aliases",
+]

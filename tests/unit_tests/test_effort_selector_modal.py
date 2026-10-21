@@ -6,7 +6,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import OptionList
 
-from opscloud.ui.widgets.effort_selector import EffortSelectorScreen
+from talkops.ui.widgets.effort_selector import EffortSelectorScreen
 
 
 class DummyEffortApp(App[None]):

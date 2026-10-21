@@ -23,15 +23,15 @@ from langchain_typesafe import (
     ScoreAnswer,
 )
 
-from opscloud.middleware.reliable_rubric import ReliableRubricMiddleware
-from opscloud.rubrics.evidence_extractor import extract_grading_evidence
-from opscloud.rubrics.jev_compiler import CompiledRubric, JevCriteriaCompiler
-from opscloud.rubrics.jev_grader import (
+from talkops.middleware.reliable_rubric import ReliableRubricMiddleware
+from talkops.rubrics.evidence_extractor import extract_grading_evidence
+from talkops.rubrics.jev_compiler import CompiledRubric, JevCriteriaCompiler
+from talkops.rubrics.jev_grader import (
     BLOCKER_DISPATCH,
     JevHybridRubricGrader,
     build_criteria_evaluations,
 )
-from opscloud.rubrics.evaluator import evaluate_rubric
+from talkops.rubrics.evaluator import evaluate_rubric
 
 
 # ── 1. Criteria Compiler Tests ─────────────────────────────────────────────
@@ -398,7 +398,7 @@ def test_evaluate_rubric_with_jev(monkeypatch):
         criteria=[CriterionPass(name="c1", passed=True)],
     )
 
-    monkeypatch.setattr("opscloud.rubrics.jev_grader.JevHybridRubricGrader", lambda: mock_jev)
+    monkeypatch.setattr("talkops.rubrics.jev_grader.JevHybridRubricGrader", lambda: mock_jev)
 
     # 1. When use_jev is True
     res = evaluate_rubric("- criterion 1", "evidence", use_jev=True)
@@ -408,7 +408,7 @@ def test_evaluate_rubric_with_jev(monkeypatch):
     # 2. Default use_jev (None) uses standard agent
     mock_agent = MagicMock()
     mock_agent.invoke.return_value = {"structured_response": GraderResponse(result="satisfied", explanation="Agent Pass", criteria=[])}
-    monkeypatch.setattr("opscloud.rubrics.evaluator.create_rubric_grader_agent", lambda **kw: mock_agent)
+    monkeypatch.setattr("talkops.rubrics.evaluator.create_rubric_grader_agent", lambda **kw: mock_agent)
 
     res_std = evaluate_rubric("- criterion 1", "evidence")
     assert res_std.explanation == "Agent Pass"
@@ -418,8 +418,8 @@ def test_evaluate_rubric_with_jev(monkeypatch):
 
 
 def test_create_rubric_grader_tools_no_blocking_getcwd(monkeypatch, tmp_path: Path):
-    from opscloud.rubrics.evaluator import _create_rubric_grader_tools
-    from opscloud.server import SERVER_ENV_PREFIX
+    from talkops.rubrics.evaluator import _create_rubric_grader_tools
+    from talkops.server import SERVER_ENV_PREFIX
 
     # Ensure os.getcwd is never invoked
     def forbidden_getcwd():
@@ -618,6 +618,73 @@ async def test_reliable_rubric_smart_mode_tier2_1shot_diagnostic(monkeypatch):
     assert "Run `nginx -t`" in verdict.explanation
     # Verify mock_model.ainvoke was called directly with the prompt (1 single call, zero tool agent loops)
     assert mock_model.ainvoke.call_count == 1
+
+
+def test_extract_grading_evidence_includes_todo_progress_and_plan_summary():
+    state = {
+        "messages": [HumanMessage(content="Deploy service")],
+        "_goal_plan": "## Summary\nDeploy nginx and verify port 80.",
+        "todos": [
+            {"content": "Write nginx.conf", "status": "completed"},
+            {"content": "Validate nginx syntax", "status": "in_progress"},
+            {"content": "Verify port 80 listener", "status": "pending"},
+        ],
+    }
+    evidence = extract_grading_evidence(state)
+    assert "todo_progress" in evidence
+    assert evidence["todo_progress"]["total"] == 3
+    assert evidence["todo_progress"]["completed"] == 1
+    assert evidence["todo_progress"]["incomplete"] == [
+        "Validate nginx syntax",
+        "Verify port 80 listener",
+    ]
+    assert "Deploy nginx and verify port 80." in evidence["goal_plan_summary"]
+
+
+def test_reliable_rubric_reconciles_todos_on_needs_revision_and_satisfied():
+    middleware = ReliableRubricMiddleware(
+        model="anthropic:claude-3-5-haiku-20241022",
+        max_iterations=3,
+    )
+    mock_runtime = MagicMock()
+    mock_runtime.stream_writer = None
+
+    base_todos = [
+        {"content": "Write nginx.conf", "status": "completed"},
+        {"content": "Validate syntax with nginx -t", "status": "in_progress"},
+    ]
+
+    # 1. On needs_revision, incomplete todos are appended to explanation/feedback
+    fail_state = cast(
+        RubricState,
+        {
+            "messages": [HumanMessage(content="Setup nginx")],
+            "rubric": "- Valid nginx syntax",
+            "todos": base_todos,
+        },
+    )
+    fail_graded = GraderResponse(
+        result="needs_revision",
+        explanation="Syntax check not yet executed.",
+        criteria=[CriterionFail(name="Valid nginx syntax", passed=False, gap="No nginx -t output")],
+    )
+    fail_update = middleware._finalize_evaluation(fail_graded, fail_state, mock_runtime, "run-1", 0)
+    assert "Remaining tactical plan steps" in fail_graded.explanation
+    assert "Validate syntax with nginx -t" in fail_graded.explanation
+    assert "todos" not in fail_update
+
+    # 2. On satisfied, remaining todos are marked completed
+    pass_graded = GraderResponse(
+        result="satisfied",
+        explanation="All criteria satisfied.",
+        criteria=[CriterionPass(name="Valid nginx syntax", passed=True)],
+    )
+    pass_update = middleware._finalize_evaluation(pass_graded, fail_state, mock_runtime, "run-1", 1)
+    assert pass_update.get("todos") == [
+        {"content": "Write nginx.conf", "status": "completed"},
+        {"content": "Validate syntax with nginx -t", "status": "completed"},
+    ]
+
 
 
 

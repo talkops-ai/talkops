@@ -9,24 +9,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import HumanMessage
 
-from opscloud.commands._base import CommandContext
-from opscloud.commands._types import BypassTier
-from opscloud.commands.core.fork import ForkHandler
-from opscloud.commands.core.resume import ResumeHandler
-from opscloud.middleware.goal_state_notice import (
+from talkops.commands._base import CommandContext
+from talkops.commands._types import BypassTier
+from talkops.commands.core.fork import ForkHandler
+from talkops.commands.core.resume import ResumeHandler
+from talkops.middleware.goal_state_notice import (
     FORK_NOTICE_MESSAGE_SOURCE,
     build_fork_notice_message,
     is_conversation_control_message,
     is_internal_message,
     message_source,
 )
-from opscloud.state.session import (
-    OpsCloudCheckpointer,
+from talkops.state.session import (
+    TalkOpsCheckpointer,
     SessionManager,
     set_db_path,
 )
-from opscloud.ui.command_registry import IMMEDIATE_CMDS, get_command
-from opscloud.ui.remote_client import RemoteAgent
+from talkops.ui.command_registry import IMMEDIATE_CMDS, get_command
+from talkops.ui.remote_client import RemoteAgent
 
 
 def test_fork_command_registration_and_aliases() -> None:
@@ -153,7 +153,7 @@ async def test_session_manager_fork_thread_copies_sqlite_checkpoints(tmp_path: P
     set_db_path(db_file)
 
     source_tid = "01963000-0000-7000-8000-000000000100"
-    async with OpsCloudCheckpointer.from_conn_string(str(db_file)) as saver:
+    async with TalkOpsCheckpointer.from_conn_string(str(db_file)) as saver:
         await saver.setup()
         await saver.conn.execute(
             "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
@@ -178,7 +178,7 @@ async def test_session_manager_fork_thread_copies_sqlite_checkpoints(tmp_path: P
     new_tid = await SessionManager.fork_thread(source_tid)
     assert new_tid != source_tid
 
-    async with OpsCloudCheckpointer.from_conn_string(str(db_file)) as saver:
+    async with TalkOpsCheckpointer.from_conn_string(str(db_file)) as saver:
         async with saver.conn.execute(
             "SELECT checkpoint_id, metadata FROM checkpoints WHERE thread_id = ?",
             (new_tid,),
@@ -256,9 +256,9 @@ async def test_fork_handler_and_direct_resume_roundtrip() -> None:
 
 
 @pytest.mark.asyncio
-async def test_opscloud_app_fork_thread_in_place_state_update() -> None:
-    """Verify OpsCloudApp.fork_thread updates thread IDs and preserves UI state without clearing messages."""
-    from opscloud.ui.app import OpsCloudApp
+async def test_talkops_app_fork_thread_in_place_state_update() -> None:
+    """Verify TalkOpsApp.fork_thread updates thread IDs and preserves UI state without clearing messages."""
+    from talkops.ui.app import TalkOpsApp
 
     source_tid = "01963000-0000-7000-8000-000000000777"
     branched_tid = "01963000-0000-7000-8000-000000000888"
@@ -266,14 +266,14 @@ async def test_opscloud_app_fork_thread_in_place_state_update() -> None:
     mock_client = MagicMock()
     mock_client.afork_thread = AsyncMock(return_value=branched_tid)
 
-    dummy_app = MagicMock(spec=OpsCloudApp)
+    dummy_app = MagicMock(spec=TalkOpsApp)
     dummy_app._agent_thread_id = source_tid
     dummy_app._client = mock_client
     dummy_app._session_state = MagicMock(thread_id=source_tid, previous_thread_id=None)
     dummy_app._goal_state = MagicMock(thread_id=source_tid)
     dummy_app._agent_session_state = MagicMock(thread_id=source_tid)
 
-    prev_id, new_id = await OpsCloudApp.fork_thread(dummy_app)
+    prev_id, new_id = await TalkOpsApp.fork_thread(dummy_app)
 
     assert prev_id == source_tid
     assert new_id == branched_tid

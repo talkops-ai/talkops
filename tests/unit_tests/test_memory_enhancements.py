@@ -1,4 +1,4 @@
-"""Unit tests for OpsCloud memory enhancements, MemoryStore, and prompt verification."""
+"""Unit tests for TalkOps memory enhancements, MemoryStore, and prompt verification."""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import HumanMessage
 
-from opscloud.agent.factory import create_opscloud_agent
-from opscloud.config.paths import (
+from talkops.agent.factory import create_talkops_agent
+from talkops.config.paths import (
     DEFAULT_AGENT_MD_TEMPLATE,
     ensure_user_agent_md,
     primary_agent_md,
     user_agent_md,
 )
-from opscloud.memory.onboarding import (
+from talkops.memory.onboarding import (
     ONBOARDING_NAME_MEMORY_END,
     ONBOARDING_NAME_MEMORY_START,
     _onboarding_name_memory_block,
@@ -28,7 +28,7 @@ from opscloud.memory.onboarding import (
     run_onboarding_if_needed,
     strip_onboarding_name_markers,
 )
-from opscloud.memory.store import MemoryEntry, MemoryStore, _sanitize_key
+from talkops.memory.store import MemoryEntry, MemoryStore, _sanitize_key
 
 
 captured_model_inputs: list[Any] = []
@@ -59,12 +59,12 @@ def test_memory_store_crud(tmp_path: Path):
     # 1. Save user memory
     path_u = store.save("cloud-target", "Use AWS us-east-1", scope="user")
     assert path_u.exists()
-    assert (user_home / ".opscloud" / "memory" / "cloud-target.md").exists()
+    assert (user_home / ".talkops" / "memory" / "cloud-target.md").exists()
 
     # 2. Save project memory (overrides same key)
     path_p = store.save("cloud-target", "Use AWS us-west-2 for this project", scope="project")
     assert path_p.exists()
-    assert (proj_dir / ".opscloud" / "memory" / "cloud-target.md").exists()
+    assert (proj_dir / ".talkops" / "memory" / "cloud-target.md").exists()
 
     # 3. Get should return project memory due to precedence
     entry = store.get("cloud-target")
@@ -124,28 +124,28 @@ def test_onboarding_helpers():
 
 
 def test_ensure_user_agent_md_seeds_default(tmp_path: Path, monkeypatch):
-    fake_data_dir = tmp_path / ".opscloud"
-    monkeypatch.setattr("opscloud.config.paths.DATA_DIR", fake_data_dir)
+    fake_data_dir = tmp_path / ".talkops"
+    monkeypatch.setattr("talkops.config.paths.DATA_DIR", fake_data_dir)
     monkeypatch.setattr(
-        "opscloud.config.paths.agent_dir",
-        lambda name="opscloud": fake_data_dir / name,
+        "talkops.config.paths.agent_dir",
+        lambda name="talkops": fake_data_dir / name,
     )
 
-    primary_md = ensure_user_agent_md("opscloud")
+    primary_md = ensure_user_agent_md("talkops")
     assert primary_md.exists()
     assert primary_md.stat().st_size > 0
     content = primary_md.read_text(encoding="utf-8")
-    assert "OpsCloud Persistent Memory & Operational Context" in content
+    assert "TalkOps Persistent Memory & Operational Context" in content
     assert "Cloud Platform & DevOps Engineer" in content
     assert "AWS" in content
 
 
 def test_no_dual_memory_for_default_agent(tmp_path: Path, monkeypatch):
-    """Verify that default agent resolves exactly one user AGENTS.md without opscloud/opscloud duplication."""
-    fake_data_dir = tmp_path / ".opscloud"
-    monkeypatch.setattr("opscloud.config.paths.DATA_DIR", fake_data_dir)
+    """Verify that default agent resolves exactly one user AGENTS.md without talkops/talkops duplication."""
+    fake_data_dir = tmp_path / ".talkops"
+    monkeypatch.setattr("talkops.config.paths.DATA_DIR", fake_data_dir)
 
-    from opscloud.memory.registry import MemoryRegistry
+    from talkops.memory.registry import MemoryRegistry
     registry = MemoryRegistry.get_instance()
     sources = registry.get_all_memory_sources(project_root=tmp_path / "proj")
     user_sources = [s for s in sources if str(fake_data_dir) in s]
@@ -155,9 +155,9 @@ def test_no_dual_memory_for_default_agent(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_agent_system_prompt_audit():
-    """Verify that create_opscloud_agent produces a complete, accurate system prompt."""
+    """Verify that create_talkops_agent produces a complete, accurate system prompt."""
     fake_model = ToolCallingFakeModel(responses=["Operational greetings."])
-    agent, backend = create_opscloud_agent(model=fake_model)
+    agent, backend = create_talkops_agent(model=fake_model)
 
     captured_model_inputs.clear()
     await agent.ainvoke({"messages": [HumanMessage(content="hi how are you")]})
@@ -173,11 +173,11 @@ async def test_agent_system_prompt_audit():
     # 2. Memory context is loaded from AGENTS.md (NOT "(No memory loaded)")
     assert "<agent_memory>" in prompt_text
     assert "(No memory loaded)" not in prompt_text
-    assert "OpsCloud Persistent Memory & Operational Context" in prompt_text
+    assert "TalkOps Persistent Memory & Operational Context" in prompt_text
     assert "User Preferences & Defaults" in prompt_text
 
     # 3. No false filesystem restriction
     assert "You have restricted access to the filesystem. Only the following file tools are available: fetch_url." not in prompt_text
 
     # 4. Clean skills path formatting without mismatched backticks
-    assert "`~/.opscloud/skills` or project-level `.opscloud/skills`" in prompt_text
+    assert "`~/.talkops/skills` or project-level `.talkops/skills`" in prompt_text

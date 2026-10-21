@@ -8,27 +8,27 @@ from rich.cells import cell_len
 from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 
-from opscloud.config.settings import get_glyphs
-from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
-from opscloud.ui.permission_store import PermissionStore
-from opscloud.ui.theme import register_app_themes
-from opscloud.ui.widgets.auth_manager import AuthManagerScreen
-from opscloud.ui.widgets.config_manager import ConfigManagerScreen
-from opscloud.ui.widgets.effort_selector import EffortSelectorScreen
-from opscloud.ui.widgets.mcp_viewer import (
+from talkops.config.settings import get_glyphs
+from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+from talkops.ui.permission_store import PermissionStore
+from talkops.ui.theme import register_app_themes
+from talkops.ui.widgets.auth_manager import AuthManagerScreen
+from talkops.ui.widgets.config_manager import ConfigManagerScreen
+from talkops.ui.widgets.effort_selector import EffortSelectorScreen
+from talkops.ui.widgets.mcp_viewer import (
     MCPToolDetailScreen,
     MCPViewerScreen,
 )
-from opscloud.ui.widgets.modal_base import (
+from talkops.ui.widgets.modal_base import (
     OpsModalScreen,
     truncate_cells,
 )
-from opscloud.ui.widgets.permissions_manager import PermissionsManagerScreen
-from opscloud.ui.widgets.skills_viewer import (
+from talkops.ui.widgets.permissions_manager import PermissionsManagerScreen
+from talkops.ui.widgets.skills_viewer import (
     SkillDetailScreen,
     SkillsViewerScreen,
 )
-from opscloud.ui.widgets.theme_selector import ThemeSelectorScreen
+from talkops.ui.widgets.theme_selector import ThemeSelectorScreen
 
 
 class _TestHarnessApp(App[None]):
@@ -38,7 +38,7 @@ class _TestHarnessApp(App[None]):
         super().__init__()
         self._test_screen = screen_instance
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
 
     def compose(self) -> ComposeResult:
         yield from ()
@@ -248,8 +248,8 @@ async def test_mcp_viewer_enter_pushes_tool_detail() -> None:
 async def test_theme_selector_row_formatting_responsive() -> None:
     """ThemeSelectorScreen formats rows with responsive width."""
     screen = ThemeSelectorScreen(
-        current_theme="opscloud-dark",
-        terminal_default="opscloud-dark",
+        current_theme="talkops-dark",
+        terminal_default="talkops-dark",
     )
     app = _TestHarnessApp(screen)
 

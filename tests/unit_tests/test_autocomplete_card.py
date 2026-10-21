@@ -10,7 +10,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.content import Content
 
-from opscloud.ui.widgets.chat_input import (
+from talkops.ui.widgets.chat_input import (
     ChatInput,
     CompletionOption,
     CompletionPopup,
@@ -20,22 +20,22 @@ from opscloud.ui.widgets.chat_input import (
     format_completion_row,
 )
 
-# `opscloud.config.settings` is shadowed by a Settings instance on the package.
-settings = importlib.import_module("opscloud.config.settings")
+# `talkops.config.settings` is shadowed by a Settings instance on the package.
+settings = importlib.import_module("talkops.config.settings")
 
 
 class _ThemedApp(App):
-    """Minimal app carrying the OpsCloud theme variables ChatInput's CSS uses."""
+    """Minimal app carrying the TalkOps theme variables ChatInput's CSS uses."""
 
     def __init__(self) -> None:
         super().__init__()
-        from opscloud.ui.theme import register_app_themes
+        from talkops.ui.theme import register_app_themes
 
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
-        from opscloud.ui.theme import get_css_variable_defaults, get_theme_colors
+        from talkops.ui.theme import get_css_variable_defaults, get_theme_colors
 
         return get_css_variable_defaults(colors=get_theme_colors(self))
 
@@ -128,7 +128,7 @@ def test_label_width_fits_plugin_skill_names_without_truncation():
 
 
 def test_label_width_lets_files_use_free_space():
-    path = "@src/opscloud/ui/widgets/chat_input.py"
+    path = "@src/talkops/ui/widgets/chat_input.py"
     width = completion_label_width([(path, "py")], kind="file", width=100)
     assert width == len(path) - 1  # "@" dropped, no cap at 22
 
@@ -201,7 +201,7 @@ def test_selected_row_uses_ascii_bar(ascii_glyphs):
 
 def test_file_row_dims_directory(unicode_glyphs):
     content = format_completion_row(
-        "@src/opscloud/ui/app.py",
+        "@src/talkops/ui/app.py",
         "py",
         query="",
         label_width=22,
@@ -210,14 +210,14 @@ def test_file_row_dims_directory(unicode_glyphs):
         kind="file",
     )
     styled = _styled(content)
-    assert content.plain.startswith("  src/opscloud/ui/app.py")
-    assert styled["src/opscloud/ui/"] == "dim"
+    assert content.plain.startswith("  src/talkops/ui/app.py")
+    assert styled["src/talkops/ui/"] == "dim"
     assert "app.py" not in styled  # basename stays at normal weight
 
 
 def test_file_row_highlights_match_over_dim(unicode_glyphs):
     content = format_completion_row(
-        "@src/opscloud/ui/app.py",
+        "@src/talkops/ui/app.py",
         "py",
         query="ui/app",
         label_width=22,
@@ -230,7 +230,7 @@ def test_file_row_highlights_match_over_dim(unicode_glyphs):
 
 def test_long_file_path_keeps_basename(unicode_glyphs):
     content = format_completion_row(
-        "@src/opscloud/ui/widgets/chat_input.py",
+        "@src/talkops/ui/widgets/chat_input.py",
         "py",
         query="",
         label_width=20,
@@ -340,7 +340,7 @@ class _RecordingCompletionView:
 @pytest.mark.asyncio
 async def test_at_mention_picks_up_newly_created_files_and_dirs(tmp_path):
     """Files and directories created after startup/warm_cache immediately appear on @."""
-    from opscloud.ui.widgets.autocomplete import FuzzyFileController
+    from talkops.ui.widgets.autocomplete import FuzzyFileController
 
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "existing.py").write_text("x = 1\n")
@@ -376,11 +376,11 @@ async def test_at_mention_picks_up_newly_created_files_and_dirs(tmp_path):
 def test_selecting_directory_drills_down_without_closing_popup(tmp_path):
     """Selecting a directory (@src/) replaces without trailing space and drills into src/."""
     from textual.events import Key
-    from opscloud.ui.widgets.autocomplete import CompletionResult, FuzzyFileController
+    from talkops.ui.widgets.autocomplete import CompletionResult, FuzzyFileController
 
     src_dir = tmp_path / "src"
     src_dir.mkdir()
-    (src_dir / "opscloud").mkdir()
+    (src_dir / "talkops").mkdir()
     (src_dir / "main.py").write_text("pass\n")
 
     view = _RecordingCompletionView()
@@ -396,7 +396,7 @@ def test_selecting_directory_drills_down_without_closing_popup(tmp_path):
     assert res == CompletionResult.HANDLED
     assert view.text == "@src/"
     assert view.cursor == len("@src/")
-    assert ("@src/opscloud/", "Directory") in view.suggestions
+    assert ("@src/talkops/", "Directory") in view.suggestions
     assert ("@src/main.py", "py") in view.suggestions
 
 
@@ -415,7 +415,7 @@ def test_directory_row_styling(unicode_glyphs):
     assert "src/" not in _styled(top_dir)  # not dimmed
 
     nested_dir = format_completion_row(
-        "@src/opscloud/",
+        "@src/talkops/",
         "Directory",
         query="",
         label_width=16,
@@ -425,12 +425,12 @@ def test_directory_row_styling(unicode_glyphs):
     )
     styled = _styled(nested_dir)
     assert styled["src/"] == "dim"
-    assert "opscloud/" not in styled
+    assert "talkops/" not in styled
 
 
 def test_email_does_not_trigger_at_completion():
     """An @ preceded by non-whitespace (e.g. email address) does not trigger file completion."""
-    from opscloud.ui.widgets.autocomplete import FuzzyFileController
+    from talkops.ui.widgets.autocomplete import FuzzyFileController
 
     assert FuzzyFileController.can_handle("user@example.com", len("user@example.com")) is False
     assert FuzzyFileController.can_handle("check @src/app.py", len("check @src/app.py")) is True

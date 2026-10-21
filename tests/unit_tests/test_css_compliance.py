@@ -9,15 +9,15 @@ from typing import Any
 import pytest
 
 from textual.app import App, ComposeResult
-from opscloud.config.settings import (
+from talkops.config.settings import (
     get_glyphs,
     is_ascii_mode,
     reset_settings_for_testing,
 )
-from opscloud.ui.theme import register_app_themes
-from opscloud.ui.widgets.cloud_selector import CloudProfileSelectorScreen
-from opscloud.ui.widgets.effort_selector import EffortSelectorScreen
-from opscloud.ui.widgets.theme_selector import ThemeSelectorScreen
+from talkops.ui.theme import register_app_themes
+from talkops.ui.widgets.cloud_selector import CloudProfileSelectorScreen
+from talkops.ui.widgets.effort_selector import EffortSelectorScreen
+from talkops.ui.widgets.theme_selector import ThemeSelectorScreen
 
 
 class _TestHarnessApp(App[None]):
@@ -27,7 +27,7 @@ class _TestHarnessApp(App[None]):
         super().__init__()
         self._test_screen = screen_instance
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
 
     def compose(self) -> ComposeResult:
         yield from ()
@@ -37,8 +37,8 @@ class _TestHarnessApp(App[None]):
 
 
 def test_ui_css_uses_semantic_colors() -> None:
-    """Verify all TCSS files in src/opscloud/ui use semantic theme variables rather than concrete hex/rgb colors."""
-    ui_root = Path("src/opscloud/ui")
+    """Verify all TCSS files in src/talkops/ui use semantic theme variables rather than concrete hex/rgb colors."""
+    ui_root = Path("src/talkops/ui")
     concrete_color = re.compile(
         r"#[0-9a-fA-F]{3,8}\b|rgba?\(",
         re.IGNORECASE,
@@ -55,8 +55,8 @@ def test_ui_css_uses_semantic_colors() -> None:
 
 def test_modal_backdrop_ownership() -> None:
     """Verify OpsModalScreen owns the modal backdrop and app.tcss does not compete."""
-    app_tcss = Path("src/opscloud/ui/app.tcss").read_text(encoding="utf-8")
-    modal_tcss = Path("src/opscloud/ui/modal.tcss").read_text(encoding="utf-8")
+    app_tcss = Path("src/talkops/ui/app.tcss").read_text(encoding="utf-8")
+    modal_tcss = Path("src/talkops/ui/modal.tcss").read_text(encoding="utf-8")
 
     # app.tcss must not declare competing ModalScreen backdrop
     assert "ModalScreen" not in app_tcss, "app.tcss must not declare ModalScreen rules"
@@ -70,7 +70,7 @@ def test_modal_backdrop_ownership() -> None:
 @pytest.mark.asyncio
 async def test_ascii_mode_modal_rendering(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify representative command modals render correctly under ASCII charset mode."""
-    monkeypatch.setenv("OPSCLOUD_UI_CHARSET_MODE", "ascii")
+    monkeypatch.setenv("TALKOPS_UI_CHARSET_MODE", "ascii")
     reset_settings_for_testing()
     assert is_ascii_mode() is True
     assert get_glyphs().bullet == "-"
@@ -86,7 +86,7 @@ async def test_ascii_mode_modal_rendering(monkeypatch: pytest.MonkeyPatch) -> No
             assert app1.screen.is_mounted
 
         # Test Theme Selector in ASCII mode
-        app2 = _TestHarnessApp(ThemeSelectorScreen(current_theme="opscloud-dark"))
+        app2 = _TestHarnessApp(ThemeSelectorScreen(current_theme="talkops-dark"))
         async with app2.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             assert app2.screen is not None

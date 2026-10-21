@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 
-from opscloud.ui.widgets.thread_selector import (
+from talkops.ui.widgets.thread_selector import (
     CustomOptionList,
     DeleteThreadConfirmScreen,
     SearchInput,

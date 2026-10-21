@@ -1,4 +1,4 @@
-"""Comprehensive unit tests for OpsCloud state channels, cloud context, and sessions."""
+"""Comprehensive unit tests for TalkOps state channels, cloud context, and sessions."""
 
 import asyncio
 from pathlib import Path
@@ -8,9 +8,9 @@ import pytest
 from langchain.agents.middleware.types import PrivateStateAttr
 from langchain_core.messages import AIMessage, HumanMessage
 
-from opscloud.middleware.resume_state import ResumeStateMiddleware
-from opscloud.state.base import AgentState, BaseAgentState, OpsCloudAgentState
-from opscloud.state.cloud_context import (
+from talkops.middleware.resume_state import ResumeStateMiddleware
+from talkops.state.base import AgentState, BaseAgentState, TalkOpsAgentState
+from talkops.state.cloud_context import (
     CloudContextState,
     CloudEnvironmentContext,
     CloudResourceRef,
@@ -20,15 +20,15 @@ from opscloud.state.cloud_context import (
     format_cloud_badge,
     make_resource_ref,
 )
-from opscloud.state.goal_channels import (
+from talkops.state.goal_channels import (
     INHERIT_RUBRIC_MODEL,
     GoalRubricChannels,
     coerce_goal_proposal_kind,
     coerce_goal_status,
     coerce_model_spec,
 )
-from opscloud.state.resume_state import ResumeState
-from opscloud.state.session import (
+from talkops.state.resume_state import ResumeState
+from talkops.state.session import (
     SessionManager,
     _count_messages_from_deltas,
     _visible_message_count,
@@ -44,7 +44,7 @@ from opscloud.state.session import (
     set_db_path,
     thread_exists,
 )
-from opscloud.state.service_context import (
+from talkops.state.service_context import (
     ManagedService,
     ServiceContextState,
     ServiceOperationRecord,
@@ -55,25 +55,25 @@ from opscloud.state.service_context import (
     make_operation_record,
     make_service_record,
 )
-from opscloud.state.state_migration import migrate_legacy_state
+from talkops.state.state_migration import migrate_legacy_state
 
 
-# ── 1. OpsCloudAgentState Schema Structure ────────────────────────────────────
+# ── 1. TalkOpsAgentState Schema Structure ────────────────────────────────────
 
-def test_opscloud_agent_state_inheritance():
-    """Verify OpsCloudAgentState composes all required channels."""
-    bases = getattr(OpsCloudAgentState, "__orig_bases__", ())
+def test_talkops_agent_state_inheritance():
+    """Verify TalkOpsAgentState composes all required channels."""
+    bases = getattr(TalkOpsAgentState, "__orig_bases__", ())
     assert CloudContextState in bases
     assert ServiceContextState in bases
     assert ResumeState in bases
     assert GoalRubricChannels in bases
-    assert AgentState is OpsCloudAgentState
-    assert BaseAgentState is OpsCloudAgentState
+    assert AgentState is TalkOpsAgentState
+    assert BaseAgentState is TalkOpsAgentState
 
 
 def test_private_state_channel_annotations():
     """Verify operational channels carry PrivateStateAttr."""
-    hints = get_type_hints(OpsCloudAgentState, include_extras=True)
+    hints = get_type_hints(TalkOpsAgentState, include_extras=True)
     expected_private_channels = [
         "_active_cloud_provider",
         "_cloud_context",
@@ -236,7 +236,7 @@ def test_goal_and_resume_coercion():
     assert coerce_model_spec("  openai:gpt-4o  ") == "openai:gpt-4o"
     assert coerce_model_spec("") is None
     assert coerce_model_spec(None) is None
-    assert INHERIT_RUBRIC_MODEL == "__opscloud_inherit_rubric__"
+    assert INHERIT_RUBRIC_MODEL == "__talkops_inherit_rubric__"
 
 
 # ── 4. ResumeStateMiddleware Context Token Extraction ─────────────────────────
@@ -297,7 +297,7 @@ async def test_session_lifecycle(tmp_path: Path):
 # ── 7. State Migration ────────────────────────────────────────────────────────
 
 def test_state_migration(tmp_path: Path):
-    legacy_dir = tmp_path / "legacy_opscloud"
+    legacy_dir = tmp_path / "legacy_talkops"
     legacy_dir.mkdir()
     state_dir = tmp_path / ".state"
 

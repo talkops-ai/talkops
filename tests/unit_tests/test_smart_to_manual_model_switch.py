@@ -3,10 +3,10 @@
 import pytest
 from unittest.mock import MagicMock
 
-from opscloud.approval_mode import ApprovalMode
-from opscloud.ui.app import OpsCloudApp
-from opscloud.config.settings import get_settings
-from opscloud.ui.textual_adapter import TextualAdapter
+from talkops.approval_mode import ApprovalMode
+from talkops.ui.app import TalkOpsApp
+from talkops.config.settings import get_settings
+from talkops.ui.textual_adapter import TextualAdapter
 
 
 @pytest.mark.asyncio
@@ -15,10 +15,10 @@ async def test_smart_to_manual_switches_back_to_default_model(monkeypatch, tmp_p
     # Mock config.toml to specify gpt-5.6-luna as default
     test_config = tmp_path / "config.toml"
     test_config.write_text('[models]\ndefault = "openai:gpt-5.6-luna"\n')
-    monkeypatch.setattr("opscloud.config.paths.CONFIG_PATH", test_config)
-    monkeypatch.setattr("opscloud.config.toml_config.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.paths.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.toml_config.CONFIG_PATH", test_config)
 
-    app = OpsCloudApp(model="openai:gpt-5.6-luna", defer_server_start=True)
+    app = TalkOpsApp(model="openai:gpt-5.6-luna", defer_server_start=True)
     assert app._model == "openai:gpt-5.6-luna"
     assert app._manual_model == "openai:gpt-5.6-luna"
     assert app._smart_routed_active is False
@@ -29,7 +29,7 @@ async def test_smart_to_manual_switches_back_to_default_model(monkeypatch, tmp_p
     assert app._manual_model == "openai:gpt-5.6-luna"
 
     # Simulate smart mode routing event (e.g. 'hi how are you' routes to gemini-3.6-flash)
-    adapter = TextualAdapter(client=MagicMock(), assistant_id="opscloud", app=app, status_bar=MagicMock())
+    adapter = TextualAdapter(client=MagicMock(), assistant_id="talkops", app=app, status_bar=MagicMock())
     adapter._status_bar = MagicMock()
     app._status_bar = adapter._status_bar
     app._adapter = adapter
@@ -78,10 +78,10 @@ async def test_smart_to_manual_preserves_explicit_pre_smart_model(monkeypatch, t
     """Verify that if no explicit default is configured, the pre-smart manual model is restored."""
     test_config = tmp_path / "config.toml"
     test_config.write_text('[models]\n')
-    monkeypatch.setattr("opscloud.config.paths.CONFIG_PATH", test_config)
-    monkeypatch.setattr("opscloud.config.toml_config.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.paths.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.toml_config.CONFIG_PATH", test_config)
 
-    app = OpsCloudApp(model="anthropic:claude-sonnet-4-5", defer_server_start=True)
+    app = TalkOpsApp(model="anthropic:claude-sonnet-4-5", defer_server_start=True)
     status_bar_mock = MagicMock()
     app._status_bar = status_bar_mock
 
@@ -90,7 +90,7 @@ async def test_smart_to_manual_preserves_explicit_pre_smart_model(monkeypatch, t
     assert app._manual_model == "anthropic:claude-sonnet-4-5"
 
     # Simulate smart mode routing event to gemini-3.6-flash
-    adapter = TextualAdapter(client=MagicMock(), assistant_id="opscloud", app=app, status_bar=status_bar_mock)
+    adapter = TextualAdapter(client=MagicMock(), assistant_id="talkops", app=app, status_bar=status_bar_mock)
     app._adapter = adapter
 
     adapter._handle_custom_stream_event({
@@ -121,16 +121,16 @@ async def test_smart_to_auto_mode_also_restores_default_model(monkeypatch, tmp_p
     """Verify that switching from Smart to Auto mode also restores default model."""
     test_config = tmp_path / "config.toml"
     test_config.write_text('[models]\ndefault = "openai:gpt-5.6-luna"\n')
-    monkeypatch.setattr("opscloud.config.paths.CONFIG_PATH", test_config)
-    monkeypatch.setattr("opscloud.config.toml_config.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.paths.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.toml_config.CONFIG_PATH", test_config)
 
-    app = OpsCloudApp(model="openai:gpt-5.6-luna", defer_server_start=True)
+    app = TalkOpsApp(model="openai:gpt-5.6-luna", defer_server_start=True)
     status_bar_mock = MagicMock()
     app._status_bar = status_bar_mock
     app._notify_auto_mode_enabled_once = MagicMock()
 
     await app._set_approval_mode(ApprovalMode.SMART)
-    adapter = TextualAdapter(client=MagicMock(), assistant_id="opscloud", app=app, status_bar=status_bar_mock)
+    adapter = TextualAdapter(client=MagicMock(), assistant_id="talkops", app=app, status_bar=status_bar_mock)
     app._adapter = adapter
 
     adapter._handle_custom_stream_event({
@@ -153,7 +153,7 @@ async def test_smart_to_auto_mode_also_restores_default_model(monkeypatch, tmp_p
 @pytest.mark.asyncio
 async def test_jev_router_bypasses_and_clears_stale_routes_in_manual_mode():
     """Verify that in Manual mode, Jev router clears stale checkpointed routes and does not override model calls."""
-    from opscloud.middleware.jev_model_router import JevDynamicModelRouterMiddleware
+    from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
     from langchain_core.messages import HumanMessage
     from langchain.agents.middleware.types import ModelRequest, ModelResponse
 
@@ -206,12 +206,12 @@ async def test_jev_router_bypasses_and_clears_stale_routes_in_manual_mode():
 @pytest.mark.asyncio
 async def test_textual_adapter_ignores_model_routed_event_in_manual_mode():
     """Verify that adapter drops any stray model_routed events if the UI is in manual mode."""
-    app = OpsCloudApp(model="openai:gpt-5.6-luna", defer_server_start=True)
+    app = TalkOpsApp(model="openai:gpt-5.6-luna", defer_server_start=True)
     status_bar_mock = MagicMock()
     app._status_bar = status_bar_mock
     app._approval_mode = ApprovalMode.MANUAL
 
-    adapter = TextualAdapter(client=MagicMock(), assistant_id="opscloud", app=app, status_bar=status_bar_mock)
+    adapter = TextualAdapter(client=MagicMock(), assistant_id="talkops", app=app, status_bar=status_bar_mock)
     app._adapter = adapter
 
     event = {

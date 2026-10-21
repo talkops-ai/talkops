@@ -1,7 +1,7 @@
 """Unit tests for goal state size limits and validators."""
 
 import pytest
-from opscloud.state.goal_state_limits import (
+from talkops.state.goal_state_limits import (
     GOAL_APPLICATION_CHAR_LIMIT,
     GOAL_NOTICE_TEXT_CHAR_LIMIT,
     GOAL_OBJECTIVE_CHAR_LIMIT,

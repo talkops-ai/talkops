@@ -12,14 +12,14 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 import pytest
 
-from opscloud.commands._base import CommandContext
-from opscloud.commands.core.compact import CompactHandler
-from opscloud.config import paths
-from opscloud.config.cli_settings import auto_compact_override, parse_settings_fields
-from opscloud.middleware.compaction import (
+from talkops.commands._base import CommandContext
+from talkops.commands.core.compact import CompactHandler
+from talkops.config import paths
+from talkops.config.cli_settings import auto_compact_override, parse_settings_fields
+from talkops.middleware.compaction import (
     CONVERSATION_TRANSCRIPT_SYSTEM_SECTION,
     CompactRequestType,
-    OpsCloudSummarizationMiddleware,
+    TalkOpsSummarizationMiddleware,
     _create_cli_compaction_middleware,
     agenerate_llm_continuation_summary,
     build_context_summary_envelope,
@@ -264,7 +264,7 @@ def test_llm_continuation_summary_retries_on_tool_call_and_wraps_envelope(tmp_pa
                 {
                     "id": "tc_1",
                     "name": "write_to_file",
-                    "args": {"TargetFile": "/repo/src/opscloud/config/cli_settings.py"},
+                    "args": {"TargetFile": "/repo/src/talkops/config/cli_settings.py"},
                 },
                 {
                     "id": "tc_sub",
@@ -304,7 +304,7 @@ def test_llm_continuation_summary_retries_on_tool_call_and_wraps_envelope(tmp_pa
     assert "2. Second user request: now analyze compaction" in envelope
     assert "# Previous Session Summary:" in envelope
     assert "# Code Interaction Summary:" in envelope
-    assert "`/repo/src/opscloud/config/cli_settings.py` (edited)" in envelope
+    assert "`/repo/src/talkops/config/cli_settings.py` (edited)" in envelope
     assert "[ARTIFACT: analysis_report]" in envelope
     assert "# Subagents (1 total)" in envelope
     assert "# Conversation Logs" in envelope
@@ -335,7 +335,7 @@ def test_llm_continuation_summary_retries_on_tool_call_and_wraps_envelope(tmp_pa
         "Third user request: run all unit tests",
     ]
     files2 = compute_trajectory_file_interactions(second_turn_history)
-    assert "- `/repo/src/opscloud/config/cli_settings.py` (edited)" in files2
+    assert "- `/repo/src/talkops/config/cli_settings.py` (edited)" in files2
     assert "- `/repo/tests/test_compaction.py` (viewed)" in files2
 
 
@@ -348,7 +348,7 @@ async def test_compact_command_handler_lossless_execution(
     monkeypatch.setattr(paths, "DATA_DIR", tmp_path)
 
     messages = [
-        HumanMessage(id="m1", content="Initial goal: implement lossless compaction in opscloud"),
+        HumanMessage(id="m1", content="Initial goal: implement lossless compaction in talkops"),
         AIMessage(
             id="m2",
             content="Inspecting middleware",
@@ -356,7 +356,7 @@ async def test_compact_command_handler_lossless_execution(
                 {
                     "id": "call_view",
                     "name": "view_file",
-                    "args": {"AbsolutePath": "/Users/structbinary/Documents/work/talkops/opscloud/src/opscloud/middleware/compaction.py"},
+                    "args": {"AbsolutePath": "/Users/structbinary/Documents/work/talkops/talkops/src/talkops/middleware/compaction.py"},
                 }
             ],
         ),
@@ -408,7 +408,7 @@ async def test_compact_command_handler_lossless_execution(
     # chronological user requests, file interactions, and <COMPACTED_HISTORY>
     ctx_summary = result.data["context_summary"]
     assert "<CONTEXT_SUMMARY>" in ctx_summary
-    assert "Initial goal: implement lossless compaction in opscloud" in ctx_summary
+    assert "Initial goal: implement lossless compaction in talkops" in ctx_summary
     assert "keep all file paths and test details" in ctx_summary
     assert "# Code Interaction Summary:" in ctx_summary
     assert "<COMPACTED_HISTORY>" in ctx_summary
@@ -423,7 +423,7 @@ def test_cli_compaction_middleware_injects_transcript_section() -> None:
     assert CONVERSATION_TRANSCRIPT_SYSTEM_SECTION in mw.system_prompt
 
 
-def test_opscloud_summarization_middleware_and_compact_tool_in_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_talkops_summarization_middleware_and_compact_tool_in_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify automatic middleware summarization and compact_conversation tool emit <CONTEXT_SUMMARY>."""
     monkeypatch.setattr(paths, "DATA_DIR", tmp_path)
 
@@ -440,7 +440,7 @@ def test_opscloud_summarization_middleware_and_compact_tool_in_sync(tmp_path: Pa
         ]
     )
     mw = _create_cli_compaction_middleware(fake_model, _DummyBackend())
-    assert isinstance(mw._summarization, OpsCloudSummarizationMiddleware)
+    assert isinstance(mw._summarization, TalkOpsSummarizationMiddleware)
 
     mw._summarization._active_thread_id = "sync-mw-thread"
     messages = [
@@ -452,7 +452,7 @@ def test_opscloud_summarization_middleware_and_compact_tool_in_sync(tmp_path: Pa
                 {
                     "id": "call_1",
                     "name": "read_file",
-                    "args": {"file_path": "/Users/structbinary/Documents/work/talkops/opscloud/src/opscloud/middleware/compaction.py"},
+                    "args": {"file_path": "/Users/structbinary/Documents/work/talkops/talkops/src/talkops/middleware/compaction.py"},
                 }
             ],
         ),
@@ -478,7 +478,7 @@ def test_opscloud_summarization_middleware_and_compact_tool_in_sync(tmp_path: Pa
 
 def test_deduplicate_unchanged_file_reads() -> None:
     """Verify earlier identical read_file outputs are deduplicated while the latest read stays intact."""
-    from opscloud.middleware.compaction import deduplicate_unchanged_file_reads
+    from talkops.middleware.compaction import deduplicate_unchanged_file_reads
 
     file_body = "def handler():\n    return 200\n" * 50
     messages = [
@@ -506,7 +506,7 @@ def test_deduplicate_unchanged_file_reads() -> None:
 
 def test_microcompact_tool_messages_keeps_recent_and_clears_older() -> None:
     """Verify Tier-1 keep-recent microcompaction clears older heavy tool outputs while keeping recent ones."""
-    from opscloud.middleware.compaction import microcompact_tool_messages
+    from talkops.middleware.compaction import microcompact_tool_messages
 
     heavy_output = "LINE_DATA_" + ("0123456789" * 600)  # ~6,010 chars each
     messages: list[Any] = [HumanMessage(content="Run multiple commands")]

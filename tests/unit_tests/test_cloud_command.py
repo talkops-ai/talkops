@@ -7,16 +7,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from opscloud.commands._base import CommandContext
-from opscloud.commands.core.cloud import CloudHandler
-from opscloud.config.cloud_profiles import (
+from talkops.commands._base import CommandContext
+from talkops.commands.core.cloud import CloudHandler
+from talkops.config.cloud_profiles import (
     AWSProfileInfo,
     get_active_aws_profile,
     list_aws_profiles,
     set_active_aws_profile,
 )
-from opscloud.config.settings import Settings, get_glyphs
-from opscloud.config.toml_config import (
+from talkops.config.settings import Settings, get_glyphs
+from talkops.config.toml_config import (
     clear_aws_profile,
     load_aws_profile,
     load_recent_aws_profiles,
@@ -61,8 +61,8 @@ def test_clear_aws_profile(temp_config_path: Path):
 def test_recent_aws_profiles(tmp_path: Path, monkeypatch):
     """Test MRU recent AWS profile persistence."""
     test_state_file = tmp_path / "recent_cloud_profiles.json"
-    monkeypatch.setattr("opscloud.config.toml_config._RECENT_PROFILES_FILE", test_state_file)
-    monkeypatch.setattr("opscloud.config.toml_config.STATE_DIR", tmp_path)
+    monkeypatch.setattr("talkops.config.toml_config._RECENT_PROFILES_FILE", test_state_file)
+    monkeypatch.setattr("talkops.config.toml_config.STATE_DIR", tmp_path)
 
     save_recent_aws_profile("dev")
     save_recent_aws_profile("staging")
@@ -81,7 +81,7 @@ def test_recent_aws_profiles(tmp_path: Path, monkeypatch):
 
 def test_list_aws_profiles_mock_cli():
     """Test profile listing via aws configure list-profiles mock."""
-    from opscloud.config.cloud_profiles import invalidate_aws_profile_cache
+    from talkops.config.cloud_profiles import invalidate_aws_profile_cache
     invalidate_aws_profile_cache()
     mock_res = MagicMock(return_code=0, stdout="default\nprod\nstaging\n")
     mock_res.returncode = 0
@@ -98,15 +98,15 @@ def test_get_and_set_active_aws_profile(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
 
-    from opscloud.config.settings import get_settings
+    from talkops.config.settings import get_settings
     get_settings().aws_profile = "default"
 
     test_config = tmp_path / "config.toml"
-    monkeypatch.setattr("opscloud.config.cloud_profiles.save_aws_profile", lambda p: save_aws_profile(p, test_config))
-    monkeypatch.setattr("opscloud.config.cloud_profiles.load_aws_profile", lambda: load_aws_profile(test_config))
-    monkeypatch.setattr("opscloud.config.cloud_profiles.save_recent_aws_profile", lambda p: None)
-    from opscloud.config.toml_config import save_aws_region as real_save_reg
-    monkeypatch.setattr("opscloud.config.toml_config.save_aws_region", lambda r: real_save_reg(r, test_config))
+    monkeypatch.setattr("talkops.config.cloud_profiles.save_aws_profile", lambda p: save_aws_profile(p, test_config))
+    monkeypatch.setattr("talkops.config.cloud_profiles.load_aws_profile", lambda: load_aws_profile(test_config))
+    monkeypatch.setattr("talkops.config.cloud_profiles.save_recent_aws_profile", lambda p: None)
+    from talkops.config.toml_config import save_aws_region as real_save_reg
+    monkeypatch.setattr("talkops.config.toml_config.save_aws_region", lambda r: real_save_reg(r, test_config))
 
     # Default fallback
     assert get_active_aws_profile() == "default"
@@ -153,8 +153,8 @@ async def test_cloud_handler_interactive_trigger():
 @pytest.mark.asyncio
 async def test_cloud_handler_direct_switch(monkeypatch, tmp_path: Path):
     test_config = tmp_path / "config.toml"
-    monkeypatch.setattr("opscloud.config.cloud_profiles.save_aws_profile", lambda p: save_aws_profile(p, test_config))
-    monkeypatch.setattr("opscloud.config.cloud_profiles.save_recent_aws_profile", lambda p: None)
+    monkeypatch.setattr("talkops.config.cloud_profiles.save_aws_profile", lambda p: save_aws_profile(p, test_config))
+    monkeypatch.setattr("talkops.config.cloud_profiles.save_recent_aws_profile", lambda p: None)
 
     handler = CloudHandler()
     settings = Settings()
@@ -200,7 +200,7 @@ async def test_cloud_handler_status_subcommand():
 
 
 def test_cloud_selector_screen_init():
-    from opscloud.ui.widgets.cloud_selector import CloudProfileSelectorScreen
+    from talkops.ui.widgets.cloud_selector import CloudProfileSelectorScreen
 
     screen = CloudProfileSelectorScreen(current_profile="dev-profile")
     assert screen._current_profile == "dev-profile"
@@ -208,8 +208,8 @@ def test_cloud_selector_screen_init():
 
 def test_cloud_option_in_place_selection():
     """Verify CloudProfileOption supports in-place selection without rebuilding DOM."""
-    from opscloud.config.cloud_profiles import AWSProfileInfo
-    from opscloud.ui.widgets.cloud_selector import CloudProfileOption
+    from talkops.config.cloud_profiles import AWSProfileInfo
+    from talkops.ui.widgets.cloud_selector import CloudProfileOption
 
     prof = AWSProfileInfo(name="staging-us-east-1", region="us-east-1", account_id="123456789012")
     opt = CloudProfileOption(
@@ -236,12 +236,12 @@ def test_cloud_option_in_place_selection():
 
 async def test_cloud_selector_navigation_and_batch_mount():
     """Verify wrap-around navigation, page navigation, and fuzzy filter in CloudProfileSelectorScreen."""
-    from opscloud.config.cloud_profiles import AWSProfileInfo
-    from opscloud.ui.app import OpsCloudApp
-    from opscloud.ui.widgets.cloud_selector import CloudProfileSelectorScreen
+    from talkops.config.cloud_profiles import AWSProfileInfo
+    from talkops.ui.app import TalkOpsApp
+    from talkops.ui.widgets.cloud_selector import CloudProfileSelectorScreen
     from textual.widgets import Input
 
-    app = OpsCloudApp()
+    app = TalkOpsApp()
     async with app.run_test(headless=True) as pilot:
         screen = CloudProfileSelectorScreen(current_profile="dev-profile")
         screen._load_profile_data = lambda: [
@@ -294,20 +294,20 @@ async def test_cloud_selector_navigation_and_batch_mount():
 
 
 def test_get_active_aws_region(monkeypatch, tmp_path: Path):
-    from opscloud.config.cloud_profiles import get_active_aws_region
-    from opscloud.config.toml_config import load_aws_region, save_aws_region
+    from talkops.config.cloud_profiles import get_active_aws_region
+    from talkops.config.toml_config import load_aws_region, save_aws_region
 
     test_config = tmp_path / "config.toml"
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
-    monkeypatch.setattr("opscloud.config.paths.CONFIG_PATH", test_config)
-    monkeypatch.setattr("opscloud.config.toml_config.CONFIG_PATH", test_config)
-    monkeypatch.setattr("opscloud.config.cloud_profiles.Path.home", lambda: tmp_path)
-    monkeypatch.setattr("opscloud.config.cloud_profiles.load_aws_profile", lambda: None)
-    monkeypatch.setattr("opscloud.config.cloud_profiles.load_aws_region", lambda: load_aws_region(test_config))
-    from opscloud.config.settings import get_settings
+    monkeypatch.setattr("talkops.config.paths.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.toml_config.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.cloud_profiles.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("talkops.config.cloud_profiles.load_aws_profile", lambda: None)
+    monkeypatch.setattr("talkops.config.cloud_profiles.load_aws_region", lambda: load_aws_region(test_config))
+    from talkops.config.settings import get_settings
     monkeypatch.setattr(get_settings(), "aws_profile", "default")
     monkeypatch.setattr(get_settings(), "aws_region", "us-east-1")
 
@@ -331,13 +331,13 @@ def test_get_active_aws_region(monkeypatch, tmp_path: Path):
 
 def test_profile_switch_region_sequence(monkeypatch, tmp_path: Path):
     """Regression test: switching krayak -> prod -> krayak retains profile-specific regions."""
-    from opscloud.config.cloud_profiles import (
+    from talkops.config.cloud_profiles import (
         get_active_aws_profile,
         get_active_aws_region,
         get_aws_profile_info,
         set_active_aws_profile,
     )
-    from opscloud.config.toml_config import load_aws_profile, load_aws_region
+    from talkops.config.toml_config import load_aws_profile, load_aws_region
 
     test_config = tmp_path / "config.toml"
     fake_aws_dir = tmp_path / ".aws"
@@ -362,9 +362,9 @@ def test_profile_switch_region_sequence(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
-    monkeypatch.setattr("opscloud.config.paths.CONFIG_PATH", test_config)
-    monkeypatch.setattr("opscloud.config.toml_config.CONFIG_PATH", test_config)
-    monkeypatch.setattr("opscloud.config.cloud_profiles.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("talkops.config.paths.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.toml_config.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.cloud_profiles.Path.home", lambda: tmp_path)
 
     # 1. Switch to krayak (ap-south-1)
     set_active_aws_profile("krayak", persist=True)
@@ -401,7 +401,7 @@ def test_profile_switch_region_sequence(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_status_bar_cloud_display():
-    from opscloud.ui.widgets.status import StatusBar
+    from talkops.ui.widgets.status import StatusBar
 
     bar = StatusBar()
     # Test set_cloud updates reactives
@@ -415,7 +415,7 @@ async def test_status_bar_cloud_display():
 
 
 def test_welcome_banner_environment_and_capabilities():
-    from opscloud.ui.widgets.welcome import WelcomeBanner
+    from talkops.ui.widgets.welcome import WelcomeBanner
 
     banner = WelcomeBanner(model_spec="anthropic:claude-opus", effort="high")
     banner._skills_data = [("aws-core", "Core AWS")]
@@ -441,8 +441,8 @@ def test_welcome_banner_environment_and_capabilities():
 
 
 def test_welcome_banner_mcp_states():
-    from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
-    from opscloud.ui.widgets.welcome import WelcomeBanner
+    from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+    from talkops.ui.widgets.welcome import WelcomeBanner
 
     banner = WelcomeBanner()
     assert "discovering" in banner._build_right_panel().plain
@@ -462,7 +462,7 @@ def test_welcome_banner_mcp_states():
 
 
 def test_welcome_banner_long_skill_list_never_wraps():
-    from opscloud.ui.widgets.welcome import WelcomeBanner
+    from talkops.ui.widgets.welcome import WelcomeBanner
 
     banner = WelcomeBanner()
     banner._skills_data = [(f"aws-compute-skill-number-{i}", "") for i in range(16)]
@@ -490,9 +490,9 @@ async def test_cloud_handler_headless_no_args():
 async def test_cloud_handler_default_setting(monkeypatch, tmp_path: Path):
     """Verify /cloud --default saves and activates profile cleanly."""
     test_config = tmp_path / "config.toml"
-    monkeypatch.setattr("opscloud.config.paths.CONFIG_PATH", test_config)
-    monkeypatch.setattr("opscloud.config.toml_config.CONFIG_PATH", test_config)
-    monkeypatch.setattr("opscloud.config.cloud_profiles.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("talkops.config.paths.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.toml_config.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.cloud_profiles.Path.home", lambda: tmp_path)
 
     handler = CloudHandler()
     settings = Settings()
@@ -513,7 +513,7 @@ async def test_cloud_handler_default_setting(monkeypatch, tmp_path: Path):
 
 def test_cloud_profile_discovery_caching(tmp_path: Path, monkeypatch):
     """Verify that profile discovery and metadata queries use in-memory caching."""
-    from opscloud.config.cloud_profiles import (
+    from talkops.config.cloud_profiles import (
         get_aws_profile_info,
         invalidate_aws_profile_cache,
         list_aws_profiles,
@@ -524,7 +524,7 @@ def test_cloud_profile_discovery_caching(tmp_path: Path, monkeypatch):
     cfg_file = fake_aws_dir / "config"
     cfg_file.write_text("[default]\nregion = us-east-1\n\n[profile cached_prof]\nregion = eu-west-1\n", encoding="utf-8")
 
-    monkeypatch.setattr("opscloud.config.cloud_profiles.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("talkops.config.cloud_profiles.Path.home", lambda: tmp_path)
     invalidate_aws_profile_cache()
 
     info1 = get_aws_profile_info("cached_prof")
@@ -542,7 +542,7 @@ def test_cloud_profile_discovery_caching(tmp_path: Path, monkeypatch):
 
 def test_cloud_selector_unconfigured_profile_notification():
     """Verify typing an unknown profile name triggers warning notification."""
-    from opscloud.ui.widgets.cloud_selector import CloudProfileSelectorScreen
+    from talkops.ui.widgets.cloud_selector import CloudProfileSelectorScreen
 
     screen = CloudProfileSelectorScreen(current_profile="default")
     screen._all_profiles = [AWSProfileInfo(name="default"), AWSProfileInfo(name="staging")]
@@ -565,7 +565,7 @@ def test_status_bar_narrow_cloud_rendering():
     import textual._context
     from rich.console import Console
     from textual.widgets import Static
-    from opscloud.ui.widgets.status import StatusBar
+    from talkops.ui.widgets.status import StatusBar
 
     mock_app = MagicMock()
     mock_app.size.width = 120
@@ -598,4 +598,85 @@ def test_status_bar_narrow_cloud_rendering():
         assert "us-east-1" not in narrow_content.plain
     finally:
         textual._context.active_app.reset(token)
+
+
+def test_server_process_picks_up_switched_aws_profile(monkeypatch, tmp_path: Path):
+    """Verify ServerProcess and LocalShellBackend pick up /cloud profile switches from config.toml."""
+    from talkops.backend.local import LocalShellBackend
+    from talkops.config.cloud_profiles import (
+        get_active_aws_profile,
+        get_active_aws_region,
+        invalidate_aws_profile_cache,
+        set_active_aws_profile,
+    )
+
+    test_config = tmp_path / "config.toml"
+    fake_aws_dir = tmp_path / ".aws"
+    fake_aws_dir.mkdir(parents=True, exist_ok=True)
+    (fake_aws_dir / "config").write_text(
+        "[default]\nregion = eu-central-1\n\n[profile krayak]\nregion = ap-south-1\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("talkops.config.paths.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.toml_config.CONFIG_PATH", test_config)
+    monkeypatch.setattr("talkops.config.cloud_profiles.Path.home", lambda: tmp_path)
+    invalidate_aws_profile_cache()
+
+    # TUI switches active profile to krayak and persists to config.toml
+    set_active_aws_profile("krayak", persist=True)
+
+    # Simulate ServerProcess having stale startup env vars (AWS_PROFILE=default, AWS_REGION=eu-central-1)
+    monkeypatch.setenv("TALKOPS_IN_SERVER_PROCESS", "1")
+    monkeypatch.setenv("AWS_PROFILE", "default")
+    monkeypatch.setenv("AWS_DEFAULT_PROFILE", "default")
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-central-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIASTALEKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "STALESECRET")
+
+    assert get_active_aws_profile() == "krayak"
+    assert get_active_aws_region() == "ap-south-1"
+
+    backend = LocalShellBackend(root_dir=tmp_path)
+    backend._sync_cloud_env()
+
+    assert backend._env["AWS_PROFILE"] == "krayak"
+    assert backend._env["AWS_DEFAULT_PROFILE"] == "krayak"
+    assert backend._env["AWS_REGION"] == "ap-south-1"
+    assert backend._env["AWS_DEFAULT_REGION"] == "ap-south-1"
+    assert "AWS_ACCESS_KEY_ID" not in backend._env
+    assert "AWS_SECRET_ACCESS_KEY" not in backend._env
+    assert os.environ.get("AWS_PROFILE") == "krayak"
+    assert os.environ.get("AWS_REGION") == "ap-south-1"
+
+
+def test_tool_call_message_drag_selection_does_not_collapse_output(monkeypatch):
+    """Verify dragging to select console output in ToolCallMessage does not collapse output."""
+    from talkops.ui.widgets.message_list import MessageList
+    from talkops.ui.widgets.tool_call_message import ToolCallMessage
+
+    assert MessageList.FOCUS_ON_CLICK is False
+
+    msg = ToolCallMessage("execute", {"command": "aws s3api list-buckets"})
+    msg._output = "\n".join(f"line {i}" for i in range(15))
+    msg._expanded = True
+
+    fake_screen = MagicMock()
+    fake_screen.selections = {MagicMock(): MagicMock()}
+    monkeypatch.setattr(ToolCallMessage, "screen", property(lambda self: fake_screen))
+
+    click_event = MagicMock()
+    click_event.chain = 1
+    click_event.widget = None
+
+    msg.on_click(click_event)
+    # Must remain expanded when a text selection is active
+    assert msg._expanded is True
+
+    # Multi-click (double-click word select) also must not collapse
+    fake_screen.selections = {}
+    click_event.chain = 2
+    msg.on_click(click_event)
+    assert msg._expanded is True
 

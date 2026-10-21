@@ -6,7 +6,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Select
 
-from opscloud.ui.widgets.debug_console import DebugConsoleScreen, SnapshotField, _DebugLogView
+from talkops.ui.widgets.debug_console import DebugConsoleScreen, SnapshotField, _DebugLogView
 
 
 class DummyDebugApp(App[None]):
@@ -44,3 +44,30 @@ async def test_debug_console_screen_mount_and_controls() -> None:
         screen.action_close()
         await pilot.pause()
         assert len(app._screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_debug_console_displays_emitted_agent_logs() -> None:
+    """DebugConsoleScreen renders logs emitted through talkops.utils.logger.get_logger."""
+    from talkops._debug_buffer import get_log_buffer
+    from talkops.utils.logger import configure_logging, get_logger
+
+    configure_logging(level="INFO", log_to_console=False, log_to_file=False)
+    buf = get_log_buffer()
+    assert buf is not None
+    cursor = buf.total_emitted
+
+    test_logger = get_logger("talkops.ui.debug_test")
+    test_logger.info("Live log line for debug console")
+
+    screen = DebugConsoleScreen(
+        snapshot=[SnapshotField(label="Thread", value="t-123")],
+        cleared_upto=cursor,
+    )
+    app = DummyDebugApp(screen)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        log_view = screen.query_one("#debug-log", _DebugLogView)
+        assert any("Live log line for debug console" in r.message for r in log_view._records)
+

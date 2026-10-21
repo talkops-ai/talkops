@@ -1,14 +1,14 @@
 """Unit tests for AST evaluation, shell safety, unicode, and URL validation."""
 
-from opscloud.security.cli_ast_evaluator import CliAstEvaluator, evaluate_command_safety
-from opscloud.security.shell_safety import contains_dangerous_patterns, is_shell_command_allowed
-from opscloud.security.unicode_security import (
+from talkops.security.cli_ast_evaluator import CliAstEvaluator, evaluate_command_safety
+from talkops.security.shell_safety import contains_dangerous_patterns, is_shell_command_allowed
+from talkops.security.unicode_security import (
     check_url_safety,
     normalize_confusables,
     sanitize_unicode,
     strip_dangerous_unicode,
 )
-from opscloud.security.url_validation import UrlValidationError, is_url_safe, validate_url
+from talkops.security.url_validation import UrlValidationError, is_url_safe, validate_url
 
 
 def test_dangerous_shell_command_patterns():

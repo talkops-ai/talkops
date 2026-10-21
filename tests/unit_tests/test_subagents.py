@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from opscloud.middleware.subagents import SubagentsMiddleware
+from talkops.middleware.subagents import SubagentsMiddleware
 
 
 def test_subagents_middleware():
@@ -51,15 +51,15 @@ def test_subagents_middleware():
 
 
 def test_get_built_in_subagents_empty():
-    """Ensure OpsCloud has no built-in subagents on disk."""
-    from opscloud.subagents import get_built_in_subagents
+    """Ensure TalkOps has no built-in subagents on disk."""
+    from talkops.subagents import get_built_in_subagents
 
     assert get_built_in_subagents() == []
 
 
 def test_parse_subagent_file(tmp_path):
     """Test parsing subagent markdown with YAML frontmatter."""
-    from opscloud.subagents.loader import parse_subagent_file
+    from talkops.subagents.loader import parse_subagent_file
 
     # Valid subagent file
     agent_file = tmp_path / "AGENTS.md"
@@ -104,7 +104,7 @@ Analyze pod status and diagnose node health.
 
 def test_parse_subagent_file_fallback_and_invalid(tmp_path):
     """Test edge cases: missing frontmatter, fallback name, missing description."""
-    from opscloud.subagents.loader import parse_subagent_file
+    from talkops.subagents.loader import parse_subagent_file
 
     # Missing frontmatter
     no_fm = tmp_path / "plain.md"
@@ -127,7 +127,7 @@ def test_parse_subagent_file_fallback_and_invalid(tmp_path):
 
 def test_list_subagents_precedence(tmp_path, monkeypatch):
     """Test user vs project directory precedence and plugin discovery."""
-    from opscloud.subagents.loader import list_subagents
+    from talkops.subagents.loader import list_subagents
 
     user_dir = tmp_path / "user_agents"
     user_dir.mkdir()
@@ -159,7 +159,7 @@ def test_list_subagents_precedence(tmp_path, monkeypatch):
         "path": "/fake/path/AGENTS.md",
     }
     monkeypatch.setattr(
-        "opscloud.plugins.adapters.agents.discover_plugin_subagents",
+        "talkops.plugins.adapters.agents.discover_plugin_subagents",
         lambda project_root=None: [mock_plugin_agent],
     )
 
@@ -185,10 +185,10 @@ def test_list_subagents_precedence(tmp_path, monkeypatch):
 
 def test_load_async_subagents(tmp_path, monkeypatch):
     """Test loading remote async subagents from config.toml with env expansion."""
-    from opscloud.subagents.loader import load_async_subagents
+    from talkops.subagents.loader import load_async_subagents
 
-    monkeypatch.setenv("OPSCLOUD_REMOTE_HOST", "cloud.internal")
-    monkeypatch.setenv("OPSCLOUD_AUTH_TOKEN", "bearer-xyz123")
+    monkeypatch.setenv("TALKOPS_REMOTE_HOST", "cloud.internal")
+    monkeypatch.setenv("TALKOPS_AUTH_TOKEN", "bearer-xyz123")
 
     config_file = tmp_path / "config.toml"
     config_file.write_text(
@@ -196,10 +196,10 @@ def test_load_async_subagents(tmp_path, monkeypatch):
 [async_subagents.remote_secops]
 description = "Remote security compliance scanner"
 graph_id = "secops-scanner"
-url = "https://${OPSCLOUD_REMOTE_HOST}/api/v1"
+url = "https://${TALKOPS_REMOTE_HOST}/api/v1"
 
 [async_subagents.remote_secops.headers]
-Authorization = "Bearer ${OPSCLOUD_AUTH_TOKEN}"
+Authorization = "Bearer ${TALKOPS_AUTH_TOKEN}"
 """,
         encoding="utf-8",
     )
@@ -216,8 +216,8 @@ Authorization = "Bearer ${OPSCLOUD_AUTH_TOKEN}"
 
 def test_subagent_panel_header_meta_parts():
     """Verify SubagentPanel header rendering and separator glyph resolution."""
-    from opscloud.ui.widgets.subagent_panel import SubagentPanel, _Phase
-    from opscloud.ui.theme import DARK_COLORS
+    from talkops.ui.widgets.subagent_panel import SubagentPanel, _Phase
+    from talkops.ui.theme import DARK_COLORS
 
     panel = SubagentPanel()
     panel._phase_order = ["eval-1", "eval-2"]
@@ -239,8 +239,8 @@ def test_subagent_panel_header_meta_parts():
 
 def test_subagent_panel_model_and_activity():
     """Verify SubagentPanel captures model name and live activity/action."""
-    from opscloud.ui.widgets.subagent_panel import SubagentPanel
-    from opscloud.ui.theme import DARK_COLORS
+    from talkops.ui.widgets.subagent_panel import SubagentPanel
+    from talkops.ui.theme import DARK_COLORS
 
     panel = SubagentPanel()
     panel.prepare_turn(model_label="gemini-2.5-flash")
@@ -266,7 +266,7 @@ def test_subagent_panel_model_and_activity():
     assert record.current_action == "aws_ce_get_cost_and_usage"
 
     # Verify rendering contains activity and model
-    from opscloud.config.settings import get_glyphs
+    from talkops.config.settings import get_glyphs
     glyphs = get_glyphs()
     row = panel._render_row(record, 100, glyphs, DARK_COLORS)
     plain = row.plain
@@ -285,9 +285,9 @@ def test_subagent_panel_model_and_activity():
 
 def test_subagent_panel_semantic_colors_and_phase_nav():
     """Verify SubagentPanel uses primary for running, success for done, error for failed, and accent bar for phase."""
-    from opscloud.ui.widgets.subagent_panel import SubagentPanel, _SubagentRecord, _Phase
-    from opscloud.ui.theme import DARK_COLORS
-    from opscloud.config.settings import get_glyphs
+    from talkops.ui.widgets.subagent_panel import SubagentPanel, _SubagentRecord, _Phase
+    from talkops.ui.theme import DARK_COLORS
+    from talkops.config.settings import get_glyphs
 
     glyphs = get_glyphs()
     panel = SubagentPanel()
@@ -325,8 +325,8 @@ def test_subagent_panel_semantic_colors_and_phase_nav():
 
 def test_subagent_cli_middleware_hitl():
     """Verify _subagent_cli_middleware attaches AutoModeHITLMiddleware when appropriate."""
-    from opscloud.agent.factory import _subagent_cli_middleware
-    from opscloud.middleware.auto_mode_hitl import AutoModeHITLMiddleware, AsyncApprovalHITLMiddleware
+    from talkops.agent.factory import _subagent_cli_middleware
+    from talkops.middleware.auto_mode_hitl import AutoModeHITLMiddleware, AsyncApprovalHITLMiddleware
 
     interrupt_on = {"execute": True}
 
@@ -360,7 +360,7 @@ def test_subagent_cli_middleware_hitl():
 def test_subagent_cost_transfers_empty_scope():
     """Verify CostTrackingMiddleware transfers costs from nested subagents without checkpoint_ns."""
     from unittest.mock import MagicMock
-    from opscloud.middleware.cost_tracking import CostTrackingMiddleware
+    from talkops.middleware.cost_tracking import CostTrackingMiddleware
     from langgraph.types import Overwrite
 
     nested_mw = CostTrackingMiddleware(nested=True)
@@ -406,7 +406,7 @@ def test_subagent_cost_transfers_empty_scope():
 
 
 def test_subagent_telemetry_format_tool_activity():
-    from opscloud.middleware.subagent_telemetry import _format_tool_activity
+    from talkops.middleware.subagent_telemetry import _format_tool_activity
 
     assert _format_tool_activity("bash", {"command": "aws eks list-clusters --region us-east-1"}) == "aws eks list-clusters --region us-east-1"
     assert _format_tool_activity("run_command", {"command": "kubectl get pods -n kube-system"}) == "kubectl get pods -n kube-system"
@@ -417,7 +417,7 @@ def test_subagent_telemetry_format_tool_activity():
 
 def test_subagent_telemetry_middleware_wrap_tool_call():
     from unittest.mock import MagicMock
-    from opscloud.middleware.subagent_telemetry import SubagentTelemetryMiddleware
+    from talkops.middleware.subagent_telemetry import SubagentTelemetryMiddleware
 
     mw = SubagentTelemetryMiddleware(subagent_name="aws-finops-agent")
 
@@ -457,7 +457,7 @@ def test_subagent_telemetry_middleware_wrap_tool_call():
 
 def test_subagent_telemetry_middleware_wrap_model_call():
     from unittest.mock import MagicMock
-    from opscloud.middleware.subagent_telemetry import SubagentTelemetryMiddleware
+    from talkops.middleware.subagent_telemetry import SubagentTelemetryMiddleware
 
     mw = SubagentTelemetryMiddleware(subagent_name="aws-finops-agent")
 
@@ -489,8 +489,8 @@ def test_subagent_telemetry_middleware_wrap_model_call():
 
 def test_subagent_transcript_config_thread_id_binding():
     from unittest.mock import MagicMock
-    from opscloud.middleware.server_hooks import _subagent_transcript_config
-    from opscloud.middleware.cost_tracking import ACTIVE_SESSION_THREAD_ID
+    from talkops.middleware.server_hooks import _subagent_transcript_config
+    from talkops.middleware.cost_tracking import ACTIVE_SESSION_THREAD_ID
     from langchain_core.runnables.config import var_child_runnable_config
 
     call = MagicMock()
@@ -518,7 +518,7 @@ def test_subagent_transcript_config_thread_id_binding():
 
 
 def test_subagent_panel_activity_matching_by_name():
-    from opscloud.ui.widgets.subagent_panel import SubagentPanel
+    from talkops.ui.widgets.subagent_panel import SubagentPanel
 
     panel = SubagentPanel()
     # Add a subagent run
@@ -540,8 +540,8 @@ def test_subagent_panel_activity_matching_by_name():
 def test_subagent_transcript_config_js_eval():
     """Verify _subagent_transcript_config also binds thread and config for js_eval."""
     from unittest.mock import MagicMock
-    from opscloud.middleware.server_hooks import _subagent_transcript_config
-    from opscloud.middleware.cost_tracking import ACTIVE_SESSION_THREAD_ID
+    from talkops.middleware.server_hooks import _subagent_transcript_config
+    from talkops.middleware.cost_tracking import ACTIVE_SESSION_THREAD_ID
     from langchain_core.runnables.config import var_child_runnable_config
 
     call = MagicMock()
@@ -568,8 +568,8 @@ def test_subagent_transcript_config_js_eval():
 
 def test_subagent_cli_middleware_includes_jev_router():
     """Verify _subagent_cli_middleware includes JevDynamicModelRouterMiddleware."""
-    from opscloud.agent.factory import _subagent_cli_middleware
-    from opscloud.middleware.jev_model_router import JevDynamicModelRouterMiddleware
+    from talkops.agent.factory import _subagent_cli_middleware
+    from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
 
     mw_list = _subagent_cli_middleware(
         has_explicit_model=False,
@@ -586,9 +586,9 @@ def test_subagent_cli_middleware_includes_compaction_middleware():
     from unittest.mock import MagicMock
     from langchain_core.language_models.chat_models import BaseChatModel
     from deepagents.backends.filesystem import FilesystemBackend
-    from opscloud.agent.factory import _subagent_cli_middleware
-    from opscloud.middleware.compaction import CLICompactionMiddleware
-    from opscloud.middleware.jev_model_router import JevDynamicModelRouterMiddleware
+    from talkops.agent.factory import _subagent_cli_middleware
+    from talkops.middleware.compaction import CLICompactionMiddleware
+    from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
 
     mock_model = MagicMock(spec=BaseChatModel)
     mock_model.profile = {"max_input_tokens": 128_000}
@@ -615,7 +615,7 @@ def test_subagent_cli_middleware_includes_compaction_middleware():
 
 def test_subagent_tool_filter_allows_system_compaction_tool():
     """Verify ToolFilterMiddleware does not block compact_conversation even with strict allowed_tools."""
-    from opscloud.middleware.tool_filter import ToolFilterMiddleware, ALWAYS_ALLOWED_SYSTEM_TOOLS
+    from talkops.middleware.tool_filter import ToolFilterMiddleware, ALWAYS_ALLOWED_SYSTEM_TOOLS
 
     assert "compact_conversation" in ALWAYS_ALLOWED_SYSTEM_TOOLS
     assert "ask_user" in ALWAYS_ALLOWED_SYSTEM_TOOLS
@@ -634,7 +634,7 @@ def test_subagent_tool_filter_allows_system_compaction_tool():
 def test_pending_thread_transfers_bridge_to_charge():
     """Verify _PENDING_THREAD_TRANSFERS bridges dropped subagent transfers to parent _charge."""
     from unittest.mock import MagicMock
-    from opscloud.middleware.cost_tracking import (
+    from talkops.middleware.cost_tracking import (
         CostTrackingMiddleware,
         _PENDING_THREAD_TRANSFERS,
         _TRANSFERS_LOCK,
@@ -679,7 +679,7 @@ def test_pending_thread_transfers_bridge_to_charge():
 
 def test_tool_group_summary_js_eval_categorization():
     """Verify ToolGroupSummary formats js_eval as 'Ran 1 JS evaluation'."""
-    from opscloud.ui.widgets.messages import summarize_tool_group
+    from talkops.ui.widgets.messages import summarize_tool_group
 
     res = summarize_tool_group(["js_eval"], tense="past")
     assert res == "Ran 1 JS evaluation"
@@ -690,7 +690,7 @@ def test_tool_group_summary_js_eval_categorization():
 
 def test_subagent_panel_set_subagent_model():
     """Verify SubagentPanel.set_subagent_model dynamically updates model label."""
-    from opscloud.ui.widgets.subagent_panel import SubagentPanel
+    from talkops.ui.widgets.subagent_panel import SubagentPanel
 
     panel = SubagentPanel()
     panel.on_subagent_event({
@@ -710,9 +710,9 @@ def test_subagent_panel_set_subagent_model():
 def test_subagent_panel_hitl_resume_deduplication():
     """Verify that when a subagent is interrupted for HITL approval and resumed with a new UUID,
     SubagentPanel does not create duplicate rows or inflate phase counts."""
-    from opscloud.ui.widgets.subagent_panel import SubagentPanel
-    from opscloud.ui.theme import DARK_COLORS
-    from opscloud.config.settings import get_glyphs
+    from talkops.ui.widgets.subagent_panel import SubagentPanel
+    from talkops.ui.theme import DARK_COLORS
+    from talkops.config.settings import get_glyphs
 
     panel = SubagentPanel()
     eval_id = "eval_call_101"
@@ -803,7 +803,7 @@ def test_subagent_panel_hitl_resume_deduplication():
 
 def test_subagent_telemetry_mcp_run_script_formatting():
     """Verify _format_tool_activity extracts meaningful context from MCP script executions."""
-    from opscloud.middleware.subagent_telemetry import _format_tool_activity
+    from talkops.middleware.subagent_telemetry import _format_tool_activity
 
     # Script with comment
     code1 = "# Query AWS Cost Explorer for unblended costs\nimport boto3\nce = boto3.client('ce')\n"

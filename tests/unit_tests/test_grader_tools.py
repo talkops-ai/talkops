@@ -3,7 +3,7 @@
 from pathlib import Path
 import tempfile
 import pytest
-from opscloud.rubrics.evaluator import _create_rubric_grader_tools
+from talkops.rubrics.evaluator import _create_rubric_grader_tools
 
 
 def test_grader_tools_creation():

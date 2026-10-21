@@ -9,23 +9,23 @@ from textual.widgets._select import SelectOverlay
 
 from pathlib import Path
 
-from opscloud.config.toml_config import clear_agent_pool
-from opscloud.ui.theme import register_app_themes
-from opscloud.ui.widgets.modal_base import OpsModalScreen
-from opscloud.ui.widgets.pool_selector import PoolSelectorScreen
+from talkops.config.toml_config import clear_agent_pool
+from talkops.ui.theme import register_app_themes
+from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
-_MODAL_TCSS_PATH = Path(__file__).resolve().parents[2] / "src" / "opscloud" / "ui" / "modal.tcss"
+_MODAL_TCSS_PATH = Path(__file__).resolve().parents[2] / "src" / "talkops" / "ui" / "modal.tcss"
 
 
 class _ThemedPoolApp(App[None]):
-    """App carrying OpsCloud theme and modal stylesheet for pool selector testing."""
+    """App carrying TalkOps theme and modal stylesheet for pool selector testing."""
 
     CSS_PATH = [str(_MODAL_TCSS_PATH)]
 
     def __init__(self, screen_to_mount: OpsModalScreen | None = None) -> None:
         super().__init__()
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
         self._screen_to_mount = screen_to_mount
 
     async def on_mount(self) -> None:

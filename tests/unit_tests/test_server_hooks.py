@@ -11,18 +11,18 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
-from opscloud.hooks.env import (
+from talkops.hooks.env import (
     is_secret_env_var,
     sanitize_hook_environ,
 )
-from opscloud.hooks.interrupt import (
+from talkops.hooks.interrupt import (
     build_hook_interrupt_payload,
     build_hook_resume_value,
     is_hook_interrupt_payload,
     parse_hook_interrupt_payload,
     parse_hook_resume_value,
 )
-from opscloud.hooks.models import (
+from talkops.hooks.models import (
     AgentIdentity,
     CommandHandlerSpec,
     CompactTrigger,
@@ -35,8 +35,8 @@ from opscloud.hooks.models import (
     MatcherGroup,
     NotificationDecision,
     NotificationEvent,
-    OpscloudNotification,
-    OpscloudNotificationKind,
+    TalkOpsNotification,
+    TalkOpsNotificationKind,
     PermissionEffect,
     PermissionRequestDecision,
     PermissionRequestEvent,
@@ -64,29 +64,29 @@ from opscloud.hooks.models import (
     UserPromptSubmitDecision,
     UserPromptSubmitEvent,
 )
-from opscloud.hooks.models.adapters import (
+from talkops.hooks.models.adapters import (
     HOOK_DECISION_ADAPTER,
     HOOK_DOMAIN_EVENT_ADAPTER,
     HOOK_INVOCATION_ADAPTER,
 )
-from opscloud.hooks.models.transport import (
+from talkops.hooks.models.transport import (
     HookInvocationRequest,
     HookInvocationResponse,
 )
-from opscloud.hooks.tools import (
+from talkops.hooks.tools import (
     format_mcp_wire_name,
     to_wire_call,
     to_wire_tool_input,
     to_wire_tool_name,
 )
-from opscloud.middleware.server_hooks import (
+from talkops.middleware.server_hooks import (
     ServerHooksMiddleware,
     ServerHooksState,
     _event_enabled,
     _session_gate,
     hook_decided_permission,
 )
-from opscloud.security.approval_mode import ApprovalMode
+from talkops.security.approval_mode import ApprovalMode
 
 
 class TestHooksWireTools:
@@ -357,14 +357,14 @@ class TestHookDomainModels:
         assert event.event == HookEvent.POST_TOOL_USE
         assert event.duration_ms == 10
 
-    def test_opscloud_notification_models(self) -> None:
-        """Verify OpscloudNotification and OpscloudNotificationKind function as expected."""
-        assert OpscloudNotificationKind.PERMISSION_REQUIRED == "permission_required"
-        assert OpscloudNotificationKind.AGENT_NEEDS_INPUT == "agent_needs_input"
-        assert OpscloudNotificationKind.AGENT_COMPLETED == "agent_completed"
+    def test_talkops_notification_models(self) -> None:
+        """Verify TalkOpsNotification and TalkOpsNotificationKind function as expected."""
+        assert TalkOpsNotificationKind.PERMISSION_REQUIRED == "permission_required"
+        assert TalkOpsNotificationKind.AGENT_NEEDS_INPUT == "agent_needs_input"
+        assert TalkOpsNotificationKind.AGENT_COMPLETED == "agent_completed"
 
-        notification = OpscloudNotification(
-            type=OpscloudNotificationKind.AGENT_COMPLETED,
+        notification = TalkOpsNotification(
+            type=TalkOpsNotificationKind.AGENT_COMPLETED,
             message="Cluster provisioned.",
             title="Success",
         )

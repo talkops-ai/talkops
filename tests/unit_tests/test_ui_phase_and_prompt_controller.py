@@ -1,6 +1,6 @@
 """Unit tests for Phase 1 & Phase 2 UI modularization:
-- Scoped keybindings on `ApprovalMenu` (decoupled from `OpsCloudApp.BINDINGS`)
-- `UIPhase` and `UIState` deterministic derivation (`opscloud.ui.state.ui_phase`)
+- Scoped keybindings on `ApprovalMenu` (decoupled from `TalkOpsApp.BINDINGS`)
+- `UIPhase` and `UIState` deterministic derivation (`talkops.ui.state.ui_phase`)
 - `PromptController` inline prompt lifecycle, interrupt routing, and focus guard
 - `InputDock` bottom-container composition and typed widget accessors
 """
@@ -14,33 +14,33 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.events import Key
 
-from opscloud.ui.app import OpsCloudApp
-from opscloud.ui.controllers.prompt_controller import PromptController
-from opscloud.ui.state.ui_phase import (
+from talkops.ui.app import TalkOpsApp
+from talkops.ui.controllers.prompt_controller import PromptController
+from talkops.ui.state.ui_phase import (
     UIPhase,
     derive_ui_hints,
     derive_ui_phase,
     derive_ui_state,
 )
-from opscloud.ui.widgets.approval import ApprovalMenu
-from opscloud.ui.widgets.input_dock import InputDock
+from talkops.ui.widgets.approval import ApprovalMenu
+from talkops.ui.widgets.input_dock import InputDock
 
 
-def test_opscloud_app_bindings_contain_only_global_actions() -> None:
-    """Verify widget-specific approval bindings and action_approval_* proxies are removed from OpsCloudApp."""
+def test_talkops_app_bindings_contain_only_global_actions() -> None:
+    """Verify widget-specific approval bindings and action_approval_* proxies are removed from TalkOpsApp."""
     actions = [
-        b.action for b in OpsCloudApp.BINDINGS if isinstance(b, Binding)
+        b.action for b in TalkOpsApp.BINDINGS if isinstance(b, Binding)
     ]
     assert not any(a.startswith("approval_") for a in actions)
-    assert not hasattr(OpsCloudApp, "action_approval_yes")
-    assert not hasattr(OpsCloudApp, "action_approval_no")
-    assert not hasattr(OpsCloudApp, "action_approval_up")
-    assert not hasattr(OpsCloudApp, "action_approval_down")
+    assert not hasattr(TalkOpsApp, "action_approval_yes")
+    assert not hasattr(TalkOpsApp, "action_approval_no")
+    assert not hasattr(TalkOpsApp, "action_approval_up")
+    assert not hasattr(TalkOpsApp, "action_approval_down")
 
 
 def test_derive_ui_phase_priority_and_states() -> None:
     """Verify deterministic UIPhase transitions across app lifecycle states."""
-    app = OpsCloudApp(defer_server_start=True, check_workspace_trust=False)
+    app = TalkOpsApp(defer_server_start=True, check_workspace_trust=False)
     assert app.ui_phase is UIPhase.IDLE
     assert app.ui_state.phase is UIPhase.IDLE
     assert app.ui_state.has_inline_prompt is False
@@ -119,7 +119,7 @@ def test_approval_menu_handle_scoped_key() -> None:
 
 def test_prompt_controller_focus_guard_respects_active_prompt() -> None:
     """Verify focus_chat_input_after_refresh does not steal focus when an inline prompt is mounted."""
-    app = OpsCloudApp(defer_server_start=True, check_workspace_trust=False)
+    app = TalkOpsApp(defer_server_start=True, check_workspace_trust=False)
     mock_chat_input = MagicMock()
     app._chat_input = mock_chat_input
 
@@ -139,7 +139,7 @@ def test_prompt_controller_route_key_and_interrupt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify PromptController routes keys and interrupts to the active inline prompt."""
-    app = OpsCloudApp(defer_server_start=True, check_workspace_trust=False)
+    app = TalkOpsApp(defer_server_start=True, check_workspace_trust=False)
     controller: PromptController = app._prompts
 
     menu = ApprovalMenu(
@@ -161,7 +161,7 @@ def test_prompt_controller_route_key_and_interrupt(
 @pytest.mark.asyncio
 async def test_input_dock_composes_bottom_container_children() -> None:
     """Verify InputDock mounts SubagentPanel, GoalStatusPanel, BtwCardPanel, and ChatInput."""
-    from opscloud.ui.theme import get_css_variable_defaults
+    from talkops.ui.theme import get_css_variable_defaults
 
     class _DockApp(App[None]):
         def get_theme_variable_defaults(self) -> dict[str, str]:
@@ -180,8 +180,8 @@ async def test_input_dock_composes_bottom_container_children() -> None:
 
 
 def test_domain_controllers_initialized_and_wired_on_app() -> None:
-    """Verify Phase 3 & Phase 4 domain controllers are instantiated and bound on OpsCloudApp."""
-    from opscloud.ui.controllers import (
+    """Verify Phase 3 & Phase 4 domain controllers are instantiated and bound on TalkOpsApp."""
+    from talkops.ui.controllers import (
         BtwController,
         GoalController,
         ModalController,
@@ -191,7 +191,7 @@ def test_domain_controllers_initialized_and_wired_on_app() -> None:
         ThreadController,
     )
 
-    app = OpsCloudApp(defer_server_start=True, check_workspace_trust=False)
+    app = TalkOpsApp(defer_server_start=True, check_workspace_trust=False)
     assert isinstance(app._prompts, PromptController)
     assert isinstance(app._btw, BtwController)
     assert isinstance(app._shell, ShellController)
@@ -203,9 +203,9 @@ def test_domain_controllers_initialized_and_wired_on_app() -> None:
 
 def test_btw_and_shell_controllers_manage_state() -> None:
     """Verify BtwController and ShellController isolate side-question and shell buffering state."""
-    from opscloud.ui.widgets.btw_card import BtwExchange
+    from talkops.ui.widgets.btw_card import BtwExchange
 
-    app = OpsCloudApp(defer_server_start=True, check_workspace_trust=False)
+    app = TalkOpsApp(defer_server_start=True, check_workspace_trust=False)
 
     # BtwController
     assert app._btw.is_btw_open() is False
@@ -231,7 +231,7 @@ def test_btw_and_shell_controllers_manage_state() -> None:
 
 def test_goal_and_modal_controllers_sync_state() -> None:
     """Verify GoalController rubric payload extraction and ModalController state helpers."""
-    app = OpsCloudApp(defer_server_start=True, check_workspace_trust=False)
+    app = TalkOpsApp(defer_server_start=True, check_workspace_trust=False)
 
     payload = app._goals.goal_rubric_payload_from_state(
         {
@@ -249,7 +249,7 @@ def test_goal_and_modal_controllers_sync_state() -> None:
     assert app._active_rubric == "1. Cluster healthy"
     assert app._goal_status == "active"
 
-    from opscloud.commands.power.agents import get_agent_session_state
+    from talkops.commands.power.agents import get_agent_session_state
 
     ag_state = get_agent_session_state(app)
     ag_state.agent_id = "devops-reviewer"
@@ -259,7 +259,7 @@ def test_goal_and_modal_controllers_sync_state() -> None:
 
 def test_phase5_modular_message_widgets_and_barrel_exports() -> None:
     """Verify Phase 5 modular message widgets match the messages.py barrel re-exports."""
-    from opscloud.ui.widgets import (
+    from talkops.ui.widgets import (
         chat_messages,
         message_list,
         messages,

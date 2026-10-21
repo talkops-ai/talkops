@@ -8,9 +8,9 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import OptionList
 
-from opscloud.ui.theme import register_app_themes
-from opscloud.ui.widgets.modal_base import ModalSearchInput
-from opscloud.ui.widgets.skills_viewer import SkillDetailScreen, SkillsViewerScreen
+from talkops.ui.theme import register_app_themes
+from talkops.ui.widgets.modal_base import ModalSearchInput
+from talkops.ui.widgets.skills_viewer import SkillDetailScreen, SkillsViewerScreen
 
 
 class _ThemedSkillsApp(App):
@@ -20,7 +20,7 @@ class _ThemedSkillsApp(App):
         super().__init__()
         self._test_screen = screen_instance
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
 
     def compose(self) -> ComposeResult:
         yield from ()
@@ -51,7 +51,7 @@ def _mock_skills() -> list[dict[str, Any]]:
             "name": "custom-project-skill",
             "description": "Internal automation scripts for project build.",
             "source": "project",
-            "path": "/mock/project/.opscloud/skills/custom-project-skill/SKILL.md",
+            "path": "/mock/project/.talkops/skills/custom-project-skill/SKILL.md",
             "tools": [],
             "tags": ["project"],
         },

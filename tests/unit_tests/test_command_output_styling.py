@@ -5,14 +5,14 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock
 
-from opscloud.commands._base import CommandContext
-from opscloud.commands.core.doctor import DiagnosticItem, DiagnosticSection, DoctorHandler
-from opscloud.commands.core.help_cmd import HelpHandler
-from opscloud.commands.core.mcp import McpHandler
-from opscloud.commands.power.tasks import SessionTaskStore, TasksHandler
-from opscloud.commands.power.version import VersionHandler
-from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
-from opscloud.ui.widgets.messages import (
+from talkops.commands._base import CommandContext
+from talkops.commands.core.doctor import DiagnosticItem, DiagnosticSection, DoctorHandler
+from talkops.commands.core.help_cmd import HelpHandler
+from talkops.commands.core.mcp import McpHandler
+from talkops.commands.power.tasks import SessionTaskStore, TasksHandler
+from talkops.commands.power.version import VersionHandler
+from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+from talkops.ui.widgets.messages import (
     CommandOutputMessage,
     SystemMessage,
     _markdown_to_content,
@@ -68,7 +68,7 @@ async def test_doctor_output_markdown_structure() -> None:
         DiagnosticSection(
             title="Diagnostics",
             items=[
-                DiagnosticItem("opscloud", "0.1.0"),
+                DiagnosticItem("talkops", "0.1.0"),
                 DiagnosticItem("Python", "3.12.11"),
             ],
         ),
@@ -83,7 +83,7 @@ async def test_doctor_output_markdown_structure() -> None:
     report = handler._render_tree(sections)
 
     # Must be structured Markdown, NOT inside a code fence, NO emojis
-    assert "### OpsCloud Health Diagnostics" in report
+    assert "### TalkOps Health Diagnostics" in report
     assert "| Diagnostic Category | Status | Details |" in report
     assert "| **Diagnostics** | OK |" in report
     assert "| **DevOps Tools** | CHECK |" in report
@@ -103,9 +103,9 @@ async def test_version_output_markdown() -> None:
     res = await handler.execute(ctx)
     assert res.success is True
     assert res.message is not None
-    assert "### OpsCloud Version & Runtime" in res.message
+    assert "### TalkOps Version & Runtime" in res.message
     assert "ℹ️" not in res.message
-    assert "- **OpsCloud CLI:**" in res.message
+    assert "- **TalkOps CLI:**" in res.message
     assert "- **Python:**" in res.message
 
 
@@ -117,7 +117,7 @@ async def test_help_output_markdown() -> None:
     res = await handler.execute(ctx)
     assert res.success is True
     assert res.message is not None
-    assert "### OpsCloud Commands & Shortcuts" in res.message
+    assert "### TalkOps Commands & Shortcuts" in res.message
     assert "💡" not in res.message
     assert "**Slash Commands:**" in res.message
     assert "**Keyboard Shortcuts:**" in res.message

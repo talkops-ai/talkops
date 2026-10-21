@@ -1,4 +1,4 @@
-"""Unit tests for OpsCloud memory registry, branch memory store, and guard middleware."""
+"""Unit tests for TalkOps memory registry, branch memory store, and guard middleware."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.store.memory import InMemoryStore
 
-from opscloud.memory.branch import BranchMemoryStore
-from opscloud.memory.guard import ManagedMemoryGuardMiddleware
-from opscloud.memory.registry import MemoryRegistry
+from talkops.memory.branch import BranchMemoryStore
+from talkops.memory.guard import ManagedMemoryGuardMiddleware
+from talkops.memory.registry import MemoryRegistry
 
 
 def test_branch_memory_store(tmp_path: Path):
@@ -84,9 +84,9 @@ async def test_memory_registry_store_operations() -> None:
 def test_memory_guard_middleware(tmp_path: Path) -> None:
     """Verify ManagedMemoryGuardMiddleware protects managed blocks and deletion while allowing user edits."""
     managed_block = (
-        "<!-- opscloud:onboarding-name:start -->\n"
+        "<!-- talkops:onboarding-name:start -->\n"
         "- The user's preferred name is \"Alex\".\n"
-        "<!-- opscloud:onboarding-name:end -->\n"
+        "<!-- talkops:onboarding-name:end -->\n"
     )
     initial_content = f"# Protected Memory\n\n{managed_block}\n- Primary region: us-west-2\n"
     guarded_file = tmp_path / "AGENTS.md"
@@ -175,19 +175,19 @@ def test_memory_guard_middleware(tmp_path: Path) -> None:
 
 
 def test_ensure_user_agent_md_and_discovery(tmp_path: Path, monkeypatch) -> None:
-    """Verify that ~/.opscloud/AGENTS.md is automatically created and discovered."""
+    """Verify that ~/.talkops/AGENTS.md is automatically created and discovered."""
     fake_home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
-    from opscloud.config import paths as app_paths
+    from talkops.config import paths as app_paths
 
     # Re-evaluate DATA_DIR with fake_home
-    monkeypatch.setattr(app_paths, "DATA_DIR", fake_home / ".opscloud")
+    monkeypatch.setattr(app_paths, "DATA_DIR", fake_home / ".talkops")
 
     # Initial state: fake_home does not exist
     primary_file = app_paths.ensure_user_agent_md()
     assert primary_file.exists()
-    assert primary_file == fake_home / ".opscloud" / "AGENTS.md"
+    assert primary_file == fake_home / ".talkops" / "AGENTS.md"
 
     # Verify discovery in MemoryRegistry
     registry = MemoryRegistry.get_instance()

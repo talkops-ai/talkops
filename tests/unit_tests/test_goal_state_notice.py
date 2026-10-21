@@ -1,9 +1,11 @@
 """Unit tests for goal_state_notice — notice building, classification, and summarization cutoff."""
 
+from typing import Any
+
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from opscloud.middleware.goal_state_notice import (
+from talkops.middleware.goal_state_notice import (
     GOAL_CONTROL_MESSAGE_SOURCE,
     GOAL_MESSAGE_SCHEMA_VERSION,
     GOAL_STATE_MESSAGE_SOURCE,
@@ -28,7 +30,7 @@ from opscloud.middleware.goal_state_notice import (
     superseded_goal_state_placeholder,
     validated_summarization_cutoff,
 )
-from opscloud.state.goal_state_limits import GOAL_APPLICATION_CHAR_LIMIT
+from talkops.state.goal_state_limits import GOAL_APPLICATION_CHAR_LIMIT
 
 
 class TestMessageClassification:
@@ -154,3 +156,52 @@ class TestGoalContinuation:
         assert "Fix VPC routing" in msg.content
         assert "Route table has 0.0.0.0/0 to igw" in msg.content
         assert latest_human_is_unsaved_goal_continuation([msg]) is True
+
+
+class TestGoalPlanNoticeAndTodoSeeding:
+    def test_notice_embeds_implementation_plan_when_active(self):
+        state = {
+            "_goal_objective": "Upgrade EKS cluster to 1.31",
+            "_goal_plan": "## Summary\nUpgrade control plane then managed node groups.",
+            "_goal_rubric": "- Control plane version is 1.31\n- All nodes Ready",
+            "_goal_status": "active",
+        }
+        notice = build_goal_state_notice(state)
+        assert "<implementation_plan>## Summary\nUpgrade control plane then managed node groups.</implementation_plan>" in notice.content
+
+    def test_goal_tools_middleware_auto_seeds_todos_once(self):
+        from talkops.middleware.goal_tools import GoalToolsMiddleware
+
+        state: Any = {
+            "messages": [HumanMessage(content="Start goal")],
+            "_goal_objective": "Upgrade EKS cluster to 1.31",
+            "_goal_status": "active",
+            "_goal_todos": [
+                "Inspect current EKS version and addon compatibility",
+                "Upgrade EKS control plane to 1.31",
+                "Verify node readiness and pod health",
+            ],
+        }
+        update = GoalToolsMiddleware._notice_update(state)
+        assert update is not None
+        assert "todos" in update
+        assert update["todos"] == [
+            {"content": "Inspect current EKS version and addon compatibility", "status": "in_progress"},
+            {"content": "Upgrade EKS control plane to 1.31", "status": "pending"},
+            {"content": "Verify node readiness and pod health", "status": "pending"},
+        ]
+
+        # Once todos are already populated in state, _notice_update must not overwrite them
+        progressed_todos = [
+            {"content": "Inspect current EKS version and addon compatibility", "status": "completed"},
+            {"content": "Upgrade EKS control plane to 1.31", "status": "in_progress"},
+            {"content": "Verify node readiness and pod health", "status": "pending"},
+        ]
+        state_with_todos: Any = {
+            **state,
+            "messages": [*state["messages"], *update["messages"]],
+            "todos": progressed_todos,
+        }
+        second_update = GoalToolsMiddleware._notice_update(state_with_todos)
+        assert second_update is None or "todos" not in second_update
+

@@ -1,5 +1,5 @@
 [project]
-name = "talkops-opscloud"
+name = "talkops-ai"
 version = "0.3.0b11"
 description = "Extensible Terminal Multi-Agent Framework for Cloud Operations & DevOps Coding"
 readme = "README.md"
@@ -22,6 +22,7 @@ dependencies = [
     "langgraph>=1.2.10",
     "langgraph-cli[inmem]>=0.4.31",
     "langgraph-checkpoint-sqlite>=3.1.0",
+    "langgraph-checkpoint-postgres>=2.0.16",
     "langgraph-sdk>=0.4.2",
     "langsmith>=0.10.6",
     "markdown-it-py>=4.2.0",
@@ -31,6 +32,7 @@ dependencies = [
     "pillow>=12.3.0",
     "pydantic>=2.13.4",
     "pygments>=2.20.0",
+    "PyJWT[crypto]>=2.9.0",
     "pyperclip>=1.11.0",
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
@@ -39,6 +41,7 @@ dependencies = [
     "rich-pixels>=3.0.0",
     "tavily-python>=0.7.26",
     "textual>=8.2.8",
+    "textual-image>=0.14.1",
     "tomli-w>=1.2.0",
     "typing-extensions>=4.16.0",
     "urllib3>=2.7.0",
@@ -48,6 +51,7 @@ dependencies = [
     "colorama>=0.4.6",
     "loguru>=0.7.3",
     "psycopg[binary]>=3.2.0",
+    "psycopg-pool>=3.2.0",
     "tomli>=1.1.0",
     "langchain-aws>=0.2.14",
     "langchain-typesafe>=0.0.1a3",
@@ -104,20 +108,28 @@ dev = [
 ]
 
 [project.scripts]
-opscloud = "opscloud.cli.main:cli_main"
+talkops = "talkops.cli.main:cli_main"
+ops = "talkops.cli.main:cli_main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/opscloud"]
+packages = ["src/talkops"]
 
 [tool.pyright]
 include = ["src", "tests"]
 extraPaths = ["src", "."]
 venvPath = "."
 venv = ".venv"
+reportTypedDictNotRequiredAccess = false
+
+[tool.pyrefly]
+project-includes = ["src", "tests"]
+search-path = ["src", "."]
+python-interpreter-path = ".venv/bin/python"
+site-package-path = [".venv/lib/python3.12/site-packages"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

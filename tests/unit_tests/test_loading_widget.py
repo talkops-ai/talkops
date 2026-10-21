@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from time import monotonic
 
-from opscloud.ui.widgets.loading import LoadingWidget, format_duration
+from talkops.ui.widgets.loading import LoadingWidget, format_duration
 
 
 def _plain(widget: LoadingWidget) -> str:

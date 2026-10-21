@@ -7,25 +7,25 @@ from pathlib import Path
 
 import pytest
 
-from opscloud.config.plugins import (
+from talkops.config.plugins import (
     DEFAULT_MARKETPLACE_CONFIGS,
     DefaultMarketplaceConfig,
     get_default_marketplace_config,
     is_default_marketplace,
 )
-from opscloud.plugins.commands_cli import execute_plugin_command
-from opscloud.plugins.discovery import _normalize_plugin_id
-from opscloud.plugins.marketplace import (
+from talkops.plugins.commands_cli import execute_plugin_command
+from talkops.plugins.discovery import _normalize_plugin_id
+from talkops.plugins.marketplace import (
     _parse_entry,
     load_live_default_marketplace,
     materialize_plugin_source,
 )
-from opscloud.plugins.models import (
+from talkops.plugins.models import (
     LocalPluginSource,
     MarketplacePluginEntry,
     PluginMarketplace,
 )
-from opscloud.plugins.store import (
+from talkops.plugins.store import (
     load_marketplace_records,
     remove_marketplace_record,
     save_marketplace_record,
@@ -125,7 +125,7 @@ def test_load_marketplace_records_seeds_default_marketplaces(
 ):
     """Verify that all configured default marketplaces are seeded automatically."""
     state_file = tmp_path / "plugin_marketplaces.json"
-    monkeypatch.setattr("opscloud.plugins.store._marketplaces_path", lambda: state_file)
+    monkeypatch.setattr("talkops.plugins.store._marketplaces_path", lambda: state_file)
 
     records = load_marketplace_records()
     for cfg in DEFAULT_MARKETPLACE_CONFIGS:
@@ -142,7 +142,7 @@ def test_default_marketplace_removal_persistence(
 ):
     """Verify that explicitly removing a default marketplace persists and prevents re-seeding."""
     state_file = tmp_path / "plugin_marketplaces.json"
-    monkeypatch.setattr("opscloud.plugins.store._marketplaces_path", lambda: state_file)
+    monkeypatch.setattr("talkops.plugins.store._marketplaces_path", lambda: state_file)
 
     # First load seeds all defaults
     records = load_marketplace_records()
@@ -224,7 +224,7 @@ def test_load_live_default_marketplace(tmp_path: Path, monkeypatch: pytest.Monke
     """Verify load_live_default_marketplace fetches and parses the live catalog."""
     mock_payload = _sample_marketplace_payload()
     monkeypatch.setattr(
-        "opscloud.config.plugins.fetch_marketplace_manifest",
+        "talkops.config.plugins.fetch_marketplace_manifest",
         lambda url, **kwargs: mock_payload,
     )
 
@@ -240,16 +240,16 @@ def test_load_live_default_marketplace(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_cli_plugin_list_dynamic_categories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Verify opscloud plugin list dynamically groups available plugins by category."""
+    """Verify talkops plugin list dynamically groups available plugins by category."""
     mock_payload = _sample_marketplace_payload()
     monkeypatch.setattr(
-        "opscloud.config.plugins.fetch_marketplace_manifest",
+        "talkops.config.plugins.fetch_marketplace_manifest",
         lambda url, **kwargs: mock_payload,
     )
     state_file = tmp_path / "plugin_marketplaces.json"
-    monkeypatch.setattr("opscloud.plugins.store._marketplaces_path", lambda: state_file)
-    monkeypatch.setattr("opscloud.plugins.store.load_installed_plugins", lambda **kwargs: {})
-    monkeypatch.setattr("opscloud.plugins.commands_cli._resolve_project_root", lambda scope: None)
+    monkeypatch.setattr("talkops.plugins.store._marketplaces_path", lambda: state_file)
+    monkeypatch.setattr("talkops.plugins.store.load_installed_plugins", lambda **kwargs: {})
+    monkeypatch.setattr("talkops.plugins.commands_cli._resolve_project_root", lambda scope: None)
 
     args = argparse.Namespace(plugin_command="list", output_format="text")
     output = execute_plugin_command(args)
@@ -269,16 +269,16 @@ def test_cli_plugin_list_dynamic_categories(tmp_path: Path, monkeypatch: pytest.
 
 
 def test_cli_plugin_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Verify opscloud plugin search query matching and JSON output."""
+    """Verify talkops plugin search query matching and JSON output."""
     mock_payload = _sample_marketplace_payload()
     monkeypatch.setattr(
-        "opscloud.config.plugins.fetch_marketplace_manifest",
+        "talkops.config.plugins.fetch_marketplace_manifest",
         lambda url, **kwargs: mock_payload,
     )
     state_file = tmp_path / "plugin_marketplaces.json"
-    monkeypatch.setattr("opscloud.plugins.store._marketplaces_path", lambda: state_file)
-    monkeypatch.setattr("opscloud.plugins.store.load_installed_plugins", lambda **kwargs: {})
-    monkeypatch.setattr("opscloud.plugins.commands_cli._resolve_project_root", lambda scope: None)
+    monkeypatch.setattr("talkops.plugins.store._marketplaces_path", lambda: state_file)
+    monkeypatch.setattr("talkops.plugins.store.load_installed_plugins", lambda **kwargs: {})
+    monkeypatch.setattr("talkops.plugins.commands_cli._resolve_project_root", lambda scope: None)
 
     # Search by keyword "finops"
     args = argparse.Namespace(plugin_command="search", query="finops", output_format="text")
@@ -321,7 +321,7 @@ def test_materialize_plugin_source_triggers_on_demand_clone(
         cloned_paths.append(target)
         return target
 
-    monkeypatch.setattr("opscloud.plugins.marketplace._clone_repository_to_cache", mock_clone)
+    monkeypatch.setattr("talkops.plugins.marketplace._clone_repository_to_cache", mock_clone)
 
     primary_name = DEFAULT_MARKETPLACE_CONFIGS[0].name
     mp = PluginMarketplace(
@@ -347,16 +347,16 @@ def test_refresh_marketplace_updates_catalog_and_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """Verify refresh_marketplace fetches latest catalog and updates state record."""
-    from opscloud.plugins.discovery import refresh_marketplace
+    from talkops.plugins.discovery import refresh_marketplace
 
     primary_name = DEFAULT_MARKETPLACE_CONFIGS[0].name
     mock_payload = _sample_marketplace_payload()
     monkeypatch.setattr(
-        "opscloud.config.plugins.fetch_marketplace_manifest",
+        "talkops.config.plugins.fetch_marketplace_manifest",
         lambda url, **kwargs: mock_payload,
     )
     state_file = tmp_path / "plugin_marketplaces.json"
-    monkeypatch.setattr("opscloud.plugins.store._marketplaces_path", lambda: state_file)
+    monkeypatch.setattr("talkops.plugins.store._marketplaces_path", lambda: state_file)
 
     # Initial seeding
     records = load_marketplace_records()
@@ -375,17 +375,17 @@ def test_refresh_marketplace_updates_catalog_and_record(
 def test_cli_plugin_refresh_and_marketplace_refresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Verify opscloud plugin refresh and opscloud plugin marketplace refresh."""
+    """Verify talkops plugin refresh and talkops plugin marketplace refresh."""
     primary_name = DEFAULT_MARKETPLACE_CONFIGS[0].name
     mock_payload = _sample_marketplace_payload()
     monkeypatch.setattr(
-        "opscloud.config.plugins.fetch_marketplace_manifest",
+        "talkops.config.plugins.fetch_marketplace_manifest",
         lambda url, **kwargs: mock_payload,
     )
     state_file = tmp_path / "plugin_marketplaces.json"
-    monkeypatch.setattr("opscloud.plugins.store._marketplaces_path", lambda: state_file)
+    monkeypatch.setattr("talkops.plugins.store._marketplaces_path", lambda: state_file)
 
-    # Test opscloud plugin refresh <name>
+    # Test talkops plugin refresh <name>
     args_one = argparse.Namespace(
         plugin_command="refresh", name=primary_name, output_format="text"
     )
@@ -393,7 +393,7 @@ def test_cli_plugin_refresh_and_marketplace_refresh(
     assert out_one is not None
     assert f"Refreshed marketplace '{primary_name}'" in out_one
 
-    # Test opscloud plugin refresh (all)
+    # Test talkops plugin refresh (all)
     args_all = argparse.Namespace(
         plugin_command="refresh", name=None, output_format="text"
     )
@@ -401,7 +401,7 @@ def test_cli_plugin_refresh_and_marketplace_refresh(
     assert out_all is not None
     assert "Refreshed 1 marketplace(s):" in out_all
 
-    # Test opscloud plugin marketplace refresh (subcommand)
+    # Test talkops plugin marketplace refresh (subcommand)
     args_sub = argparse.Namespace(
         plugin_command="marketplace",
         marketplace_command="refresh",
@@ -422,7 +422,7 @@ def test_cli_plugin_refresh_and_marketplace_refresh(
 
 def test_tui_marketplace_details_contains_refresh_option():
     """Verify TUI marketplace details view presents 'Refresh marketplace' option."""
-    from opscloud.ui.widgets.plugin_manager import _marketplace_details_options
+    from talkops.ui.widgets.plugin_manager import _marketplace_details_options
 
     options = _marketplace_details_options()
     option_ids = [opt.id for opt in options]

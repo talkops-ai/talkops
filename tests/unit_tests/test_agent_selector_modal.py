@@ -6,7 +6,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import OptionList
 
-from opscloud.ui.widgets.agent_selector import AgentSelectorScreen
+from talkops.ui.widgets.agent_selector import AgentSelectorScreen
 
 
 class DummyAgentApp(App[None]):
@@ -67,7 +67,7 @@ async def test_agent_selector_screen_empty() -> None:
         # Empty-state widget is mounted with agent-selector-empty class and visible text
         empty_widget = screen.query_one(".agent-selector-empty")
         assert empty_widget is not None
-        assert "No agents found in ~/.opscloud/" in str(empty_widget.render())
+        assert "No agents found in ~/.talkops/" in str(empty_widget.render())
         # Display is not 'none'
         assert empty_widget.styles.display != "none"
 
@@ -123,8 +123,8 @@ async def test_agent_selector_responsive_row_width() -> None:
 @pytest.mark.asyncio
 async def test_agents_handler_lists_plugin_agents() -> None:
     from unittest.mock import MagicMock
-    from opscloud.commands._base import CommandContext
-    from opscloud.commands.power.agents import AgentsHandler
+    from talkops.commands._base import CommandContext
+    from talkops.commands.power.agents import AgentsHandler
 
     handler = AgentsHandler()
     assert handler.name == "/agent"
@@ -147,8 +147,8 @@ async def test_agents_handler_lists_plugin_agents() -> None:
 @pytest.mark.asyncio
 async def test_agents_handler_activates_session() -> None:
     from unittest.mock import AsyncMock, MagicMock
-    from opscloud.commands._base import CommandContext
-    from opscloud.commands.power.agents import AgentsHandler, get_agent_session_state
+    from talkops.commands._base import CommandContext
+    from talkops.commands.power.agents import AgentsHandler, get_agent_session_state
 
     handler = AgentsHandler()
     mock_app = MagicMock()

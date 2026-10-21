@@ -1,11 +1,11 @@
-"""Unit tests for OpsCloudCheckpointer extended capabilities."""
+"""Unit tests for TalkOpsCheckpointer extended capabilities."""
 
 import os
 from typing import Any, cast
 import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata, empty_checkpoint
-from opscloud.state.session import OpsCloudCheckpointer, get_checkpointer
+from talkops.state.session import TalkOpsCheckpointer, get_checkpointer
 
 
 def _make_checkpoint(cp_id: str, channel_values: dict[str, Any] | None = None) -> Checkpoint:
@@ -19,7 +19,7 @@ def _make_checkpoint(cp_id: str, channel_values: dict[str, Any] | None = None) -
 
 @pytest.mark.asyncio
 async def test_checkpointer_capabilities_detection():
-    """Verify that LangGraph API detects all required extended capabilities on OpsCloudCheckpointer."""
+    """Verify that LangGraph API detects all required extended capabilities on TalkOpsCheckpointer."""
     os.environ["REDIS_URI"] = ""
     from langgraph_api._checkpointer._adapter import CheckpointerCapabilities
 
@@ -35,7 +35,7 @@ async def test_checkpointer_capabilities_detection():
 @pytest.mark.asyncio
 async def test_checkpointer_adelete_for_runs():
     """Verify adelete_for_runs removes checkpoints and writes for cancelled/rolled-back runs."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
         cfg1: RunnableConfig = {"configurable": {"thread_id": "thread-1", "checkpoint_ns": "", "run_id": "run-alpha"}}
         cp1 = _make_checkpoint("cp-1")
@@ -62,7 +62,7 @@ async def test_checkpointer_adelete_for_runs():
 @pytest.mark.asyncio
 async def test_checkpointer_acopy_thread():
     """Verify acopy_thread duplicates all checkpoints and writes to target thread."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
         cfg: RunnableConfig = {"configurable": {"thread_id": "src-thread", "checkpoint_ns": "", "checkpoint_id": "cp-orig"}}
         cp = _make_checkpoint("cp-orig", channel_values={"msg": "hi"})
@@ -84,7 +84,7 @@ async def test_checkpointer_acopy_thread():
 @pytest.mark.asyncio
 async def test_checkpointer_aprune():
     """Verify aprune with keep_latest and delete_all strategies."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
         for i in range(1, 4):
             cp_id = f"cp-{i:03d}"
@@ -118,7 +118,7 @@ async def test_checkpointer_aprune():
 @pytest.mark.asyncio
 async def test_checkpointer_aprune_subagents_and_vacuum():
     """Verify aprune drops subagent namespaces and avacuum works."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
         main_cfg: RunnableConfig = {
             "configurable": {
@@ -151,7 +151,7 @@ async def test_checkpointer_aprune_subagents_and_vacuum():
 @pytest.mark.asyncio
 async def test_checkpointer_aprune_preserves_interrupt_checkpoints():
     """Verify aprune preserves non-terminal checkpoints containing pending HITL interrupts (IA-04)."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
         # Create cp-001 (historical regular)
         cfg1: RunnableConfig = {"configurable": {"thread_id": "thread-hitl", "checkpoint_ns": "", "checkpoint_id": "cp-001"}}
@@ -183,7 +183,7 @@ async def test_checkpointer_aprune_preserves_interrupt_checkpoints():
 @pytest.mark.asyncio
 async def test_checkpointer_aprune_preserves_subagent_interrupt_checkpoints():
     """Verify aprune preserves subagent checkpoints that contain active HITL interrupts (DV-01)."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
         # 1. Main agent checkpoint
         main_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-sub-hitl", "checkpoint_ns": "", "checkpoint_id": "cp-main"}}
@@ -227,7 +227,7 @@ async def test_session_manager_maintain_database_lease_contention(tmp_path):
     """Verify maintain_database respects size threshold and skips when lease is held (DV-08)."""
     import fcntl
     import sys
-    from opscloud.state.session import SessionManager
+    from talkops.state.session import SessionManager
 
     db_path = tmp_path / "sessions.db"
     # Create empty DB file
@@ -253,7 +253,7 @@ async def test_session_manager_maintain_database_lease_contention(tmp_path):
 @pytest.mark.asyncio
 async def test_checkpointer_aprune_agent_session_namespaces_and_resolved_interrupts():
     """Verify aprune drops AgentSessionMiddleware namespaces and resolved HITL interrupts."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
         # 1. Historical root checkpoint with a RESOLVED interrupt (__interrupt__ + __resume__)
         cfg_resolved_hitl: RunnableConfig = {

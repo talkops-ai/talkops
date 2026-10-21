@@ -1,4 +1,4 @@
-"""Comprehensive unit tests for OpsCloud MCP subsystem.
+"""Comprehensive unit tests for TalkOps MCP subsystem.
 
 Covers:
 - Environment interpolation and alias synchronization (AWS/K8s)
@@ -28,17 +28,17 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
-from opscloud.cli.commands.mcp import run_mcp_command
-from opscloud.config.adapters.sqlite import SqliteConfigAdapter
-from opscloud.config.store import ConfigStore
-from opscloud.mcp.config import (
+from talkops.cli.commands.mcp import run_mcp_command
+from talkops.config.adapters.sqlite import SqliteConfigAdapter
+from talkops.config.store import ConfigStore
+from talkops.mcp.config import (
     _interpolate_env,
     resolve_mcp_server_env,
     sync_mcp_env_aliases,
 )
-from opscloud.mcp.discovery import MCPDiscovery, discover_mcp_configs
-from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
-from opscloud.mcp.preload import (
+from talkops.mcp.discovery import MCPDiscovery, discover_mcp_configs
+from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+from talkops.mcp.preload import (
     _mcp_tool_name,
     clear_cached_mcp_server_infos,
     get_cached_mcp_server_infos,
@@ -47,9 +47,9 @@ from opscloud.mcp.preload import (
     preload_mcp_server_info,
     probe_one_mcp_server,
 )
-from opscloud.mcp.raw_config import export_raw_mcp_config, import_raw_mcp_config
-from opscloud.mcp.semantic_profiler import MCPSemanticProfiler, ToolSafetyProfile
-from opscloud.mcp.session_manager import (
+from talkops.mcp.raw_config import export_raw_mcp_config, import_raw_mcp_config
+from talkops.mcp.semantic_profiler import MCPSemanticProfiler, ToolSafetyProfile
+from talkops.mcp.session_manager import (
     MCPSessionManager,
     _build_cached_mcp_tool,
     _clean_mcp_schema,
@@ -58,12 +58,12 @@ from opscloud.mcp.session_manager import (
     _normalize_mcp_arguments,
     create_mcp_connection,
 )
-from opscloud.middleware.headless_mcp_guard import (
+from talkops.middleware.headless_mcp_guard import (
     HeadlessMCPGuardMiddleware,
     gated_mcp_tool_names,
     mcp_tool_is_coherently_read_only,
 )
-from opscloud.middleware.mcp_context import (
+from talkops.middleware.mcp_context import (
     MCPContextMiddleware,
     _build_mcp_context_from_infos,
 )
@@ -272,14 +272,14 @@ def test_mcp_discovery_from_files(tmp_path: Path) -> None:
 def test_mcp_discovery_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify precedence hierarchy: project > user > global."""
     global_dir = tmp_path / "global_agents"
-    user_dir = tmp_path / "user_opscloud"
+    user_dir = tmp_path / "user_talkops"
     project_dir = tmp_path / "project_workspace"
 
     global_dir.mkdir()
     user_dir.mkdir()
     project_dir.mkdir()
 
-    from opscloud.config import paths
+    from talkops.config import paths
 
     monkeypatch.setattr(paths, "AGENTS_SHARED_DIR", global_dir)
     monkeypatch.setattr(paths, "DATA_DIR", user_dir)
@@ -298,7 +298,7 @@ def test_mcp_discovery_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         encoding="utf-8",
     )
 
-    # 2. User config (~/.opscloud/.mcp.json)
+    # 2. User config (~/.talkops/.mcp.json)
     (user_dir / ".mcp.json").write_text(
         json.dumps(
             {
@@ -347,7 +347,7 @@ def test_mcp_discovery_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 def test_mcp_trust_store(tmp_path: Path) -> None:
     """Verify SHA-256 fingerprint gating in MCPTrustStore."""
-    from opscloud.mcp.trust import MCPTrustStore
+    from talkops.mcp.trust import MCPTrustStore
 
     trust_file = tmp_path / "mcp_trust.json"
     trust_store = MCPTrustStore(trust_file=trust_file)
@@ -506,10 +506,10 @@ async def test_persistent_schema_cache_avoids_restarting_server(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A warm process rebuilds tools from disk without probing the MCP server."""
-    import opscloud.mcp.preload as preload_module
+    import talkops.mcp.preload as preload_module
 
     cache_path = tmp_path / "mcp-metadata.json"
-    monkeypatch.setenv("OPSCLOUD_MCP_METADATA_CACHE", str(cache_path))
+    monkeypatch.setenv("TALKOPS_MCP_METADATA_CACHE", str(cache_path))
     config = {
         "transport": "stdio",
         "command": "example-mcp",
@@ -743,7 +743,7 @@ def test_run_mcp_command_cli() -> None:
 
 def test_write_and_read_mcp_server_state_materializes_and_prunes(tmp_path: Path) -> None:
     """Verify write_mcp_server_state atomically writes <tool>.json files and prunes stale ones."""
-    from opscloud.mcp.preload import read_mcp_tool_schema, write_mcp_server_state
+    from talkops.mcp.preload import read_mcp_tool_schema, write_mcp_server_state
 
     server_dir = tmp_path / "aws-ec2"
     server_dir.mkdir(parents=True)
@@ -790,13 +790,13 @@ async def test_lazy_mcp_tools_split_and_call_mcp_tool_dispatcher(
 ) -> None:
     """Verify Eager/Lazy split binds eager tools directly and routes lazy tools via call_mcp_tool."""
     from mcp.types import CallToolResult, TextContent
-    from opscloud.mcp.session_manager import (
+    from talkops.mcp.session_manager import (
         build_mcp_tools_from_server_infos,
         split_enabled_tools_by_eager_lazy,
     )
 
-    monkeypatch.setenv("OPSCLOUD_MCP_SCHEMA_DIR", str(tmp_path))
-    monkeypatch.setenv("OPSCLOUD_LAZY_MCP_TOOLS", "1")
+    monkeypatch.setenv("TALKOPS_MCP_SCHEMA_DIR", str(tmp_path))
+    monkeypatch.setenv("TALKOPS_LAZY_MCP_TOOLS", "1")
 
     info = MCPServerInfo(
         name="k8s-server",
@@ -894,8 +894,8 @@ async def test_stdio_connect_server_redirects_errlog_away_from_stderr() -> None:
 
 def test_truncated_subagent_tool_name_display_and_summary() -> None:
     """Verify truncated 64-char subagent MCP tool names parse cleanly in TUI headers and summaries."""
-    from opscloud.ui.widgets.messages import summarize_tool_group
-    from opscloud.ui.widgets.tool_display import (
+    from talkops.ui.widgets.messages import summarize_tool_group
+    from talkops.ui.widgets.tool_display import (
         get_tool_display_name,
         parse_scoped_tool_name,
     )
@@ -912,4 +912,178 @@ def test_truncated_subagent_tool_name_display_and_summary() -> None:
     assert "subagent__" not in summary
     assert "Ran 2 cost-explorer calls [aws-finops-agent]" in summary
     assert "ran 1 cost-optimization call [aws-finops-agent]" in summary
+
+
+@pytest.mark.asyncio
+async def test_connection_fingerprint_deduplicates_common_mcp_across_scopes() -> None:
+    """Common MCP servers shared across plugins/subagents should be probed only once."""
+    import talkops.mcp.preload as preload_module
+
+    clear_cached_mcp_server_infos()
+    common_cmd = "uvx"
+    common_args = ["some-shared-mcp-server@latest"]
+    configs = {
+        "plugin__plugin-a__shared-mcp": {
+            "transport": "stdio",
+            "command": common_cmd,
+            "args": common_args,
+            "env": {"TALKOPS_PLUGIN_ROOT": "/tmp/plugin-a", "FASTMCP_LOG_LEVEL": "ERROR"},
+        },
+        "subagent__agent-1__shared-mcp": {
+            "transport": "stdio",
+            "command": common_cmd,
+            "args": common_args,
+            "env": {"TALKOPS_PLUGIN_ROOT": "/tmp/plugin-a/agents", "FASTMCP_LOG_LEVEL": "ERROR"},
+        },
+        "subagent__agent-2__shared-mcp": {
+            "transport": "stdio",
+            "command": common_cmd,
+            "args": common_args,
+            "env": {"TALKOPS_PLUGIN_ROOT": "/tmp/plugin-b/agents", "FASTMCP_LOG_LEVEL": "ERROR"},
+        },
+    }
+
+    async def _fake_probe(name: str, cfg: dict) -> MCPServerInfo:
+        return MCPServerInfo(
+            name=name,
+            transport="stdio",
+            status="ok",
+            tools=(
+                MCPToolInfo(
+                    name=_mcp_tool_name(name, "query_docs"),
+                    original_name="query_docs",
+                    description="Query docs",
+                    input_schema={"type": "object"},
+                ),
+            ),
+        )
+
+    with patch.object(preload_module, "probe_one_mcp_server", side_effect=_fake_probe) as mock_probe:
+        infos = await preload_mcp_metadata(configs)
+
+    assert mock_probe.await_count == 1
+    assert len(infos) == 3
+    by_name = {info.name: info for info in infos}
+    assert by_name["plugin__plugin-a__shared-mcp"].tools[0].name == _mcp_tool_name(
+        "plugin__plugin-a__shared-mcp", "query_docs"
+    )
+    assert by_name["subagent__agent-1__shared-mcp"].tools[0].name == _mcp_tool_name(
+        "subagent__agent-1__shared-mcp", "query_docs"
+    )
+    assert by_name["subagent__agent-2__shared-mcp"].tools[0].name == _mcp_tool_name(
+        "subagent__agent-2__shared-mcp", "query_docs"
+    )
+
+
+@pytest.mark.asyncio
+async def test_negative_cache_persists_failed_mcp_probes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed MCP probes are negative-cached so subsequent runs do not re-block on broken servers."""
+    import talkops.mcp.preload as preload_module
+
+    cache_path = tmp_path / "mcp-negative-cache.json"
+    monkeypatch.setenv("TALKOPS_MCP_METADATA_CACHE", str(cache_path))
+    monkeypatch.setenv("TALKOPS_MCP_ERROR_CACHE_TTL", "600")
+
+    broken_cfg = {
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["nonexistent-broken-mcp-pkg==99.99.99"],
+    }
+    failed_info = MCPServerInfo(
+        name="broken-mcp",
+        transport="stdio",
+        status="error",
+        error="Because nonexistent-broken-mcp-pkg was not found in the package registry, requirements are unsatisfiable.",
+        tools=(),
+    )
+
+    preload_module._PROBED_CACHE.clear()
+    preload_module._PROBED_CONFIG_FINGERPRINTS.clear()
+    preload_module._PROBED_CONN_FINGERPRINTS.clear()
+    preload_module._PERSISTED_ENTRIES.clear()
+    preload_module._PERSISTENT_CACHE_LOADED = False
+
+    with patch.object(preload_module, "probe_one_mcp_server", new=AsyncMock(return_value=failed_info)) as probe:
+        first = await preload_module.preload_mcp_metadata({"broken-mcp": broken_cfg})
+    probe.assert_awaited_once()
+    assert first[0].status == "error"
+
+    # Simulate fresh process startup: should hydrate the error status from disk without re-probing
+    preload_module._PROBED_CACHE.clear()
+    preload_module._PROBED_CONFIG_FINGERPRINTS.clear()
+    preload_module._PROBED_CONN_FINGERPRINTS.clear()
+    preload_module._PERSISTED_ENTRIES.clear()
+    preload_module._PERSISTENT_CACHE_LOADED = False
+
+    with patch.object(
+        preload_module,
+        "probe_one_mcp_server",
+        new=AsyncMock(side_effect=AssertionError("broken server should be served from negative cache")),
+    ) as probe2:
+        second = await preload_module.preload_mcp_metadata(
+            {"subagent__any-agent__broken-mcp": broken_cfg}
+        )
+    probe2.assert_not_awaited()
+    assert second[0].status == "error"
+    assert "unsatisfiable" in (second[0].error or "")
+
+
+def test_clean_stderr_diagnostic_coalesces_uvx_resolution_block() -> None:
+    """Multiline uvx '╰─▶' blocks are coalesced into a complete single-line root cause."""
+    from talkops.mcp.preload import _clean_stderr_diagnostic
+
+    stderr = (
+        "  × No solution found when resolving tool dependencies:\n"
+        "  ╰─▶ Because example-mcp-server was not found in the package registry\n"
+        "      and you require example-mcp-server==0.2.15, we can conclude that\n"
+        "      your requirements are unsatisfiable.\n"
+    )
+    diag = _clean_stderr_diagnostic(stderr)
+    assert diag is not None
+    assert "example-mcp-server was not found" in diag
+    assert "unsatisfiable" in diag
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mcp_hydration_in_context_and_tool_middleware() -> None:
+    """MCPContextMiddleware and MCPToolMiddleware dynamically hydrate servers probed in background."""
+    from talkops.mcp.preload import set_cached_mcp_server_info
+    from talkops.middleware.mcp_middleware import MCPToolMiddleware
+
+    clear_cached_mcp_server_infos()
+    srv_cfg = {"transport": "stdio", "command": "uvx", "args": ["dyn-mcp"]}
+    mcp_config = {"dyn-server": srv_cfg}
+
+    ctx_mw = MCPContextMiddleware(mcp_server_info=[], mcp_config=mcp_config)
+    tool_mw = MCPToolMiddleware(mcp_config=mcp_config)
+
+    # Before background probe completes: falls back to config stub, no dynamic tools yet
+    assert "configured" in ctx_mw._build_mcp_context()
+    assert tool_mw._get_dynamic_mcp_tools() == {}
+
+    # Background probe populates shared cache
+    probed_info = MCPServerInfo(
+        name="dyn-server",
+        transport="stdio",
+        status="ok",
+        tools=(
+            MCPToolInfo(
+                name="dyn-server_list_items",
+                original_name="list_items",
+                description="List items dynamically",
+                input_schema={"type": "object", "properties": {"filter": {"type": "string"}}},
+            ),
+        ),
+    )
+    set_cached_mcp_server_info(probed_info, srv_cfg)
+
+    # Next turn automatically sees full tool inventory and binds dynamic tool
+    updated_ctx = ctx_mw._build_mcp_context()
+    assert "dyn-server_list_items" in updated_ctx
+    dyn_tools = tool_mw._get_dynamic_mcp_tools()
+    assert "dyn-server_list_items" in dyn_tools
+
 

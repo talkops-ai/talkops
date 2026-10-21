@@ -11,13 +11,13 @@ import time
 
 import pytest
 
-from opscloud.ui.widgets.messages import (
+from talkops.ui.widgets.messages import (
     ToolCallMessage,
     ToolGroupSummary,
     _arg_shown_in_header,
     _emphasize_counts,
 )
-from opscloud.ui.widgets.tool_display import (
+from talkops.ui.widgets.tool_display import (
     format_tool_display,
     format_tool_parts,
     format_tool_result_summary,

@@ -6,7 +6,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Checkbox
 
-from opscloud.ui.widgets.notification_settings import NotificationSettingsScreen, WARNING_TOGGLES
+from talkops.ui.widgets.notification_settings import NotificationSettingsScreen, WARNING_TOGGLES
 
 
 class DummyNotifApp(App[None]):

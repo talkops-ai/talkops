@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 
-from opscloud.ui.widgets.auto_mode_notice import AutoModeNoticeScreen
+from talkops.ui.widgets.auto_mode_notice import AutoModeNoticeScreen
 
 
 class DummyNoticeApp(App[None]):

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from opscloud.plugins.project_plugins import (
+from talkops.plugins.project_plugins import (
     ProjectPluginResult,
     _collect_skill_names,
     _has_agents,
@@ -180,7 +180,7 @@ def test_bifurcation_agent_vs_non_agent(tmp_path: Path):
     assert "dcf" in cmd_files
     assert "lbo" in cmd_files
 
-    from opscloud.plugins.adapters.commands import discover_plugin_commands
+    from talkops.plugins.adapters.commands import discover_plugin_commands
     handlers = discover_plugin_commands(tmp_path)
     handler_names = [h.name for h in handlers]
     assert "/dcf" in handler_names
@@ -199,7 +199,7 @@ def test_load_real_financial_services_reference_marketplace(
 ):
     """Verify full end-to-end discovery of reference/financial-services without modifying reference files."""
     monkeypatch.setattr(
-        "opscloud.plugins.store._user_settings_path", lambda: tmp_path / "settings.json"
+        "talkops.plugins.store._user_settings_path", lambda: tmp_path / "settings.json"
     )
     repo_root = Path(__file__).resolve().parent.parent.parent
     fin_root = repo_root / "reference" / "financial-services"
@@ -244,7 +244,7 @@ def test_load_real_financial_services_reference_marketplace(
     assert "comps" in cmd_files
     assert "lbo" in cmd_files
 
-    from opscloud.plugins.adapters.commands import discover_plugin_commands
+    from talkops.plugins.adapters.commands import discover_plugin_commands
     handlers = discover_plugin_commands(fin_root)
     handler_names = [h.name for h in handlers]
     assert "/dcf" in handler_names

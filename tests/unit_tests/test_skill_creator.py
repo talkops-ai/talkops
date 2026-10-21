@@ -5,9 +5,9 @@ import os
 from pathlib import Path
 import pytest
 
-from opscloud.commands import CommandContext, CommandRouter
-from opscloud.commands.power.skill_creator import SkillCreatorHandler
-from opscloud.ui.command_registry import (
+from talkops.commands import CommandContext, CommandRouter
+from talkops.commands.power.skill_creator import SkillCreatorHandler
+from talkops.ui.command_registry import (
     COMMANDS,
     _STATIC_SKILL_ALIASES,
     build_skill_commands,
@@ -30,7 +30,7 @@ def test_skill_creator_built_in_files_exist():
     root_skill_dir = (
         Path(__file__).parent.parent.parent
         / "src"
-        / "opscloud"
+        / "talkops"
         / "built_in_skills"
         / "skill-creator"
     )
@@ -53,7 +53,7 @@ def test_quick_validate_on_skill_creator():
     root_skill_dir = (
         Path(__file__).parent.parent.parent
         / "src"
-        / "opscloud"
+        / "talkops"
         / "built_in_skills"
         / "skill-creator"
     )
@@ -70,7 +70,7 @@ def test_init_skill_and_quick_validate_lifecycle(tmp_path: Path):
     root_skill_dir = (
         Path(__file__).parent.parent.parent
         / "src"
-        / "opscloud"
+        / "talkops"
         / "built_in_skills"
         / "skill-creator"
     )
@@ -110,7 +110,7 @@ def test_quick_validate_catches_invalid_skills(tmp_path: Path):
     root_skill_dir = (
         Path(__file__).parent.parent.parent
         / "src"
-        / "opscloud"
+        / "talkops"
         / "built_in_skills"
         / "skill-creator"
     )

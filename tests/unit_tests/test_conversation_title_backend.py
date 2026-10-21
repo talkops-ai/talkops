@@ -11,8 +11,8 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 import pytest
 
-from opscloud.middleware.resume_state import ResumeStateMiddleware
-from opscloud.state.conversation_title import (
+from talkops.middleware.resume_state import ResumeStateMiddleware
+from talkops.state.conversation_title import (
     CONVERSATION_TITLE_SYSTEM_PROMPT,
     MAX_SUMMARY_PREVIEW_CHARS,
     clean_prompt_for_title,
@@ -23,13 +23,15 @@ from opscloud.state.conversation_title import (
     schedule_conversation_title_generation,
     truncate_summary_preview,
 )
-from opscloud.state.session import (
+from talkops.state.session import (
     SessionManager,
+    _clear_in_memory_caches,
     delete_thread,
     fork_thread,
     get_checkpointer,
     get_thread_title,
     list_threads,
+    reconcile_thread_summaries,
     set_db_path,
     set_thread_title,
 )
@@ -138,7 +140,7 @@ async def test_sqlite_thread_summaries_persistence_and_list_threads(tmp_path: Pa
 
     thread_id = "019d8c18-1111-7000-8000-000000000001"
 
-    # Create a real checkpoint for thread_id via OpsCloudCheckpointer
+    # Create a real checkpoint for thread_id via TalkOpsCheckpointer
     async with get_checkpointer() as saver:
         await saver.setup()
         config: Any = {
@@ -163,7 +165,7 @@ async def test_sqlite_thread_summaries_persistence_and_list_threads(tmp_path: Pa
             "step": 0,
             "writes": {},
             "updated_at": "2026-10-15T12:00:00+00:00",
-            "agent_name": "opscloud",
+            "agent_name": "talkops",
         }
         await saver.aput(config, checkpoint, metadata, {"messages": 1})
 
@@ -241,7 +243,7 @@ async def test_resume_state_middleware_schedules_title_only_on_first_root_turn(
         return None
 
     monkeypatch.setattr(
-        "opscloud.state.conversation_title.schedule_conversation_title_generation",
+        "talkops.state.conversation_title.schedule_conversation_title_generation",
         fake_schedule,
     )
 
@@ -310,3 +312,130 @@ async def test_resume_state_middleware_schedules_title_only_on_first_root_turn(
         assert loop_exceptions == []
     finally:
         loop.set_exception_handler(prev_handler)
+
+
+@pytest.mark.asyncio
+async def test_agy_style_summary_store_write_through_fast_path_and_reconcile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify agy-style thread_summaries write-through on aput, zero-blob-decode fast path, and startup reconcile."""
+    import aiosqlite
+    import talkops.state.session as session_mod
+
+    db_file = tmp_path / "test_agy_summarystore.db"
+    set_db_path(db_file)
+
+    # 1. Simulate a pre-existing legacy 5-column thread_summaries table + orphan row
+    async with aiosqlite.connect(str(db_file)) as conn:
+        await conn.execute(
+            """
+            CREATE TABLE thread_summaries (
+                thread_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                title TEXT NOT NULL DEFAULT '',
+                preview TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        await conn.execute(
+            "INSERT INTO thread_summaries (thread_id, user_id, title, preview, updated_at) "
+            "VALUES ('orphan-no-title', 'default', '', 'stale preview', '2026-10-01T00:00:00Z')"
+        )
+        await conn.commit()
+
+    thread_id = "019d8c18-9999-7000-8000-000000000099"
+    cp_id = "1ef00000-0000-6000-8000-000000000099"
+
+    # 2. Write a checkpoint via TalkOpsCheckpointer.aput -> auto-migrates schema and writes summary row
+    async with get_checkpointer() as saver:
+        await saver.setup()
+        config: Any = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        checkpoint: Any = {
+            "v": 1,
+            "id": cp_id,
+            "ts": "2026-10-18T10:00:00+00:00",
+            "channel_values": {
+                "messages": [
+                    HumanMessage(content="investigate high nat gateway data processing charges"),
+                    AIMessage(content="I will analyze VPC Flow Logs and NAT Gateway metrics."),
+                ],
+                "_active_cloud_provider": "aws",
+                "_cloud_context": {
+                    "active_provider": "aws",
+                    "aws": {"profile": "finops-prod", "region": "us-east-1"},
+                },
+            },
+            "channel_versions": {"messages": 2},
+            "versions_seen": {},
+            "pending_sends": [],
+        }
+        metadata: Any = {
+            "source": "loop",
+            "step": 1,
+            "writes": {},
+            "updated_at": "2026-10-18T10:00:00+00:00",
+            "agent_name": "talkops",
+            "cwd": "/workspace/finops",
+            "git_branch": "feat/nat-audit",
+            "owner": "alice",
+        }
+        stored_cfg = await saver.aput(config, checkpoint, metadata, {"messages": 2})
+
+        # Simulate HITL interrupt write -> updates status to 'interrupted'
+        await saver.aput_writes(
+            stored_cfg,
+            [("__interrupt__", {"action": "confirm_vpc_endpoint"})],
+            task_id="task-hitl",
+        )
+
+    # 3. Clear all in-memory caches to simulate a cold CLI /resume startup
+    _clear_in_memory_caches()
+
+    # Spy on _load_latest_checkpoint_summaries_batch to prove list_threads uses the O(1) SQLite summary fast path
+    blob_decode_calls: list[list[str]] = []
+    orig_loader = session_mod._load_latest_checkpoint_summaries_batch
+
+    async def spy_loader(conn: Any, thread_ids: list[str], serde: Any) -> Any:
+        blob_decode_calls.append(list(thread_ids))
+        return await orig_loader(conn, thread_ids, serde)
+
+    monkeypatch.setattr(session_mod, "_load_latest_checkpoint_summaries_batch", spy_loader)
+
+    threads = await list_threads(limit=10, user_id="alice")
+    assert len(threads) == 1
+    t = threads[0]
+    assert t["thread_id"] == thread_id
+    assert t["message_count"] == 2
+    assert t["initial_prompt"] == "investigate high nat gateway data processing charges"
+    assert t["cloud_provider"] == "aws"
+    assert t["cloud_badge"] == "[AWS finops-prod]"
+    assert t["cwd"] == "/workspace/finops"
+    assert t["git_branch"] == "feat/nat-audit"
+    assert t["owner"] == "alice"
+    assert t["status"] == "interrupted"
+
+    # Zero checkpoint blob deserialization calls were needed!
+    assert blob_decode_calls == []
+
+    # 4. Fork thread -> copies summary metadata and records parent_thread_id
+    forked_id = await fork_thread(thread_id, target_thread_id="019d8c18-9999-7000-8000-000000000100")
+    _clear_in_memory_caches()
+    threads_after_fork = await list_threads(limit=10, user_id="alice")
+    by_id = {item["thread_id"]: item for item in threads_after_fork}
+    assert forked_id in by_id
+    assert by_id[forked_id]["parent_thread_id"] == thread_id
+    assert by_id[forked_id]["message_count"] == 2
+    assert by_id[forked_id]["cloud_badge"] == "[AWS finops-prod]"
+    assert blob_decode_calls == []
+
+    # 5. Reconcile summaries -> removes orphan-no-title row and reconciles active threads
+    reconciled_count = await reconcile_thread_summaries(limit=50)
+    assert reconciled_count == 2
+    async with aiosqlite.connect(str(db_file)) as conn:
+        async with conn.execute(
+            "SELECT COUNT(*) FROM thread_summaries WHERE thread_id = 'orphan-no-title'"
+        ) as cur:
+            row = await cur.fetchone()
+            assert row is not None and row[0] == 0

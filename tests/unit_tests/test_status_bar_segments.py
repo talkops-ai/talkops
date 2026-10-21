@@ -7,13 +7,13 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
-from opscloud.ui import context_detection
-from opscloud.ui.context_detection import (
+from talkops.ui import context_detection
+from talkops.ui.context_detection import (
     current_k8s_context,
     detect_production,
     is_production_name,
 )
-from opscloud.ui.widgets.status import (
+from talkops.ui.widgets.status import (
     StatusBar,
     context_percent_style,
     format_context_meter,
@@ -22,17 +22,17 @@ from opscloud.ui.widgets.status import (
 
 
 class _ThemedApp(App):
-    """Minimal app carrying the OpsCloud theme variables StatusBar's CSS uses."""
+    """Minimal app carrying the TalkOps theme variables StatusBar's CSS uses."""
 
     def __init__(self) -> None:
         super().__init__()
-        from opscloud.ui.theme import register_app_themes
+        from talkops.ui.theme import register_app_themes
 
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
-        from opscloud.ui.theme import get_css_variable_defaults, get_theme_colors
+        from talkops.ui.theme import get_css_variable_defaults, get_theme_colors
 
         return get_css_variable_defaults(colors=get_theme_colors(self))
 
@@ -139,10 +139,10 @@ def test_percent_style_thresholds_are_exclusive():
 
 
 def test_format_cwd_short():
-    assert format_cwd_short("~/Documents/work/opscloud").endswith("/opscloud")
-    assert format_cwd_short("~/Documents/work/opscloud").startswith("~/")
-    assert "work" not in format_cwd_short("~/Documents/work/opscloud")
-    assert format_cwd_short("~/work/opscloud") == "~/work/opscloud"
+    assert format_cwd_short("~/Documents/work/talkops").endswith("/talkops")
+    assert format_cwd_short("~/Documents/work/talkops").startswith("~/")
+    assert "work" not in format_cwd_short("~/Documents/work/talkops")
+    assert format_cwd_short("~/work/talkops") == "~/work/talkops"
     assert format_cwd_short("/tmp") == "/tmp"
 
 
@@ -185,7 +185,7 @@ async def test_non_prod_profile_hides_pill():
         assert not bar.query_one("#prod-pill", Static).display
         cloud = bar.query_one("#cloud-display", Static).render()
         assert isinstance(cloud, Content)
-        from opscloud.config.settings import get_glyphs
+        from talkops.config.settings import get_glyphs
 
         glyphs = get_glyphs()
         assert cloud.plain == f"aws client-devops {glyphs.separator} ap-south-1"
@@ -217,7 +217,7 @@ async def test_tokens_display_contains_meter_and_separators():
         tokens_widget = bar.query_one("#tokens-display", Static).render()
         assert isinstance(tokens_widget, Content)
         plain = tokens_widget.plain
-        from opscloud.config.settings import get_glyphs
+        from talkops.config.settings import get_glyphs
 
         glyphs = get_glyphs()
         meter = glyphs.meter_filled + (glyphs.meter_empty * 4)
@@ -255,7 +255,7 @@ async def test_narrow_drops_cwd_region_model_and_count():
         tokens_render = bar.query_one("#tokens-display", Static).render()
         assert isinstance(tokens_render, Content)
         tokens = tokens_render.plain
-        from opscloud.config.settings import get_glyphs
+        from talkops.config.settings import get_glyphs
 
         glyphs = get_glyphs()
         meter = glyphs.meter_filled + (glyphs.meter_empty * 4)

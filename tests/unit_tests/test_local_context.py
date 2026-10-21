@@ -6,7 +6,7 @@ import pytest
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import SystemMessage
 
-from opscloud.middleware.local_context import (
+from talkops.middleware.local_context import (
     LocalContextMiddleware,
     build_detect_script,
     _build_aws_context,
@@ -79,10 +79,10 @@ def test_build_mcp_context():
 def test_build_tracing_context():
     assert _build_tracing_context(None, None) == ""
 
-    tracing_text = _build_tracing_context("opscloud-agent", "opscloud-shell")
+    tracing_text = _build_tracing_context("talkops-agent", "talkops-shell")
     assert "**LangSmith Tracing**:" in tracing_text
-    assert '"opscloud-agent"' in tracing_text
-    assert '"opscloud-shell"' in tracing_text
+    assert '"talkops-agent"' in tracing_text
+    assert '"talkops-shell"' in tracing_text
 
 
 def test_build_aws_context(monkeypatch):
@@ -93,7 +93,7 @@ def test_build_aws_context(monkeypatch):
     mock_ctx.profile = "prod"
     mock_ctx.authenticated = True
 
-    monkeypatch.setattr("opscloud.middleware.local_context.get_aws_context", lambda: mock_ctx)
+    monkeypatch.setattr("talkops.middleware.local_context.get_aws_context", lambda: mock_ctx)
 
     aws_text = _build_aws_context()
     assert "**AWS Operational Environment**:" in aws_text

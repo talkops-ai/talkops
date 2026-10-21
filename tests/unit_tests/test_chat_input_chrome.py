@@ -6,8 +6,8 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.content import Content
 
-from opscloud.ui.widgets import chat_input as chat_input_module
-from opscloud.ui.widgets.chat_input import (
+from talkops.ui.widgets import chat_input as chat_input_module
+from talkops.ui.widgets.chat_input import (
     ChatInput,
     format_input_hints,
     input_hints,
@@ -15,17 +15,17 @@ from opscloud.ui.widgets.chat_input import (
 
 
 class _ThemedApp(App):
-    """Minimal app carrying the OpsCloud theme variables ChatInput's CSS uses."""
+    """Minimal app carrying the TalkOps theme variables ChatInput's CSS uses."""
 
     def __init__(self) -> None:
         super().__init__()
-        from opscloud.ui.theme import register_app_themes
+        from talkops.ui.theme import register_app_themes
 
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
-        from opscloud.ui.theme import get_css_variable_defaults, get_theme_colors
+        from talkops.ui.theme import get_css_variable_defaults, get_theme_colors
 
         return get_css_variable_defaults(colors=get_theme_colors(self))
 

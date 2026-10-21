@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 
-from opscloud.ui.widgets.install_confirm import InstallProviderConfirmScreen
+from talkops.ui.widgets.install_confirm import InstallProviderConfirmScreen
 
 
 class DummyInstallApp(App[None]):

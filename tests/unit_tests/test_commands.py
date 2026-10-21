@@ -1,11 +1,11 @@
-"""Unit tests for OpsCloud slash command system and CommandRegistry."""
+"""Unit tests for TalkOps slash command system and CommandRegistry."""
 
 import pytest
 from unittest.mock import MagicMock
-from opscloud.commands.registry import CommandRegistry
-from opscloud.commands._base import BaseCommandHandler, CommandContext, CommandResult
-from opscloud.commands._types import BypassTier, CommandCategory, SafetyLevel
-from opscloud.commands.core.exit_cmd import ExitHandler
+from talkops.commands.registry import CommandRegistry
+from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
+from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
+from talkops.commands.core.exit_cmd import ExitHandler
 
 
 @pytest.fixture(autouse=True)
@@ -112,8 +112,8 @@ def test_plugin_command_registration_and_source():
 
 @pytest.mark.asyncio
 async def test_config_command_execution():
-    from opscloud.commands.core.config_cmd import ConfigHandler
-    from opscloud.config.settings import Settings
+    from talkops.commands.core.config_cmd import ConfigHandler
+    from talkops.config.settings import Settings
 
     handler = ConfigHandler()
     test_settings = Settings(aws_region="us-east-1")
@@ -148,8 +148,8 @@ async def test_config_command_execution():
 
 @pytest.mark.asyncio
 async def test_pool_command_execution():
-    from opscloud.commands.core.pool import PoolHandler
-    from opscloud.config.toml_config import clear_agent_pool, load_agent_pool
+    from talkops.commands.core.pool import PoolHandler
+    from talkops.config.toml_config import clear_agent_pool, load_agent_pool
     from unittest.mock import AsyncMock
 
     handler = PoolHandler()
@@ -197,8 +197,8 @@ async def test_pool_command_execution():
 async def test_pool_selector_screen_mount():
     from textual.app import App
     from textual.widgets import Select
-    from opscloud.ui.widgets.pool_selector import PoolSelectorScreen
-    from opscloud.config.toml_config import clear_agent_pool
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
+    from talkops.config.toml_config import clear_agent_pool
 
     clear_agent_pool()
 
@@ -238,8 +238,8 @@ async def test_pool_selector_screen_mount():
 
 async def test_pool_selector_buttons_visible_in_constrained_terminal():
     from textual.app import App
-    from opscloud.ui.widgets.pool_selector import PoolSelectorScreen
-    from opscloud.config.toml_config import clear_agent_pool
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
+    from talkops.config.toml_config import clear_agent_pool
 
     clear_agent_pool()
 
@@ -273,8 +273,8 @@ async def test_pool_selector_buttons_visible_in_constrained_terminal():
 
 async def test_pool_selector_save_and_reset_actions():
     from textual.app import App
-    from opscloud.ui.widgets.pool_selector import PoolSelectorScreen
-    from opscloud.config.toml_config import clear_agent_pool, load_agent_pool
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
+    from talkops.config.toml_config import clear_agent_pool, load_agent_pool
 
     clear_agent_pool()
 
@@ -328,7 +328,7 @@ async def test_pool_selector_save_and_reset_actions():
 async def test_pool_selector_dismiss_idempotency():
     """Verify PoolSelectorScreen dismissal is idempotent and avoids ScreenStackError on double dismiss."""
     from textual.app import App
-    from opscloud.ui.widgets.pool_selector import PoolSelectorScreen
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
     dismissed_results = []
 
@@ -359,7 +359,7 @@ async def test_pool_selector_dismiss_idempotency():
 
 @pytest.mark.asyncio
 async def test_goal_command_conversational_amendment_when_active():
-    from opscloud.commands.power.goal import GoalHandler, get_goal_state
+    from talkops.commands.power.goal import GoalHandler, get_goal_state
     from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
@@ -392,7 +392,7 @@ async def test_goal_command_conversational_amendment_when_active():
 
 @pytest.mark.asyncio
 async def test_goal_command_conversational_amendment_when_blocked():
-    from opscloud.commands.power.goal import GoalHandler, get_goal_state
+    from talkops.commands.power.goal import GoalHandler, get_goal_state
     from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
@@ -420,7 +420,7 @@ async def test_goal_command_conversational_amendment_when_blocked():
 
 @pytest.mark.asyncio
 async def test_goal_command_explicit_new_replaces_active():
-    from opscloud.commands.power.goal import GoalHandler, get_goal_state
+    from talkops.commands.power.goal import GoalHandler, get_goal_state
     from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
@@ -447,7 +447,7 @@ async def test_goal_command_explicit_new_replaces_active():
 
 @pytest.mark.asyncio
 async def test_goal_command_create_when_no_active_goal():
-    from opscloud.commands.power.goal import GoalHandler, get_goal_state
+    from talkops.commands.power.goal import GoalHandler, get_goal_state
     from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
@@ -472,7 +472,7 @@ async def test_goal_command_create_when_no_active_goal():
 
 @pytest.mark.asyncio
 async def test_context_command_no_emojis_and_complete_metrics():
-    from opscloud.commands.core.context import ContextHandler
+    from talkops.commands.core.context import ContextHandler
     from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
@@ -529,9 +529,9 @@ async def test_context_command_no_emojis_and_complete_metrics():
 
 @pytest.mark.asyncio
 async def test_multi_provider_pool_command_set_and_status():
-    from opscloud.commands._base import CommandContext
-    from opscloud.commands.core.pool import PoolHandler
-    from opscloud.config.toml_config import clear_agent_pool, load_agent_pool
+    from talkops.commands._base import CommandContext
+    from talkops.commands.core.pool import PoolHandler
+    from talkops.config.toml_config import clear_agent_pool, load_agent_pool
 
     clear_agent_pool()
     handler = PoolHandler()
@@ -571,8 +571,8 @@ async def test_multi_provider_pool_command_set_and_status():
 async def test_pool_selector_screen_multi_provider_ui():
     from textual.app import App
     from textual.widgets import Select
-    from opscloud.ui.widgets.pool_selector import PoolSelectorScreen
-    from opscloud.config.toml_config import clear_agent_pool, load_agent_pool
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
+    from talkops.config.toml_config import clear_agent_pool, load_agent_pool
 
     clear_agent_pool()
 

@@ -1,14 +1,14 @@
-"""Unit tests for OpsCloud prompts generation and typed interrupt schemas."""
+"""Unit tests for TalkOps prompts generation and typed interrupt schemas."""
 
 from pathlib import Path
 import re
 
-from opscloud.prompts import (
+from talkops.prompts import (
     CloudProvider,
     MODEL_IDENTITY_RE,
-    OPSCLOUD_MEMORY_HEADLESS_SYSTEM_PROMPT,
-    OPSCLOUD_MEMORY_READONLY_SYSTEM_PROMPT,
-    OPSCLOUD_MEMORY_SYSTEM_PROMPT,
+    TALKOPS_MEMORY_HEADLESS_SYSTEM_PROMPT,
+    TALKOPS_MEMORY_READONLY_SYSTEM_PROMPT,
+    TALKOPS_MEMORY_SYSTEM_PROMPT,
     build_fs_tool_guidance,
     build_model_identity_section,
     build_working_dir_section,
@@ -16,7 +16,7 @@ from opscloud.prompts import (
     get_memory_system_prompt,
     normalize_cloud_provider,
 )
-from opscloud.schema.interrupts import HitlResumePayload
+from talkops.schema.interrupts import HitlResumePayload
 
 
 def test_build_model_identity_section():
@@ -52,7 +52,7 @@ def test_normalize_cloud_provider():
 
 def test_get_base_system_prompt_aws_default():
     prompt = get_base_system_prompt(
-        assistant_id="opscloud",
+        assistant_id="talkops",
         interactive=True,
         model_name="gpt-4o",
     )
@@ -70,7 +70,7 @@ def test_get_base_system_prompt_aws_default():
 
 def test_get_base_system_prompt_azure():
     prompt = get_base_system_prompt(
-        assistant_id="opscloud",
+        assistant_id="talkops",
         interactive=True,
         model_name="claude-3-7-sonnet",
         cloud_provider=CloudProvider.AZURE,
@@ -82,7 +82,7 @@ def test_get_base_system_prompt_azure():
 
 def test_get_base_system_prompt_gcp():
     prompt = get_base_system_prompt(
-        assistant_id="opscloud",
+        assistant_id="talkops",
         interactive=True,
         model_name="gemini-2.5-pro",
         cloud_provider=CloudProvider.GCP,
@@ -94,7 +94,7 @@ def test_get_base_system_prompt_gcp():
 
 def test_get_base_system_prompt_multi():
     prompt = get_base_system_prompt(
-        assistant_id="opscloud",
+        assistant_id="talkops",
         interactive=True,
         model_name="claude-3-5-sonnet",
         cloud_provider=CloudProvider.MULTI,
@@ -106,7 +106,7 @@ def test_get_base_system_prompt_multi():
 
 def test_get_base_system_prompt_headless():
     prompt = get_base_system_prompt(
-        assistant_id="opscloud",
+        assistant_id="talkops",
         interactive=False,
         model_name="claude-3-5-sonnet",
     )
@@ -120,7 +120,7 @@ def test_no_unreplaced_placeholders():
     for provider in [CloudProvider.AWS, CloudProvider.AZURE, CloudProvider.GCP, CloudProvider.MULTI]:
         for interactive in [True, False]:
             prompt = get_base_system_prompt(
-                assistant_id="opscloud",
+                assistant_id="talkops",
                 interactive=interactive,
                 cwd="/tmp/test_workspace",
                 fs_tools=["read_file", "write_file", "edit_file"],
@@ -180,20 +180,20 @@ def test_fs_tool_guidance():
 
 def test_memory_system_prompts():
     default_prompt = get_memory_system_prompt()
-    assert default_prompt == OPSCLOUD_MEMORY_SYSTEM_PROMPT
+    assert default_prompt == TALKOPS_MEMORY_SYSTEM_PROMPT
     assert "live cloud telemetry and explicit operator commands" in default_prompt.lower()
 
     readonly_prompt = get_memory_system_prompt(readonly=True)
-    assert readonly_prompt == OPSCLOUD_MEMORY_READONLY_SYSTEM_PROMPT
+    assert readonly_prompt == TALKOPS_MEMORY_READONLY_SYSTEM_PROMPT
     assert "Automatic memory saving is disabled" in readonly_prompt
 
     headless_prompt = get_memory_system_prompt(headless=True)
-    assert headless_prompt == OPSCLOUD_MEMORY_HEADLESS_SYSTEM_PROMPT
+    assert headless_prompt == TALKOPS_MEMORY_HEADLESS_SYSTEM_PROMPT
     assert "Working autonomously" in headless_prompt
 
 
 def test_built_in_skills_exist_and_valid():
-    built_in_dir = Path(__file__).parent.parent.parent / "src" / "opscloud" / "built_in_skills"
+    built_in_dir = Path(__file__).parent.parent.parent / "src" / "talkops" / "built_in_skills"
     assert built_in_dir.is_dir()
 
     expected_skills = [
@@ -228,7 +228,7 @@ def test_hitl_resume_payload_parsing():
 
 def test_get_base_system_prompt_dual_engine_and_tool_discipline():
     prompt = get_base_system_prompt(
-        assistant_id="opscloud",
+        assistant_id="talkops",
         interactive=True,
         model_name="claude-3-7-sonnet",
     )
@@ -265,7 +265,7 @@ def test_get_base_system_prompt_dual_engine_and_tool_discipline():
 
 def test_adaptive_output_granularity_contract():
     prompt = get_base_system_prompt(
-        assistant_id="opscloud",
+        assistant_id="talkops",
         interactive=True,
         model_name="claude-3-7-sonnet",
     )

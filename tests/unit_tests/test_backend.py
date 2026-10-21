@@ -1,4 +1,4 @@
-"""Unit tests for OpsCloud backend execution, registry, and composite routing."""
+"""Unit tests for TalkOps backend execution, registry, and composite routing."""
 
 from __future__ import annotations
 
@@ -8,19 +8,19 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from opscloud.backend.composite import (
+from talkops.backend.composite import (
     CompositeBackend,
-    OpsCloudCompositeBackend,
+    TalkOpsCompositeBackend,
 )
-from opscloud.backend.local import LocalShellBackend, _build_shell_env
-from opscloud.backend.registry import (
+from talkops.backend.local import LocalShellBackend, _build_shell_env
+from talkops.backend.registry import (
     BackendRegistry,
     get_backend_class,
     get_backend_registry,
     register_backend,
 )
-from opscloud.backend.sandbox_config import SandboxConfig
-from opscloud.backend.sandbox_factory import (
+from talkops.backend.sandbox_config import SandboxConfig
+from talkops.backend.sandbox_factory import (
     WORKSPACE_IGNORE_DIRS,
     get_project_root,
     get_sandbox_backend,
@@ -44,9 +44,9 @@ class TestBackendRegistry:
                 self.kwargs = kwargs
 
         registry.register("dummy", DummyBackend)
-        backend = registry.build("dummy", root_dir="/tmp/opscloud_test")
+        backend = registry.build("dummy", root_dir="/tmp/talkops_test")
         assert isinstance(backend, DummyBackend)
-        assert backend.kwargs["root_dir"] == "/tmp/opscloud_test"
+        assert backend.kwargs["root_dir"] == "/tmp/talkops_test"
 
     def test_build_unknown_raises(self) -> None:
         registry = BackendRegistry()
@@ -87,9 +87,9 @@ class TestLocalShellBackend:
 
     def test_local_shell_backend_execute(self, tmp_path: Path) -> None:
         backend = LocalShellBackend(root_dir=tmp_path)
-        res = backend.execute("echo 'hello opscloud'")
+        res = backend.execute("echo 'hello talkops'")
         assert res.exit_code == 0
-        assert "hello opscloud" in res.output
+        assert "hello talkops" in res.output
 
     def test_aws_env_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE123456789")
@@ -169,8 +169,8 @@ class TestLocalShellBackend:
         backend._env["AWS_ACCESS_KEY_ID"] = "OLD_KEY"
         backend._env["AWS_SECRET_ACCESS_KEY"] = "OLD_SECRET"
 
-        monkeypatch.setattr("opscloud.config.cloud_profiles.get_active_aws_profile", lambda: "prod_corp")
-        monkeypatch.setattr("opscloud.config.cloud_profiles.get_active_aws_region", lambda: "eu-west-1")
+        monkeypatch.setattr("talkops.config.cloud_profiles.get_active_aws_profile", lambda: "prod_corp")
+        monkeypatch.setattr("talkops.config.cloud_profiles.get_active_aws_region", lambda: "eu-west-1")
 
         backend._sync_cloud_env()
 
@@ -183,18 +183,18 @@ class TestLocalShellBackend:
         assert "AWS_SECRET_ACCESS_KEY" not in backend._env
 
         # Switching to profile without explicit region must clear stale region keys
-        monkeypatch.setattr("opscloud.config.cloud_profiles.get_active_aws_region", lambda: None)
+        monkeypatch.setattr("talkops.config.cloud_profiles.get_active_aws_region", lambda: None)
         backend._sync_cloud_env()
         assert "AWS_REGION" not in backend._env
         assert "AWS_DEFAULT_REGION" not in backend._env
 
 
-class TestOpsCloudCompositeBackend:
-    """Tests for OpsCloudCompositeBackend routing, cleanup, and compatibility."""
+class TestTalkOpsCompositeBackend:
+    """Tests for TalkOpsCompositeBackend routing, cleanup, and compatibility."""
 
     def test_composite_backend_virtual_routing(self, tmp_path: Path) -> None:
         local_backend = LocalShellBackend(root_dir=tmp_path)
-        composite = OpsCloudCompositeBackend(default=local_backend)
+        composite = TalkOpsCompositeBackend(default=local_backend)
 
         # Write file to virtual /large_tool_results/ prefix
         write_res = composite.write("/large_tool_results/test.txt", "evidence data")
@@ -215,21 +215,21 @@ class TestOpsCloudCompositeBackend:
         composite.cleanup()
 
     def test_composite_cleanup(self) -> None:
-        backend = OpsCloudCompositeBackend(default=MagicMock())
+        backend = TalkOpsCompositeBackend(default=MagicMock())
         temp_dir = backend._large_results_dir
         assert Path(temp_dir).exists()
         backend.cleanup()
         assert not Path(temp_dir).exists()
 
     def test_context_manager(self) -> None:
-        with OpsCloudCompositeBackend(default=MagicMock()) as backend:
+        with TalkOpsCompositeBackend(default=MagicMock()) as backend:
             temp_dir = backend._large_results_dir
             assert Path(temp_dir).exists()
         assert not Path(temp_dir).exists()
 
     def test_custom_routes_merged(self) -> None:
         custom_backend = MagicMock()
-        backend = OpsCloudCompositeBackend(
+        backend = TalkOpsCompositeBackend(
             default=MagicMock(),
             routes={"/custom/": custom_backend},
         )
@@ -239,16 +239,16 @@ class TestOpsCloudCompositeBackend:
         backend.cleanup()
 
     def test_aliases(self) -> None:
-        assert CompositeBackend is OpsCloudCompositeBackend
+        assert CompositeBackend is TalkOpsCompositeBackend
 
 
 class TestSandboxConfig:
     """Tests for SandboxConfig parsing and defaults."""
 
     def test_default_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPSCLOUD_SANDBOX_PROVIDER", raising=False)
+        monkeypatch.delenv("TALKOPS_SANDBOX_PROVIDER", raising=False)
         monkeypatch.delenv("SANDBOX_PROVIDER", raising=False)
-        monkeypatch.delenv("OPSCLOUD_SANDBOX_SNAPSHOT", raising=False)
+        monkeypatch.delenv("TALKOPS_SANDBOX_SNAPSHOT", raising=False)
         monkeypatch.delenv("SANDBOX_SNAPSHOT", raising=False)
 
         cfg = SandboxConfig.from_env()
@@ -256,12 +256,12 @@ class TestSandboxConfig:
         assert cfg.sync_workspace is True
 
     def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPSCLOUD_SANDBOX_PROVIDER", "langsmith")
-        monkeypatch.setenv("OPSCLOUD_SANDBOX_ID", "sb-12345")
-        monkeypatch.setenv("OPSCLOUD_SANDBOX_IMAGE", "custom-aws-image:latest")
-        monkeypatch.setenv("OPSCLOUD_SANDBOX_SETUP_SCRIPT", "/scripts/init.sh")
-        monkeypatch.setenv("OPSCLOUD_SANDBOX_SNAPSHOT", "aws-devops-v1")
-        monkeypatch.setenv("OPSCLOUD_SANDBOX_SYNC_WORKSPACE", "false")
+        monkeypatch.setenv("TALKOPS_SANDBOX_PROVIDER", "langsmith")
+        monkeypatch.setenv("TALKOPS_SANDBOX_ID", "sb-12345")
+        monkeypatch.setenv("TALKOPS_SANDBOX_IMAGE", "custom-aws-image:latest")
+        monkeypatch.setenv("TALKOPS_SANDBOX_SETUP_SCRIPT", "/scripts/init.sh")
+        monkeypatch.setenv("TALKOPS_SANDBOX_SNAPSHOT", "aws-devops-v1")
+        monkeypatch.setenv("TALKOPS_SANDBOX_SYNC_WORKSPACE", "false")
 
         cfg = SandboxConfig.from_env()
         assert cfg.provider == "langsmith"
@@ -272,9 +272,9 @@ class TestSandboxConfig:
         assert cfg.sync_workspace is False
 
     def test_toml_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPSCLOUD_SANDBOX_PROVIDER", raising=False)
+        monkeypatch.delenv("TALKOPS_SANDBOX_PROVIDER", raising=False)
         monkeypatch.delenv("SANDBOX_PROVIDER", raising=False)
-        monkeypatch.delenv("OPSCLOUD_SANDBOX_SYNC_WORKSPACE", raising=False)
+        monkeypatch.delenv("TALKOPS_SANDBOX_SYNC_WORKSPACE", raising=False)
         monkeypatch.delenv("SANDBOX_SYNC_WORKSPACE", raising=False)
 
         cfg_file = tmp_path / "config.toml"
@@ -315,8 +315,8 @@ class TestSandboxFactory:
         assert ".git" in WORKSPACE_IGNORE_DIRS
 
     def test_get_sandbox_backend_local(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setenv("OPSCLOUD_SANDBOX_PROVIDER", "local")
-        monkeypatch.setattr("opscloud.backend.sandbox_factory.get_project_root", lambda: tmp_path)
+        monkeypatch.setenv("TALKOPS_SANDBOX_PROVIDER", "local")
+        monkeypatch.setattr("talkops.backend.sandbox_factory.get_project_root", lambda: tmp_path)
 
         backend = get_sandbox_backend(thread_id="test_thread")
         assert isinstance(backend, LocalShellBackend)

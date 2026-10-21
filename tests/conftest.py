@@ -11,38 +11,48 @@ import pytest
 def clean_environment(monkeypatch, tmp_path):
     """Automatically isolate environment variables, config files, and singletons for each test."""
     old_env = dict(os.environ)
-    monkeypatch.delenv("OPSCLOUD_PROJECT_ROOT", raising=False)
+    monkeypatch.delenv("TALKOPS_PROJECT_ROOT", raising=False)
 
     # Sandbox configuration file and state directory in isolated temp location
-    # (avoid placing .opscloud in tmp_path directly to prevent project root marker collisions)
+    # (avoid placing .talkops in tmp_path directly to prevent project root marker collisions)
     import tempfile
-    test_temp_obj = tempfile.TemporaryDirectory(prefix="opscloud_test_data_")
-    test_data_dir = Path(test_temp_obj.name) / ".opscloud"
+    test_temp_obj = tempfile.TemporaryDirectory(prefix="talkops_test_data_")
+    test_data_dir = Path(test_temp_obj.name) / ".talkops"
     test_data_dir.mkdir(parents=True, exist_ok=True)
     test_config_path = test_data_dir / "config.toml"
     test_state_dir = test_data_dir / ".state"
     test_state_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("opscloud.config.paths.DATA_DIR", test_data_dir)
-    monkeypatch.setattr("opscloud.config.paths.CONFIG_PATH", test_config_path)
-    monkeypatch.setattr("opscloud.config.paths.CONFIG_FILE_PATH", test_config_path)
-    monkeypatch.setattr("opscloud.config.paths.USER_SETTINGS_PATH", test_data_dir / "settings.json")
-    monkeypatch.setattr("opscloud.config.paths.STATE_DIR", test_state_dir)
-    monkeypatch.setattr("opscloud.config.toml_config.CONFIG_PATH", test_config_path)
-    monkeypatch.setattr("opscloud.config.toml_config.STATE_DIR", test_state_dir)
-    monkeypatch.setattr("opscloud.config.toml_config._RECENT_MODELS_FILE", test_state_dir / "recent_models.json")
-    monkeypatch.setattr("opscloud.config.toml_config._RECENT_PROFILES_FILE", test_state_dir / "recent_cloud_profiles.json")
+    monkeypatch.setattr("talkops.config.paths.DATA_DIR", test_data_dir)
+    monkeypatch.setattr("talkops.config.paths.CONFIG_PATH", test_config_path)
+    monkeypatch.setattr("talkops.config.paths.CONFIG_FILE_PATH", test_config_path)
+    monkeypatch.setattr("talkops.config.paths.USER_SETTINGS_PATH", test_data_dir / "settings.json")
+    monkeypatch.setattr("talkops.config.paths.STATE_DIR", test_state_dir)
+    monkeypatch.setattr("talkops.config.paths.AUTH_PATH", test_state_dir / "auth.json")
+    monkeypatch.setattr("talkops.config.paths.GLOBAL_ENV_PATH", test_data_dir / ".env")
+    monkeypatch.setattr("talkops.config.toml_config.CONFIG_PATH", test_config_path)
+    monkeypatch.setattr("talkops.config.toml_config.STATE_DIR", test_state_dir)
+    monkeypatch.setattr("talkops.config.toml_config._RECENT_MODELS_FILE", test_state_dir / "recent_models.json")
+    monkeypatch.setattr("talkops.config.toml_config._RECENT_PROFILES_FILE", test_state_dir / "recent_cloud_profiles.json")
+    for k in (
+        "TALKOPS_CONTROL_PLANE_URL",
+        "TALKOPS_API_KEY",
+        "TALKOPS_SERVER_API_KEY",
+        "TALKOPS_SERVER_URL",
+        "TALKOPS_USER_ID",
+    ):
+        monkeypatch.delenv(k, raising=False)
     try:
-        from opscloud.config.cli_settings import reset_cli_settings_manager_for_testing
+        from talkops.config.cli_settings import reset_cli_settings_manager_for_testing
 
         reset_cli_settings_manager_for_testing()
     except Exception:
         pass
 
-    # Isolate test logging to prevent test runs from polluting user's active opscloud.log
+    # Isolate test logging to prevent test runs from polluting user's active talkops.log
     test_log_file = test_data_dir / "test.log"
     try:
-        from opscloud.utils.logger import configure_logging
+        from talkops.utils.logger import configure_logging
 
         configure_logging(log_dir=test_data_dir, log_file=test_log_file, log_to_file=False)
     except Exception:
@@ -68,19 +78,19 @@ def clean_environment(monkeypatch, tmp_path):
     os.environ.update(old_env)
     test_temp_obj.cleanup()
     try:
-        from opscloud.config.cli_settings import reset_cli_settings_manager_for_testing
+        from talkops.config.cli_settings import reset_cli_settings_manager_for_testing
 
         reset_cli_settings_manager_for_testing()
     except Exception:
         pass
     try:
-        from opscloud.config.settings import reset_settings_for_testing
+        from talkops.config.settings import reset_settings_for_testing
 
         reset_settings_for_testing()
     except Exception:
         pass
     try:
-        from opscloud.model import pool as _pool_mod
+        from talkops.model import pool as _pool_mod
 
         _pool_mod._GLOBAL_POOL_MANAGER = None
     except Exception:

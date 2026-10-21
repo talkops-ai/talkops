@@ -5,7 +5,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
-from opscloud.middleware.mcp_middleware import (
+from talkops.middleware.mcp_middleware import (
     MCPToolMiddleware,
     normalize_mcp_arguments,
 )
@@ -98,7 +98,7 @@ def test_wrap_tool_call_normalizes_mcp_arguments():
     none_runtime: Any = None
     request = ToolCallRequest(
         tool=tool_mock,
-        tool_call={"name": "git:checkout", "args": {"repo": "opscloud", "branch": ""}, "id": "call_123"},
+        tool_call={"name": "git:checkout", "args": {"repo": "talkops", "branch": ""}, "id": "call_123"},
         state={},
         runtime=none_runtime,
     )
@@ -107,7 +107,7 @@ def test_wrap_tool_call_normalizes_mcp_arguments():
         return req.tool_call["args"]
 
     result = mw.wrap_tool_call(request, dummy_handler)
-    assert result == {"repo": "opscloud"}
+    assert result == {"repo": "talkops"}
 
 
 def test_wrap_tool_call_handles_auth_error():

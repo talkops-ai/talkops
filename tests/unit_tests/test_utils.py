@@ -1,24 +1,24 @@
-"""Unit tests for OpsCloud utils (git metadata, cost estimation, session stats)."""
+"""Unit tests for TalkOps utils (git metadata, cost estimation, session stats)."""
 
 from pathlib import Path
 import pytest
-from opscloud.utils.git import (
+from talkops.utils.git import (
     parse_repository_metadata,
     find_git_root,
     resolve_git_branch,
     RepositoryMetadata,
 )
-from opscloud.utils.cost_estimation import TokenCostEstimator
-from opscloud.utils.session_stats import SessionStats
+from talkops.utils.cost_estimation import TokenCostEstimator
+from talkops.utils.session_stats import SessionStats
 
 
 def test_parse_repository_metadata():
     # SSH format
-    meta = parse_repository_metadata("git@github.com:talkops/opscloud.git")
+    meta = parse_repository_metadata("git@github.com:talkops-ai/talkops.git")
     assert meta is not None
     assert meta.provider == "github"
-    assert meta.name == "talkops/opscloud"
-    assert meta.url == "https://github.com/talkops/opscloud"
+    assert meta.name == "talkops-ai/talkops"
+    assert meta.url == "https://github.com/talkops-ai/talkops"
 
     # HTTPS format
     meta_https = parse_repository_metadata("https://gitlab.com/group/subproject.git")

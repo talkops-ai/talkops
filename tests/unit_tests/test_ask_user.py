@@ -7,13 +7,13 @@ from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command
 
-from opscloud.middleware.ask_user import (
+from talkops.middleware.ask_user import (
     ASK_USER_SYSTEM_PROMPT,
     AskUserMiddleware,
     _parse_answers,
     _validate_questions,
 )
-from opscloud.schema.interrupts import Choice, Question
+from talkops.schema.interrupts import Choice, Question
 
 
 def test_validate_questions_valid():

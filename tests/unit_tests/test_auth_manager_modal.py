@@ -6,8 +6,8 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import OptionList
 
-from opscloud.ui.widgets.auth import AuthPromptScreen
-from opscloud.ui.widgets.auth_manager import AuthManagerScreen, _KNOWN_PROVIDERS
+from talkops.ui.widgets.auth import AuthPromptScreen
+from talkops.ui.widgets.auth_manager import AuthManagerScreen, _KNOWN_PROVIDERS
 
 
 class DummyAuthApp(App[None]):
@@ -61,15 +61,31 @@ class DummyAuthPromptApp(App[None]):
 
 @pytest.mark.asyncio
 async def test_auth_prompt_screen_mount_and_cancel() -> None:
-    from opscloud.ui.widgets.auth import AuthPromptScreen
+    from textual.widgets import Input, Static
+    from talkops.ui.widgets.auth import AuthCheckbox, AuthPromptScreen
 
-    screen = AuthPromptScreen(provider="anthropic")
+    screen = AuthPromptScreen(provider="google_genai")
     app = DummyAuthPromptApp(screen)
 
     async with app.run_test() as pilot:
         assert screen.dialog is not None
         assert screen.dialog.border_title is not None
-        assert "Anthropic" in str(screen.dialog.border_title)
+        assert "Google Gemini" in str(screen.dialog.border_title)
+
+        # Verify key input and instructions render even when reason is None
+        key_input = screen.query_one("#auth-prompt-input", Input)
+        assert key_input is not None
+        assert key_input.display is True
+        instructions = screen.query_one("#auth-prompt-key-instructions", Static)
+        assert instructions is not None
+
+        # Verify F2 toggles advanced controls including Vertex AI checkbox
+        vertex_cb = screen.query_one("#auth-prompt-vertexai-cb", AuthCheckbox)
+        assert vertex_cb.display is False
+        screen.action_toggle_advanced()
+        await pilot.pause()
+        assert vertex_cb.display is True
+
         screen.action_cancel()
         await pilot.pause()
         assert len(app._screen_stack) == 1

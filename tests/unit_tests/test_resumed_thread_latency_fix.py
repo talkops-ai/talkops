@@ -13,12 +13,12 @@ from __future__ import annotations
 from deepagents.backends.protocol import BackendProtocol
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from opscloud.config.manifest import get_option
-from opscloud.config.metadata import build_stream_config
-from opscloud.config.settings import Settings
-from opscloud.middleware.compaction import _create_cli_compaction_middleware
-from opscloud.model.config import MODEL_PROFILES
-from opscloud.model.reasoning import (
+from talkops.config.manifest import get_option
+from talkops.config.metadata import build_stream_config
+from talkops.config.settings import Settings
+from talkops.middleware.compaction import _create_cli_compaction_middleware
+from talkops.model.config import MODEL_PROFILES
+from talkops.model.reasoning import (
     default_effort_for_model,
     is_effort_supported_for_model,
     supported_efforts_for_model,

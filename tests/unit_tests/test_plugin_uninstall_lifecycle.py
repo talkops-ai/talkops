@@ -7,17 +7,17 @@ from pathlib import Path
 import pytest
 from textual.app import App, ComposeResult
 
-from opscloud.plugins.discovery import (
+from talkops.plugins.discovery import (
     uninstall_plugin,
 )
-from opscloud.plugins.store import (
+from talkops.plugins.store import (
     PluginNotFoundError,
     add_installed_plugin,
     load_installed_plugin_entries,
     load_user_enabled_plugin_ids,
     set_plugin_enabled_for_scope,
 )
-from opscloud.ui.widgets.plugin_manager import (
+from talkops.ui.widgets.plugin_manager import (
     PluginManagerScreen,
     _PluginRow,
     _load_manager_state,
@@ -41,30 +41,30 @@ class DummyPluginManagerApp(App):
 @pytest.fixture
 def isolated_plugin_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Set up an isolated plugin and config environment in tmp_path."""
-    config_dir = tmp_path / ".opscloud"
+    config_dir = tmp_path / ".talkops"
     config_dir.mkdir(parents=True, exist_ok=True)
     state_dir = config_dir / ".state"
     state_dir.mkdir(parents=True, exist_ok=True)
     plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setenv("OPSCLOUD_CONFIG_DIR", str(config_dir))
-    monkeypatch.setenv("OPSCLOUD_PLUGIN_DIR", str(plugin_dir))
+    monkeypatch.setenv("TALKOPS_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("TALKOPS_PLUGIN_DIR", str(plugin_dir))
 
-    from opscloud.config import paths
+    from talkops.config import paths
 
     monkeypatch.setattr(
         paths,
         "project_settings_path",
-        lambda pr: pr / ".opscloud" / "settings.json",
+        lambda pr: pr / ".talkops" / "settings.json",
     )
     monkeypatch.setattr(
         paths,
         "project_local_settings_path",
-        lambda pr: pr / ".opscloud" / "settings.local.json",
+        lambda pr: pr / ".talkops" / "settings.local.json",
     )
 
-    from opscloud.plugins import store
+    from talkops.plugins import store
 
     monkeypatch.setattr(store, "_state_dir", lambda: state_dir)
     monkeypatch.setattr(store, "_installed_plugins_path", lambda: state_dir / "installed_plugins.json")
@@ -78,7 +78,7 @@ def isolated_plugin_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def test_cross_project_uninstall_fallback(isolated_plugin_env: Path) -> None:
     """Verify that a local plugin installed in repo_a can be uninstalled from repo_b.
 
-    Forensic reproduction of ISSUE-OPSCLOUD-PLUGIN-002: cross-workspace mismatch
+    Forensic reproduction of ISSUE-TALKOPS-PLUGIN-002: cross-workspace mismatch
     should trigger resilient fallback removal rather than silent no-op.
     """
     repo_a = isolated_plugin_env / "repo_a"
@@ -106,7 +106,7 @@ def test_cross_project_uninstall_fallback(isolated_plugin_env: Path) -> None:
     assert pid in entries_before
     assert entries_before[pid][0].project_path == str(repo_a)
 
-    # Invoke uninstall from repo_b with scope="local" (as happens when running OpsCloud from repo_b)
+    # Invoke uninstall from repo_b with scope="local" (as happens when running TalkOps from repo_b)
     result = uninstall_plugin(pid, scope="local", project_root=repo_b)
     assert result is True
 
@@ -324,7 +324,7 @@ def test_cli_uninstall_command_success_and_failure(
 ) -> None:
     """Verify CLI plugin uninstall command handles success and errors properly."""
     import argparse
-    from opscloud.plugins.commands_cli import execute_plugin_command
+    from talkops.plugins.commands_cli import execute_plugin_command
 
     cache_dir = isolated_plugin_env / "cache" / "cli_test"
     cache_dir.mkdir(parents=True)

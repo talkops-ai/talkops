@@ -5,7 +5,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.types import Overwrite
 
-from opscloud.middleware.cost_tracking import (
+from talkops.middleware.cost_tracking import (
     CostTrackingMiddleware,
     estimate_cost,
     pricing_data_available,
@@ -170,7 +170,7 @@ def test_cost_tracking_middleware_subagent_cost_transfers():
 def test_active_session_thread_id_fallback():
     from uuid import uuid4
     from langchain_core.outputs import LLMResult, ChatGeneration
-    from opscloud.middleware.cost_tracking import (
+    from talkops.middleware.cost_tracking import (
         ACTIVE_SESSION_THREAD_ID,
         _RECORDER,
         _drain_recorded_costs,
@@ -215,7 +215,7 @@ def test_active_session_thread_id_fallback():
 
 def test_cost_tracking_middleware_wrap_model_call():
     from typing import Any
-    from opscloud.middleware.cost_tracking import (
+    from talkops.middleware.cost_tracking import (
         ACTIVE_SESSION_THREAD_ID,
         CostTrackingMiddleware,
     )
@@ -245,7 +245,7 @@ def test_cost_tracking_middleware_wrap_model_call():
 @pytest.mark.asyncio
 async def test_cost_tracking_middleware_awrap_model_call():
     from typing import Any
-    from opscloud.middleware.cost_tracking import (
+    from talkops.middleware.cost_tracking import (
         ACTIVE_SESSION_THREAD_ID,
         CostTrackingMiddleware,
     )
@@ -274,7 +274,7 @@ async def test_cost_tracking_middleware_awrap_model_call():
 def test_cost_tracking_zero_cost_token_transfer_claim():
     """Verify that transfers with 0 cost but positive tokens are claimed."""
     from typing import Any
-    from opscloud.middleware.cost_tracking import CostTrackingMiddleware
+    from talkops.middleware.cost_tracking import CostTrackingMiddleware
 
     root_mw = CostTrackingMiddleware(nested=False)
     transfers = {

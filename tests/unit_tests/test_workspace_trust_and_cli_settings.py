@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from opscloud.config.cli_settings import (
+from talkops.config.cli_settings import (
     CliSetting,
     CliSettingsManager,
     PermissionsSetting,
@@ -24,8 +24,8 @@ from opscloud.config.cli_settings import (
     resolve_path_no_slash,
     validate_cli_settings,
 )
-from opscloud.ui.app import OpsCloudApp
-from opscloud.ui.widgets.workspace_trust import (
+from talkops.ui.app import TalkOpsApp
+from talkops.ui.widgets.workspace_trust import (
     SettingsErrorScreen,
     WorkspaceTrustScreen,
 )
@@ -34,9 +34,9 @@ from opscloud.ui.widgets.workspace_trust import (
 def _patch_startup_heavy_ops():
     """Patch heavy background services during TUI mount tests."""
     return (
-        patch.object(OpsCloudApp, "_start_server_background", new_callable=AsyncMock),
-        patch.object(OpsCloudApp, "_discover_startup_skills", new_callable=AsyncMock),
-        patch.object(OpsCloudApp, "_preload_mcp_metadata_background", new_callable=AsyncMock),
+        patch.object(TalkOpsApp, "_start_server_background", new_callable=AsyncMock),
+        patch.object(TalkOpsApp, "_discover_startup_skills", new_callable=AsyncMock),
+        patch.object(TalkOpsApp, "_preload_mcp_metadata_background", new_callable=AsyncMock),
     )
 
 
@@ -112,14 +112,14 @@ class TestCliSettingParseValidateMarshalMerge:
 
     def test_three_way_merge_cli_settings(self):
         base = CliSetting(
-            color_scheme="OpsCloud Dark",
+            color_scheme="TalkOps Dark",
             trusted_workspaces=["/ws/a"],
             permissions=PermissionsSetting(allow=["Bash(git status)"]),
             unknown_fields={"keepMe": 1},
         )
         # Disk concurrently added /ws/disk and changed model
         disk = CliSetting(
-            color_scheme="OpsCloud Dark",
+            color_scheme="TalkOps Dark",
             model="claude-sonnet-4-5",
             trusted_workspaces=["/ws/a", "/ws/disk"],
             permissions=PermissionsSetting(allow=["Bash(git status)", "Read(*)"]),
@@ -176,7 +176,7 @@ class TestCliSettingsManagerWorkspaceTrust:
     """Tests for CliSettingsManager workspace trust persistence and project evaluation."""
 
     def test_untrusted_then_trust_workspace_persists_to_settings_json(self, tmp_path: Path):
-        settings_file = tmp_path / ".opscloud" / "settings.json"
+        settings_file = tmp_path / ".talkops" / "settings.json"
         workspace = tmp_path / "untrusted_repo"
         workspace.mkdir()
 
@@ -203,7 +203,7 @@ class TestCliSettingsManagerWorkspaceTrust:
         assert mgr2.workspace_trusted() is True
 
     def test_workspace_in_saved_project_is_trusted(self, tmp_path: Path):
-        from opscloud.config import paths
+        from talkops.config import paths
 
         settings_file = paths.DATA_DIR / "settings.json"
         projects_dir = paths.DATA_DIR / "projects"
@@ -212,7 +212,7 @@ class TestCliSettingsManagerWorkspaceTrust:
         project_ws = tmp_path / "saved_project_ws"
         project_ws.mkdir(parents=True)
 
-        # Write a project definition in ~/.opscloud/projects/my_proj.json
+        # Write a project definition in ~/.talkops/projects/my_proj.json
         (projects_dir / "my_proj.json").write_text(
             json.dumps({"name": "my_proj", "workspaces": [str(project_ws)]}),
             encoding="utf-8",
@@ -225,7 +225,7 @@ class TestCliSettingsManagerWorkspaceTrust:
         assert mgr.workspace_trusted() is True
 
     def test_write_cli_settings_refuses_to_overwrite_corrupted_disk_file(self, tmp_path: Path):
-        settings_file = tmp_path / ".opscloud" / "settings.json"
+        settings_file = tmp_path / ".talkops" / "settings.json"
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         settings_file.write_text("{corrupted json", encoding="utf-8")
 
@@ -241,7 +241,7 @@ class TestCliSettingsManagerWorkspaceTrust:
 
 
 class TestWorkspaceTrustTUI:
-    """Integration tests for WorkspaceTrustScreen and SettingsErrorScreen in OpsCloudApp."""
+    """Integration tests for WorkspaceTrustScreen and SettingsErrorScreen in TalkOpsApp."""
 
     @pytest.mark.asyncio
     async def test_untrusted_workspace_shows_prompt_and_accepting_persists_trust(
@@ -253,7 +253,7 @@ class TestWorkspaceTrustTUI:
 
         p1, p2, p3 = _patch_startup_heavy_ops()
         with p1, p2, p3:
-            app = OpsCloudApp(cwd=workspace, check_workspace_trust=True)
+            app = TalkOpsApp(cwd=workspace, check_workspace_trust=True)
             async with app.run_test(size=(100, 30)) as pilot:
                 await pilot.pause()
                 # WorkspaceTrustScreen should be active
@@ -275,7 +275,7 @@ class TestWorkspaceTrustTUI:
         reset_cli_settings_manager_for_testing()
         p1, p2, p3 = _patch_startup_heavy_ops()
         with p1, p2, p3:
-            app2 = OpsCloudApp(cwd=workspace, check_workspace_trust=True)
+            app2 = TalkOpsApp(cwd=workspace, check_workspace_trust=True)
             async with app2.run_test(size=(100, 30)) as pilot:
                 await pilot.pause()
                 assert not isinstance(app2.screen, WorkspaceTrustScreen)
@@ -291,7 +291,7 @@ class TestWorkspaceTrustTUI:
 
         p1, p2, p3 = _patch_startup_heavy_ops()
         with p1, p2, p3:
-            app = OpsCloudApp(cwd=workspace, check_workspace_trust=True)
+            app = TalkOpsApp(cwd=workspace, check_workspace_trust=True)
             async with app.run_test(size=(100, 30)) as pilot:
                 await pilot.pause()
                 assert isinstance(app.screen, WorkspaceTrustScreen)
@@ -310,7 +310,7 @@ class TestWorkspaceTrustTUI:
     async def test_corrupted_settings_shows_error_screen_then_quarantines_and_prompts_trust(
         self, tmp_path: Path
     ):
-        from opscloud.config import paths
+        from talkops.config import paths
 
         workspace = tmp_path / "workspace_after_corrupt"
         workspace.mkdir()
@@ -320,7 +320,7 @@ class TestWorkspaceTrustTUI:
 
         p1, p2, p3 = _patch_startup_heavy_ops()
         with p1, p2, p3:
-            app = OpsCloudApp(cwd=workspace, check_workspace_trust=True)
+            app = TalkOpsApp(cwd=workspace, check_workspace_trust=True)
             async with app.run_test(size=(100, 30)) as pilot:
                 await pilot.pause()
                 # Phase 3 (SettingsErrorScreen) takes precedence before Phase 5 (WorkspaceTrustScreen)

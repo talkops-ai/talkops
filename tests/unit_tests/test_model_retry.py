@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from langgraph.errors import GraphBubbleUp
 
-from opscloud.middleware.model_retry import (
+from talkops.middleware.model_retry import (
     CodeModelRetryMiddleware,
     compute_delay,
     is_transient_error,

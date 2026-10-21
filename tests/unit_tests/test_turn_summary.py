@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from opscloud.ui.widgets.messages import TurnSummary, _format_turn_duration
+from talkops.ui.widgets.messages import TurnSummary, _format_turn_duration
 
 
 @pytest.mark.parametrize(

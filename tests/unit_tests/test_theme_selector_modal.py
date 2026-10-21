@@ -6,8 +6,8 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import OptionList
 
-from opscloud.ui.theme import get_registry
-from opscloud.ui.widgets.theme_selector import ThemeSelectorScreen
+from talkops.ui.theme import get_registry
+from talkops.ui.widgets.theme_selector import ThemeSelectorScreen
 
 
 class DummyThemeApp(App[None]):
@@ -30,8 +30,8 @@ async def test_theme_selector_screen_mount_and_options() -> None:
     assert len(registry) > 0
 
     screen = ThemeSelectorScreen(
-        current_theme="opscloud-dark",
-        terminal_default="opscloud-dark",
+        current_theme="talkops-dark",
+        terminal_default="talkops-dark",
     )
     app = DummyThemeApp(screen)
 

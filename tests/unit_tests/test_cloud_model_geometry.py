@@ -9,20 +9,20 @@ from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Input, Static
 
-from opscloud.config.cloud_profiles import AWSProfileInfo
-from opscloud.ui.theme import get_css_variable_defaults, get_theme_colors, register_app_themes
-from opscloud.ui.widgets.cloud_selector import CloudProfileSelectorScreen, MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS
-from opscloud.ui.widgets.model_selector import ModelSelectorScreen
-from opscloud.ui.widgets.modal_base import OpsModalScreen
+from talkops.config.cloud_profiles import AWSProfileInfo
+from talkops.ui.theme import get_css_variable_defaults, get_theme_colors, register_app_themes
+from talkops.ui.widgets.cloud_selector import CloudProfileSelectorScreen, MAX_VISIBLE_ROWS, MIN_VISIBLE_ROWS
+from talkops.ui.widgets.model_selector import ModelSelectorScreen
+from talkops.ui.widgets.modal_base import OpsModalScreen
 
 
 class _ThemedModalApp(App):
-    """App carrying OpsCloud theme variables for testing modal screens."""
+    """App carrying TalkOps theme variables for testing modal screens."""
 
     def __init__(self, screen_to_mount: OpsModalScreen | None = None) -> None:
         super().__init__()
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
         self._screen_to_mount = screen_to_mount
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
@@ -58,7 +58,7 @@ def _make_mock_models(count: int) -> list[tuple[str, str, str]]:
 async def test_cloud_selector_few_results_hugs_height():
     """When only 1 profile exists, list height shrinks to MIN_VISIBLE_ROWS."""
     mock_profs = _make_mock_profiles(1)
-    with patch("opscloud.ui.widgets.cloud_selector.list_aws_profiles", return_value=mock_profs):
+    with patch("talkops.ui.widgets.cloud_selector.list_aws_profiles", return_value=mock_profs):
         modal = CloudProfileSelectorScreen()
         app = _ThemedModalApp(modal)
         async with app.run_test(size=(120, 60)) as pilot:
@@ -73,7 +73,7 @@ async def test_cloud_selector_few_results_hugs_height():
 async def test_cloud_selector_many_results_caps_at_24():
     """When 35 profiles exist, list height expands to MAX_VISIBLE_ROWS (24)."""
     mock_profs = _make_mock_profiles(35)
-    with patch("opscloud.ui.widgets.cloud_selector.list_aws_profiles", return_value=mock_profs):
+    with patch("talkops.ui.widgets.cloud_selector.list_aws_profiles", return_value=mock_profs):
         modal = CloudProfileSelectorScreen()
         app = _ThemedModalApp(modal)
         async with app.run_test(size=(120, 60)) as pilot:
@@ -89,7 +89,7 @@ async def test_cloud_selector_filter_shrinks_and_clearing_expands():
     mock_profs = [AWSProfileInfo(name="unique-target-profile")] + [
         AWSProfileInfo(name=f"other-cluster-{i:02d}") for i in range(35)
     ]
-    with patch("opscloud.ui.widgets.cloud_selector.list_aws_profiles", return_value=mock_profs):
+    with patch("talkops.ui.widgets.cloud_selector.list_aws_profiles", return_value=mock_profs):
         modal = CloudProfileSelectorScreen()
         app = _ThemedModalApp(modal)
         async with app.run_test(size=(120, 60)) as pilot:
@@ -117,7 +117,7 @@ async def test_cloud_selector_filter_shrinks_and_clearing_expands():
 async def test_cloud_selector_short_terminal_bounds_list():
     """On short terminal (20 rows), list is bounded by viewport and dialog fits."""
     mock_profs = _make_mock_profiles(35)
-    with patch("opscloud.ui.widgets.cloud_selector.list_aws_profiles", return_value=mock_profs):
+    with patch("talkops.ui.widgets.cloud_selector.list_aws_profiles", return_value=mock_profs):
         modal = CloudProfileSelectorScreen()
         app = _ThemedModalApp(modal)
         async with app.run_test(size=(100, 20)) as pilot:
@@ -135,7 +135,7 @@ async def test_cloud_selector_short_terminal_bounds_list():
 async def test_model_selector_few_results_hugs_height():
     """When only 1 model exists, model-list shrinks to MIN_VISIBLE_ROWS."""
     mock_models = _make_mock_models(1)
-    with patch("opscloud.ui.widgets.model_selector.get_available_models_list", return_value=mock_models):
+    with patch("talkops.ui.widgets.model_selector.get_available_models_list", return_value=mock_models):
         modal = ModelSelectorScreen()
         app = _ThemedModalApp(modal)
         async with app.run_test(size=(120, 60)) as pilot:
@@ -149,7 +149,7 @@ async def test_model_selector_few_results_hugs_height():
 async def test_model_selector_many_results_caps_at_24():
     """When 35 models exist, model-list expands to MAX_VISIBLE_ROWS (24)."""
     mock_models = _make_mock_models(35)
-    with patch("opscloud.ui.widgets.model_selector.get_available_models_list", return_value=mock_models):
+    with patch("talkops.ui.widgets.model_selector.get_available_models_list", return_value=mock_models):
         modal = ModelSelectorScreen()
         modal._recommended_only = False
         app = _ThemedModalApp(modal)
@@ -164,7 +164,7 @@ async def test_model_selector_many_results_caps_at_24():
 async def test_model_selector_filter_shrinks_and_clearing_expands():
     """Filtering model selector shrinks list; clearing filter expands back."""
     mock_models = _make_mock_models(35)
-    with patch("opscloud.ui.widgets.model_selector.get_available_models_list", return_value=mock_models):
+    with patch("talkops.ui.widgets.model_selector.get_available_models_list", return_value=mock_models):
         modal = ModelSelectorScreen()
         modal._recommended_only = False
         app = _ThemedModalApp(modal)
@@ -192,7 +192,7 @@ async def test_model_selector_filter_shrinks_and_clearing_expands():
 async def test_model_selector_short_terminal_bounds_list():
     """On short terminal (20 rows), model-list is bounded by viewport and dialog fits."""
     mock_models = _make_mock_models(35)
-    with patch("opscloud.ui.widgets.model_selector.get_available_models_list", return_value=mock_models):
+    with patch("talkops.ui.widgets.model_selector.get_available_models_list", return_value=mock_models):
         modal = ModelSelectorScreen()
         modal._recommended_only = False
         app = _ThemedModalApp(modal)

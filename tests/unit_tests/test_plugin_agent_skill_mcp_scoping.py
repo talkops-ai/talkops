@@ -14,13 +14,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from langchain_core.tools import tool
-from opscloud.agent.factory import create_opscloud_agent
-from opscloud.mcp.discovery import MCPDiscovery
-from opscloud.middleware.mcp_context import MCPContextMiddleware
-from opscloud.middleware.mcp_middleware import MCPToolMiddleware
-from opscloud.middleware.skills import PluginSkillsMiddleware
-from opscloud.middleware.tool_filter import ToolFilterMiddleware
-from opscloud.skills.registry import SkillRegistry
+from talkops.agent.factory import create_talkops_agent
+from talkops.mcp.discovery import MCPDiscovery
+from talkops.middleware.mcp_context import MCPContextMiddleware
+from talkops.middleware.mcp_middleware import MCPToolMiddleware
+from talkops.middleware.skills import PluginSkillsMiddleware
+from talkops.middleware.tool_filter import ToolFilterMiddleware
+from talkops.skills.registry import SkillRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +125,7 @@ def _create_vertical_plugin(plugins_dir: Path, name: str = "equity-research") ->
 
 def test_subagent_mcp_configs_are_namespaced(tmp_path: Path) -> None:
     """Two agents may safely reuse a raw MCP server name."""
-    from opscloud.plugins.adapters.mcp import subagent_mcp_configs
+    from talkops.plugins.adapters.mcp import subagent_mcp_configs
 
     bundle = tmp_path / "agent"
     bundle.mkdir()
@@ -143,8 +143,8 @@ def test_subagent_mcp_configs_are_namespaced(tmp_path: Path) -> None:
 
 def test_prepare_subagents_mcp_uses_one_preload_batch() -> None:
     """MCP I/O is globally batched instead of serialized per subagent."""
-    from opscloud.mcp.preload import clear_cached_mcp_server_infos
-    from opscloud.plugins.adapters.mcp import prepare_subagents_mcp
+    from talkops.mcp.preload import clear_cached_mcp_server_infos
+    from talkops.plugins.adapters.mcp import prepare_subagents_mcp
 
     clear_cached_mcp_server_infos()
     subagents = {
@@ -166,7 +166,7 @@ def test_prepare_subagents_mcp_uses_one_preload_batch() -> None:
         },
     }
 
-    with patch("opscloud.mcp.preload.preload_mcp_metadata", new_callable=AsyncMock) as preload:
+    with patch("talkops.mcp.preload.preload_mcp_metadata", new_callable=AsyncMock) as preload:
         preload.return_value = []
         prepared = prepare_subagents_mcp(subagents)
 
@@ -250,10 +250,10 @@ async def test_agent_factory_dynamic_subagents_and_coordinator_attachment(tmp_pa
     mock_model.bind_tools = MagicMock(return_value=mock_model)
     mock_model.profile = {}
 
-    with patch("opscloud.agent.factory.create_deep_agent") as mock_create:
+    with patch("talkops.agent.factory.create_deep_agent") as mock_create:
         mock_create.return_value = MagicMock()
 
-        agent_graph, backend = create_opscloud_agent(
+        agent_graph, backend = create_talkops_agent(
             model=mock_model,
             cwd=tmp_path,
             auto_approve=True,
@@ -366,8 +366,8 @@ async def test_subagent_mcp_tools_and_middleware_scoping_with_preloaded_tools(tm
     mock_model.profile = {}
 
     with (
-        patch("opscloud.plugins.adapters.mcp.prepare_subagents_mcp") as mock_prep_mcp,
-        patch("opscloud.agent.factory.create_deep_agent") as mock_create,
+        patch("talkops.plugins.adapters.mcp.prepare_subagents_mcp") as mock_prep_mcp,
+        patch("talkops.agent.factory.create_deep_agent") as mock_create,
     ):
         mock_info1 = MagicMock()
         mock_info1.name = "aws-mcp"
@@ -384,7 +384,7 @@ async def test_subagent_mcp_tools_and_middleware_scoping_with_preloaded_tools(tm
         }
         mock_create.return_value = MagicMock()
 
-        agent_graph, backend = create_opscloud_agent(
+        agent_graph, backend = create_talkops_agent(
             model=mock_model,
             cwd=tmp_path,
             auto_approve=True,
@@ -446,10 +446,10 @@ async def test_subagent_mcp_tools_and_middleware_scoping_with_preloaded_tools(tm
 def test_coordinator_deep_agent_mcp_binding_and_isolation(tmp_path: Path):
     """Verify coordinator deep agent binds MCP tools & middleware without leaking subagent MCP tools."""
     from langchain_core.tools import tool
-    from opscloud.agent.factory import create_opscloud_agent
-    from opscloud.middleware.mcp_context import MCPContextMiddleware
-    from opscloud.middleware.mcp_middleware import MCPToolMiddleware
-    from opscloud.middleware.server_hooks import ServerHooksMiddleware
+    from talkops.agent.factory import create_talkops_agent
+    from talkops.middleware.mcp_context import MCPContextMiddleware
+    from talkops.middleware.mcp_middleware import MCPToolMiddleware
+    from talkops.middleware.server_hooks import ServerHooksMiddleware
 
     # Coordinator's MCP tool (e.g. from a system/partner plugin or .mcp.json)
     @tool("github_create_issue")
@@ -493,8 +493,8 @@ def test_coordinator_deep_agent_mcp_binding_and_isolation(tmp_path: Path):
     mock_model.profile = {}
 
     with (
-        patch("opscloud.plugins.adapters.mcp.prepare_subagents_mcp") as mock_prep_mcp,
-        patch("opscloud.agent.factory.create_deep_agent") as mock_create,
+        patch("talkops.plugins.adapters.mcp.prepare_subagents_mcp") as mock_prep_mcp,
+        patch("talkops.agent.factory.create_deep_agent") as mock_create,
     ):
         mock_prep_mcp.return_value = {
             "finops": (
@@ -506,7 +506,7 @@ def test_coordinator_deep_agent_mcp_binding_and_isolation(tmp_path: Path):
         mock_create.return_value = MagicMock()
 
         # Invoke factory with coordinator MCP tools and config
-        create_opscloud_agent(
+        create_talkops_agent(
             model=mock_model,
             cwd=tmp_path,
             auto_approve=True,
@@ -572,8 +572,8 @@ def test_coordinator_deep_agent_mcp_binding_and_isolation(tmp_path: Path):
 
 def test_mcp_context_middleware_filters_by_config() -> None:
     """Verify MCPContextMiddleware only includes servers present in mcp_config, filtering out leaked subagents."""
-    from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
-    from opscloud.middleware.mcp_context import MCPContextMiddleware
+    from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+    from talkops.middleware.mcp_context import MCPContextMiddleware
 
     coord_info = MCPServerInfo(
         name="plugin__aws-core__aws-mcp",
@@ -608,10 +608,10 @@ def test_mcp_context_middleware_filters_by_config() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_opscloud_agent_async_scopes_mcp_server_info_to_coordinator(tmp_path: Path) -> None:
-    """Verify create_opscloud_agent_async only passes coordinator MCP servers to kwargs['mcp_server_info']."""
-    from opscloud.agent.factory import create_opscloud_agent_async
-    from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+async def test_create_talkops_agent_async_scopes_mcp_server_info_to_coordinator(tmp_path: Path) -> None:
+    """Verify create_talkops_agent_async only passes coordinator MCP servers to kwargs['mcp_server_info']."""
+    from talkops.agent.factory import create_talkops_agent_async
+    from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
 
     project_context = MagicMock(user_cwd=tmp_path, project_root=tmp_path)
     coord_info = MCPServerInfo(
@@ -626,20 +626,20 @@ async def test_create_opscloud_agent_async_scopes_mcp_server_info_to_coordinator
     )
 
     with (
-        patch("opscloud.agent.factory.list_subagents", return_value=[]),
-        patch("opscloud.plugins.adapters.mcp.prepare_subagents_mcp_async", new_callable=AsyncMock, return_value={}) as _,
+        patch("talkops.agent.factory.list_subagents", return_value=[]),
+        patch("talkops.plugins.adapters.mcp.prepare_subagents_mcp_async", new_callable=AsyncMock, return_value={}) as _,
         patch(
-            "opscloud.mcp.discovery.discover_mcp_configs",
+            "talkops.mcp.discovery.discover_mcp_configs",
             return_value={"plugin__aws-core__aws-mcp": {"command": "uvx", "args": ["aws-mcp"]}},
         ),
-        patch("opscloud.mcp.preload.preload_mcp_metadata", new_callable=AsyncMock, return_value=[coord_info]),
-        patch("opscloud.mcp.preload.get_cached_mcp_server_infos", return_value=[coord_info, sub_info]),
-        patch("opscloud.mcp.session_manager.MCPSessionManager.get_instance") as mock_mgr,
-        patch("opscloud.mcp.session_manager.build_mcp_tools_from_server_infos", return_value=[]),
-        patch("opscloud.agent.factory.create_opscloud_agent", return_value=(MagicMock(), MagicMock())) as compile_agent,
+        patch("talkops.mcp.preload.preload_mcp_metadata", new_callable=AsyncMock, return_value=[coord_info]),
+        patch("talkops.mcp.preload.get_cached_mcp_server_infos", return_value=[coord_info, sub_info]),
+        patch("talkops.mcp.session_manager.MCPSessionManager.get_instance") as mock_mgr,
+        patch("talkops.mcp.session_manager.build_mcp_tools_from_server_infos", return_value=[]),
+        patch("talkops.agent.factory.create_talkops_agent", return_value=(MagicMock(), MagicMock())) as compile_agent,
     ):
         mock_mgr.return_value.register_servers = MagicMock()
-        await create_opscloud_agent_async(
+        await create_talkops_agent_async(
             model=MagicMock(),
             cwd=tmp_path,
             project_context=project_context,

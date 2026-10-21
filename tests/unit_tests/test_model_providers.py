@@ -1,7 +1,7 @@
-"""Unit tests for OpsCloud 22-provider model catalog, spec resolution, and reasoning effort."""
+"""Unit tests for TalkOps 22-provider model catalog, spec resolution, and reasoning effort."""
 
 import pytest
-from opscloud.model.config import (
+from talkops.model.config import (
     NO_AUTH_REQUIRED_PROVIDERS,
     PROVIDER_API_KEY_ENV,
     detect_provider,
@@ -9,9 +9,9 @@ from opscloud.model.config import (
     get_provider_display_name,
     resolve_model_spec,
 )
-from opscloud.exceptions import ModelConfigError
-from opscloud.model.factory import clear_model_cache, create_model
-from opscloud.model.reasoning import (
+from talkops.exceptions import ModelConfigError
+from talkops.model.factory import clear_model_cache, create_model
+from talkops.model.reasoning import (
     default_effort_for_model,
     is_effort_supported_for_model,
     supported_efforts_for_model,
@@ -107,15 +107,15 @@ def test_format_token_counts():
 
 
 def test_create_model_missing_credentials(monkeypatch, tmp_path):
-    from opscloud.config import paths
-    from opscloud.config.settings import reset_settings_for_testing
-    from opscloud.model.factory import clear_model_cache
+    from talkops.config import paths
+    from talkops.config.settings import reset_settings_for_testing
+    from talkops.model.factory import clear_model_cache
 
     clear_model_cache()
     reset_settings_for_testing()
     monkeypatch.setattr(paths, "GLOBAL_ENV_PATH", tmp_path / "nonexistent_env")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("OPSCLOUD_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("TALKOPS_ANTHROPIC_API_KEY", raising=False)
 
     with pytest.raises(Exception) as exc_info:
         create_model("anthropic:claude-3-5-sonnet")
@@ -123,8 +123,8 @@ def test_create_model_missing_credentials(monkeypatch, tmp_path):
 
 
 def test_create_model_ollama_local(monkeypatch):
-    from opscloud.exceptions import MissingProviderPackageError
-    from opscloud.model.factory import clear_model_cache
+    from talkops.exceptions import MissingProviderPackageError
+    from talkops.model.factory import clear_model_cache
     from unittest.mock import MagicMock
 
     clear_model_cache()
@@ -147,7 +147,7 @@ def test_create_model_ollama_local(monkeypatch):
 
 
 def test_bedrock_model_detection_and_resolution():
-    from opscloud.model.config import is_bedrock_model_id, normalize_model_spec
+    from talkops.model.config import is_bedrock_model_id, normalize_model_spec
 
     # Bare Bedrock IDs with version colons
     sonnet_v2 = "anthropic.claude-3-5-sonnet-20241022-v2:0"
@@ -179,8 +179,8 @@ def test_bedrock_model_detection_and_resolution():
 
 
 def test_bedrock_auth_status_and_kwargs(monkeypatch):
-    from opscloud.model.config import ProviderAuthState, get_provider_auth_status
-    from opscloud.model.factory import _get_provider_kwargs
+    from talkops.model.config import ProviderAuthState, get_provider_auth_status
+    from talkops.model.factory import _get_provider_kwargs
 
     # Clean env
     monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
@@ -210,10 +210,10 @@ def test_bedrock_auth_status_and_kwargs(monkeypatch):
 
 def test_no_default_model_or_provider_without_user_selection(monkeypatch):
     """Ensure that the system never imposes a default model or provider on the user."""
-    from opscloud.config.settings import get_settings
-    from opscloud.exceptions import NoCredentialsConfiguredError
-    from opscloud.model.config import ModelConfig
-    from opscloud.model.factory import _get_default_model_spec
+    from talkops.config.settings import get_settings
+    from talkops.exceptions import NoCredentialsConfiguredError
+    from talkops.model.config import ModelConfig
+    from talkops.model.factory import _get_default_model_spec
 
     # Clear any credentials that might be in env
     for k in (
@@ -228,14 +228,14 @@ def test_no_default_model_or_provider_without_user_selection(monkeypatch):
     monkeypatch.setattr(s, "model", None)
 
     # ModelConfig.load() has no default forced
-    monkeypatch.setattr("opscloud.config.toml_config.load_default_model", lambda: None)
-    monkeypatch.setattr("opscloud.config.toml_config.load_recent_model", lambda: None)
+    monkeypatch.setattr("talkops.config.toml_config.load_default_model", lambda: None)
+    monkeypatch.setattr("talkops.config.toml_config.load_recent_model", lambda: None)
     cfg = ModelConfig.load()
     assert cfg.default_model is None
     assert cfg.recent_model is None
 
     # has_provider_credentials returns False for key-based providers when keys are unset
-    monkeypatch.setattr("opscloud.model.factory.has_provider_credentials", lambda prov: False)
+    monkeypatch.setattr("talkops.model.factory.has_provider_credentials", lambda prov: False)
 
     # When no model is configured and no credentials exist, _get_default_model_spec raises
     with pytest.raises(NoCredentialsConfiguredError, match="No model is configured yet"):
@@ -243,7 +243,7 @@ def test_no_default_model_or_provider_without_user_selection(monkeypatch):
 
 
 def test_unified_model_config_consistency():
-    from opscloud.model.config import (
+    from talkops.model.config import (
         AVAILABLE_MODELS,
         DEFAULT_PROVIDER_PRIORITY,
         RECOMMENDED_SPECS,
@@ -284,7 +284,7 @@ def test_unified_model_config_consistency():
 
 
 def test_model_selector_prioritizes_active_and_shows_all_curated_models():
-    from opscloud.ui.widgets.model_selector import ModelSelectorScreen
+    from talkops.ui.widgets.model_selector import ModelSelectorScreen
 
     screen = ModelSelectorScreen(
         current_model="gemini-3.7-flash",
@@ -308,7 +308,7 @@ def test_model_selector_prioritizes_active_and_shows_all_curated_models():
         groups.setdefault(prov, []).append((spec, name, prov))
 
     def _sort_key(prov: str):
-        from opscloud.model.config import DEFAULT_PROVIDER_PRIORITY, get_provider_auth_status
+        from talkops.model.config import DEFAULT_PROVIDER_PRIORITY, get_provider_auth_status
         if prov == "dynamic":
             return (0, 0, prov)
         if screen._current_provider and prov == screen._current_provider:
@@ -325,8 +325,8 @@ def test_model_selector_prioritizes_active_and_shows_all_curated_models():
 
 
 def test_pool_selector_and_model_selector_model_consistency():
-    from opscloud.model.config import get_curated_models_for_provider
-    from opscloud.ui.widgets.pool_selector import PoolSelectorScreen
+    from talkops.model.config import get_curated_models_for_provider
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
     ps = PoolSelectorScreen(active_provider="google_genai")
     pool_options = ps._get_model_options_for_provider("google_genai")
@@ -338,7 +338,7 @@ def test_pool_selector_and_model_selector_model_consistency():
 
 
 def test_model_option_hover_and_in_place_selection():
-    from opscloud.ui.widgets.model_selector import ModelOption
+    from talkops.ui.widgets.model_selector import ModelOption
 
     opt = ModelOption(
         label="  Gemini 3.7 Flash",
@@ -365,7 +365,7 @@ def test_model_option_hover_and_in_place_selection():
 
 
 def test_model_selector_smooth_navigation_and_jev_system1():
-    from opscloud.ui.widgets.model_selector import ModelOption, ModelSelectorScreen
+    from talkops.ui.widgets.model_selector import ModelOption, ModelSelectorScreen
 
     screen = ModelSelectorScreen(
         current_model="gemini-3.5-flash",
@@ -420,11 +420,11 @@ def test_model_selector_smooth_navigation_and_jev_system1():
 
 async def test_model_selector_dismiss_idempotency_and_auth_check(monkeypatch: pytest.MonkeyPatch):
     """Verify ModelSelectorScreen dismissal is idempotent and prevents ScreenStackError."""
-    from opscloud.ui.app import OpsCloudApp
-    from opscloud.ui.widgets.model_selector import ModelSelectorScreen
+    from talkops.ui.app import TalkOpsApp
+    from talkops.ui.widgets.model_selector import ModelSelectorScreen
 
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key-mock")
-    app = OpsCloudApp()
+    app = TalkOpsApp()
     async with app.run_test(headless=True) as pilot:
         screen = ModelSelectorScreen()
         results = []
@@ -448,7 +448,7 @@ async def test_model_selector_dismiss_idempotency_and_auth_check(monkeypatch: py
 
 def test_model_option_multi_click_suppression(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify ModelOption ignores rapid multi-clicks (chain > 1)."""
-    from opscloud.ui.widgets.model_selector import ModelOption
+    from talkops.ui.widgets.model_selector import ModelOption
     from textual.events import Click
     from textual.message import Message
 
@@ -481,10 +481,10 @@ def test_model_option_multi_click_suppression(monkeypatch: pytest.MonkeyPatch) -
 
 
 async def test_app_pop_screen_guards_against_screen_stack_error():
-    """Verify OpsCloudApp.pop_screen does not raise ScreenStackError when stack size <= 1."""
-    from opscloud.ui.app import OpsCloudApp
+    """Verify TalkOpsApp.pop_screen does not raise ScreenStackError when stack size <= 1."""
+    from talkops.ui.app import TalkOpsApp
 
-    app = OpsCloudApp()
+    app = TalkOpsApp()
     async with app.run_test(headless=True):
         assert len(app._screen_stack) == 1
         # Should not raise ScreenStackError!
@@ -494,8 +494,8 @@ async def test_app_pop_screen_guards_against_screen_stack_error():
 
 def test_gemini_3_8_flash_spec_and_reasoning_profiles():
     """Verify Gemini 3.8 Flash registration, capabilities, and reasoning effort across providers."""
-    from opscloud.model.config import get_model_profile
-    from opscloud.model.reasoning import (
+    from talkops.model.config import get_model_profile
+    from talkops.model.reasoning import (
         default_effort_for_model,
         is_effort_supported_for_model,
         supported_efforts_for_model,
@@ -539,11 +539,11 @@ def test_claude_on_google_vertexai_raises_actionable_error():
 
 async def test_model_selector_batch_mount_navigation_and_fuzzy_search():
     """Verify batch mount, wrap-around keyboard navigation, fuzzy search, and page navigation."""
-    from opscloud.ui.app import OpsCloudApp
-    from opscloud.ui.widgets.model_selector import ModelSelectorScreen
+    from talkops.ui.app import TalkOpsApp
+    from talkops.ui.widgets.model_selector import ModelSelectorScreen
     from textual.widgets import Input
 
-    app = OpsCloudApp()
+    app = TalkOpsApp()
     async with app.run_test(headless=True) as pilot:
         screen = ModelSelectorScreen()
         app.push_screen(screen)

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
-from opscloud.middleware.tool_filter import (
+from talkops.middleware.tool_filter import (
     ToolFilterMiddleware,
     _expand_tool_patterns,
     _parse_mcp_pattern,
@@ -314,7 +314,7 @@ def test_subagent_scoped_mcp_tools_matching_and_model_pruning():
     mock_presigned_tool = MagicMock()
     mock_presigned_tool.name = "subagent__aws-cloud-securit_aws___get_presigned_url_d5d22cc1a56b"
     mock_presigned_tool.metadata = {
-        "_opscloud_mcp": True,
+        "_talkops_mcp": True,
         "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__aws-mcp",
         "_mcp_original_name": "aws___get_presigned_url",
     }
@@ -322,7 +322,7 @@ def test_subagent_scoped_mcp_tools_matching_and_model_pruning():
     mock_iam_tool = MagicMock()
     mock_iam_tool.name = "subagent__aws-cloud-security-engineer_ta_list_users_77000c74ca84"
     mock_iam_tool.metadata = {
-        "_opscloud_mcp": True,
+        "_talkops_mcp": True,
         "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__iam",
         "_mcp_original_name": "list_users",
     }
@@ -330,7 +330,7 @@ def test_subagent_scoped_mcp_tools_matching_and_model_pruning():
     mock_unrelated_tool = MagicMock()
     mock_unrelated_tool.name = "subagent__other-subagent_other__unrelated_tool"
     mock_unrelated_tool.metadata = {
-        "_opscloud_mcp": True,
+        "_talkops_mcp": True,
         "_mcp_server": "subagent__other-subagent__other-mcp",
         "_mcp_original_name": "unrelated_tool",
     }
@@ -382,7 +382,7 @@ def test_subagent_scoped_mcp_tools_with_server_colon_and_bare_name_styles():
     mock_presigned_tool = MagicMock()
     mock_presigned_tool.name = "subagent__aws-cloud-securit_aws___get_presigned_url_d5d22cc1a56b"
     mock_presigned_tool.metadata = {
-        "_opscloud_mcp": True,
+        "_talkops_mcp": True,
         "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__aws-mcp",
         "_mcp_base_server": "aws-mcp",
         "_mcp_original_name": "aws___get_presigned_url",
@@ -392,7 +392,7 @@ def test_subagent_scoped_mcp_tools_with_server_colon_and_bare_name_styles():
     mock_iam_tool = MagicMock()
     mock_iam_tool.name = "subagent__aws-cloud-security-engineer_ta_list_users_77000c74ca84"
     mock_iam_tool.metadata = {
-        "_opscloud_mcp": True,
+        "_talkops_mcp": True,
         "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__iam",
         "_mcp_base_server": "iam",
         "_mcp_original_name": "list_users",
@@ -454,7 +454,7 @@ def test_tool_filter_fail_loud_diagnostic_logging(caplog):
     mock_presigned_tool = MagicMock()
     mock_presigned_tool.name = "subagent__aws-cloud-securit_aws___get_presigned_url_d5d22cc1a56b"
     mock_presigned_tool.metadata = {
-        "_opscloud_mcp": True,
+        "_talkops_mcp": True,
         "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__aws-mcp",
         "_mcp_base_server": "aws-mcp",
         "_mcp_original_name": "aws___get_presigned_url",

@@ -1,4 +1,4 @@
-"""Comprehensive unit tests for OpsCloud Central Webhook Server across all providers and flows."""
+"""Comprehensive unit tests for TalkOps Central Webhook Server across all providers and flows."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from opscloud.cli.main import main as cli_main
-from opscloud.server import create_webhooks_app, generate_langgraph_json
-from opscloud.webhooks import (
+from talkops.cli.main import main as cli_main
+from talkops.server import create_webhooks_app, generate_langgraph_json
+from talkops.webhooks import (
     DeduplicationCache,
     NormalizedWebhookEvent,
     WebhookConfig,
@@ -105,7 +105,7 @@ def test_sns_subscription_confirmation_and_cloudwatch_alarm_flows() -> None:
     # Flow A: SubscriptionConfirmation handshake
     sub_payload = {
         "Type": "SubscriptionConfirmation",
-        "TopicArn": "arn:aws:sns:us-east-1:123456789012:opscloud-alerts",
+        "TopicArn": "arn:aws:sns:us-east-1:123456789012:talkops-alerts",
         "SubscribeURL": "https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&Token=xyz",
     }
     sub_event = sns.parse({}, json.dumps(sub_payload).encode(), cfg)
@@ -133,7 +133,7 @@ def test_sns_subscription_confirmation_and_cloudwatch_alarm_flows() -> None:
     sns_cw_payload = {
         "Type": "Notification",
         "MessageId": "msg-cw-1",
-        "TopicArn": "arn:aws:sns:us-east-1:123456789012:opscloud-alerts",
+        "TopicArn": "arn:aws:sns:us-east-1:123456789012:talkops-alerts",
         "Subject": "ALARM: HighPodRestartRate-prod",
         "Message": json.dumps(cw_inner),
     }
@@ -221,14 +221,14 @@ def test_pagerduty_v3_incident_and_loop_prevention_flows() -> None:
     assert ev_note.incident_id == ev_trig.incident_id == "Q123456789"
     assert ev_note.status == WebhookEventStatus.ANNOTATED
 
-    # Flow C: OpsCloud's own automated RCA note echoed back by PagerDuty -> MUST be ignored (loop guard)
+    # Flow C: TalkOps's own automated RCA note echoed back by PagerDuty -> MUST be ignored (loop guard)
     self_note_payload = {
         "event": {
             "id": "01F8X7note2",
             "event_type": "incident.annotated",
             "data": {
                 "id": "note-2",
-                "content": "[OpsCloud Automated RCA]\nRoot cause identified: Redis maxmemory reached.",
+                "content": "[TalkOps Automated RCA]\nRoot cause identified: Redis maxmemory reached.",
                 "incident": {"id": "Q123456789"},
             },
         }
@@ -250,7 +250,7 @@ def test_alertmanager_and_grafana_cncf_flows() -> None:
         "version": "4",
         "groupKey": '{}:{alertname="KubePodCrashLooping", namespace="payments"}',
         "status": "firing",
-        "receiver": "opscloud-webhook",
+        "receiver": "talkops-webhook",
         "groupLabels": {"alertname": "KubePodCrashLooping"},
         "commonLabels": {
             "alertname": "KubePodCrashLooping",
@@ -385,13 +385,13 @@ def test_github_workflow_and_comment_flows() -> None:
     assert wf_ev.status == WebhookEventStatus.FAILED
     assert wf_ev.incident_id == "gh:org/infra:workflow_run:555111"
 
-    # Flow C: PR comment with @opscloud mention vs without mention
+    # Flow C: PR comment with @talkops mention vs without mention
     comment_payload = {
         "action": "created",
         "repository": {"full_name": "org/infra"},
         "sender": {"login": "alice"},
         "issue": {"number": 88, "title": "Fix RDS parameter group"},
-        "comment": {"id": 990, "body": "@opscloud please check why terraform plan failed on this PR"},
+        "comment": {"id": 990, "body": "@talkops please check why terraform plan failed on this PR"},
     }
     ev_mention = gh.parse({"X-GitHub-Event": "issue_comment"}, json.dumps(comment_payload).encode(), cfg)
     assert ev_mention.should_trigger_run is True
@@ -512,7 +512,7 @@ async def test_dispatch_completion_sinks_all_targets() -> None:
     # Verify PagerDuty note payload has internal plan markers stripped and loop-safe header included
     pd_req = next(r for r in recorded_requests if "api.pagerduty.com" in str(r.url))
     pd_body = json.loads(pd_req.content.decode())
-    assert "[OpsCloud Automated RCA]" in pd_body["note"]["content"]
+    assert "[TalkOps Automated RCA]" in pd_body["note"]["content"]
     assert "ACTIVE PLAN" not in pd_body["note"]["content"]
     assert "leaky connection pool" in pd_body["note"]["content"]
 
@@ -650,7 +650,7 @@ def test_generate_langgraph_json_mounts_webhooks_app(tmp_path: Path) -> None:
     config = json.loads(target.read_text(encoding="utf-8"))
     assert config["http"]["app"] == "./webhooks_app.py:app"
     assert (tmp_path / "webhooks_app.py").is_file()
-    assert "opscloud.server.webhooks_app" in (tmp_path / "webhooks_app.py").read_text(encoding="utf-8")
+    assert "talkops.server.webhooks_app" in (tmp_path / "webhooks_app.py").read_text(encoding="utf-8")
 
 
 def test_cli_serve_list_json(capsys: pytest.CaptureFixture[str]) -> None:
@@ -677,7 +677,7 @@ def test_cli_serve_list_json(capsys: pytest.CaptureFixture[str]) -> None:
 
 @pytest.mark.asyncio
 async def test_default_langgraph_run_executor() -> None:
-    from opscloud.webhooks.dispatcher import default_langgraph_run_executor
+    from talkops.webhooks.dispatcher import default_langgraph_run_executor
 
     mock_client = MagicMock()
     mock_client.threads.create = AsyncMock(return_value={"thread_id": "t-123"})
@@ -718,7 +718,7 @@ async def test_default_langgraph_run_executor() -> None:
 
 
 def test_cli_serve_flags_after_subcommand() -> None:
-    from opscloud.cli.main import build_parser
+    from talkops.cli.main import build_parser
 
     parser = build_parser()
     args = parser.parse_args(
@@ -735,7 +735,7 @@ def test_cli_serve_flags_after_subcommand() -> None:
     mock_proc.start.return_value = "http://127.0.0.1:2024"
     mock_proc.process = None
 
-    with patch("opscloud.cli.commands.serve.ServerProcess", return_value=mock_proc) as mock_cls:
+    with patch("talkops.cli.commands.serve.ServerProcess", return_value=mock_proc) as mock_cls:
         exit_code = cli_main(
             ["serve", "--host", "0.0.0.0", "--port", "2024", "--approval-mode", "yolo"]
         )
@@ -746,8 +746,8 @@ def test_cli_serve_flags_after_subcommand() -> None:
         mock_proc.start.assert_called_once()
         mock_proc.stop.assert_called_once()
 
-    # Also test `--yolo` shorthand on `opscloud serve`
-    with patch("opscloud.cli.commands.serve.ServerProcess", return_value=mock_proc) as mock_cls2:
+    # Also test `--yolo` shorthand on `talkops serve`
+    with patch("talkops.cli.commands.serve.ServerProcess", return_value=mock_proc) as mock_cls2:
         exit_code2 = cli_main(["serve", "--yolo"])
         assert exit_code2 == 0
         server_cfg2 = mock_cls2.call_args.args[0]
@@ -755,8 +755,8 @@ def test_cli_serve_flags_after_subcommand() -> None:
 
 
 def test_yolo_mode_scope_and_resolution(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    from opscloud.agent.factory import _should_interrupt_tool_call
-    from opscloud.approval_mode import (
+    from talkops.agent.factory import _should_interrupt_tool_call
+    from talkops.approval_mode import (
         ALL_APPROVAL_MODES,
         INTERACTIVE_APPROVAL_MODES,
         ApprovalMode,
@@ -765,8 +765,8 @@ def test_yolo_mode_scope_and_resolution(capsys: pytest.CaptureFixture[str], tmp_
         next_approval_mode,
         save_yolo_acknowledgement,
     )
-    from opscloud.cli.main import _resolve_approval_mode, build_parser
-    from opscloud.security.approval_mode_source import ApprovalPolicyResolver
+    from talkops.cli.main import _resolve_approval_mode, build_parser
+    from talkops.security.approval_mode_source import ApprovalPolicyResolver
 
     # 1. Verify four canonical modes and three interactive modes
     assert ALL_APPROVAL_MODES == (
@@ -832,8 +832,8 @@ def test_yolo_mode_scope_and_resolution(capsys: pytest.CaptureFixture[str], tmp_
 
 
 def test_webhook_config_routed_via_canonical_settings_and_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
-    from opscloud.config.manifest import get_option
-    from opscloud.config.settings import Settings
+    from talkops.config.manifest import get_option
+    from talkops.config.settings import Settings
 
     # 1. Verify manifest options are registered under canonical keys
     sec_opt = get_option("security.approval_mode")
@@ -897,9 +897,9 @@ def test_webhook_config_routed_via_canonical_settings_and_manifest(monkeypatch: 
 @pytest.mark.asyncio
 async def test_webhook_logging_lifecycle_and_live_streaming(tmp_path: Path) -> None:
     import io
-    from opscloud.cli.commands.serve import _drain_live_logs, _resolve_serve_log_level
-    from opscloud.utils.logger import configure_logging
-    from opscloud.webhooks.dispatcher import default_langgraph_run_executor
+    from talkops.cli.commands.serve import _drain_live_logs, _resolve_serve_log_level
+    from talkops.utils.logger import configure_logging
+    from talkops.webhooks.dispatcher import default_langgraph_run_executor
 
     # 1. Verify _resolve_serve_log_level defaults to INFO and respects --verbose / --log-level
     import argparse
@@ -925,7 +925,7 @@ async def test_webhook_logging_lifecycle_and_live_streaming(tmp_path: Path) -> N
         assert "suppressed line" not in buf.getvalue()
 
     # 3. Configure file logging to tmp_path and verify full webhook + executor + sink logging
-    test_log_path = tmp_path / "opscloud_test.log"
+    test_log_path = tmp_path / "talkops_test.log"
     configure_logging(level="INFO", log_dir=tmp_path, log_file=test_log_path, log_to_file=True)
     try:
         mock_client = MagicMock()

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from opscloud.middleware.resume_state import (
+from talkops.middleware.resume_state import (
     ResumeStateMiddleware,
     _extract_context_tokens,
 )

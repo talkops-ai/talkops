@@ -1,7 +1,7 @@
 """Integration tests for ServerConfig and langgraph.json generation."""
 
 from pathlib import Path
-from opscloud.server import ServerConfig, generate_langgraph_json
+from talkops.server import ServerConfig, generate_langgraph_json
 
 
 def test_server_config_roundtrip():
@@ -11,8 +11,8 @@ def test_server_config_roundtrip():
         approval_mode="auto",
     )
     env = cfg.to_env()
-    assert "OPSCLOUD_SERVER_INTERACTIVE" in env
-    assert env["OPSCLOUD_SERVER_INTERACTIVE"] == "true"
+    assert "TALKOPS_SERVER_INTERACTIVE" in env
+    assert env["TALKOPS_SERVER_INTERACTIVE"] == "true"
 
 
 def test_generate_langgraph_json(tmp_path: Path):

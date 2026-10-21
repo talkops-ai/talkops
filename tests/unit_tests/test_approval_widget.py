@@ -2,8 +2,8 @@ import asyncio
 import os
 import pytest
 from textual.app import App, ComposeResult
-from opscloud.approval_mode import ApprovalMode
-from opscloud.ui.widgets.approval import (
+from talkops.approval_mode import ApprovalMode
+from talkops.ui.widgets.approval import (
     ApprovalDecided,
     ApprovalMenu,
     ApprovalModalScreen,
@@ -11,7 +11,7 @@ from opscloud.ui.widgets.approval import (
     get_target_context_pill,
     highlight_command,
 )
-from opscloud.ui.app import OpsCloudApp
+from talkops.ui.app import TalkOpsApp
 
 
 def test_approval_menu_build_options_shows_smart_mode():
@@ -97,7 +97,7 @@ def test_approval_menu_action_select_auto_aliases_smart():
 @pytest.mark.asyncio
 async def test_app_on_approval_menu_decided_activates_smart_mode():
     """Verify that when ApprovalMenu decides smart_approve_all, app switches to SMART mode."""
-    app = OpsCloudApp(defer_server_start=True, approval_mode="manual")
+    app = TalkOpsApp(defer_server_start=True, approval_mode="manual")
     assert app._approval_mode == ApprovalMode.MANUAL
 
     decided_event = ApprovalMenu.Decided(
@@ -114,7 +114,7 @@ async def test_app_on_approval_menu_decided_activates_smart_mode():
 @pytest.mark.asyncio
 async def test_app_on_smart_approve_enabled_activates_smart_mode():
     """Verify that _on_smart_approve_enabled switches app to SMART mode."""
-    app = OpsCloudApp(defer_server_start=True, approval_mode="manual")
+    app = TalkOpsApp(defer_server_start=True, approval_mode="manual")
     assert app._approval_mode == ApprovalMode.MANUAL
 
     res = await app._on_smart_approve_enabled()
@@ -249,7 +249,7 @@ async def test_approval_modal_screen_actions() -> None:
 def test_smart_mode_option_display_no_strikethrough():
     """Verify that formatting (s) Enable Smart mode does not trigger Rich strikethrough."""
     from rich.markup import render
-    from opscloud.ui.widgets.approval import ApprovalMenu
+    from talkops.ui.widgets.approval import ApprovalMenu
 
     menu = ApprovalMenu([{"name": "execute", "args": {"command": "ls"}}])
     opt_str = menu._format_option_display("Enable Smart mode for this thread (s)")
@@ -261,8 +261,8 @@ def test_smart_mode_option_display_no_strikethrough():
 
 def test_write_file_renderer_generates_diff_for_existing_file(tmp_path):
     """Verify WriteFileRenderer computes diff when file exists on disk."""
-    from opscloud.ui.widgets.tool_renderers import WriteFileRenderer
-    from opscloud.ui.widgets.tool_widgets import EditFileApprovalWidget
+    from talkops.ui.widgets.tool_renderers import WriteFileRenderer
+    from talkops.ui.widgets.tool_widgets import EditFileApprovalWidget
 
     test_file = tmp_path / "sample.txt"
     test_file.write_text("line 1\nold line 2\nline 3\n")
@@ -280,7 +280,7 @@ def test_write_file_renderer_generates_diff_for_existing_file(tmp_path):
 
 def test_edit_file_renderer_with_start_line():
     """Verify EditFileRenderer uses StartLine to generate hunk with accurate line numbers."""
-    from opscloud.ui.widgets.tool_renderers import EditFileRenderer
+    from talkops.ui.widgets.tool_renderers import EditFileRenderer
 
     tool_args = {
         "file_path": "app.py",
@@ -298,7 +298,7 @@ def test_edit_file_renderer_with_start_line():
 
 def test_multi_replace_file_content_renderer():
     """Verify multi_replace_file_content generates diffs for each replacement chunk."""
-    from opscloud.ui.widgets.tool_renderers import get_renderer
+    from talkops.ui.widgets.tool_renderers import get_renderer
 
     tool_args = {
         "TargetFile": "main.py",
@@ -326,8 +326,8 @@ def test_multi_replace_file_content_renderer():
 
 def test_edit_file_renderer_computes_true_line_diff_with_context():
     """Verify EditFileRenderer diffs old_string vs new_string line-by-line rather than dumping all lines."""
-    from opscloud.ui.widgets.tool_renderers import EditFileRenderer
-    from opscloud.ui.widgets.tool_widgets import _count_diff_stats
+    from talkops.ui.widgets.tool_renderers import EditFileRenderer
+    from talkops.ui.widgets.tool_widgets import _count_diff_stats
 
     old_block = "line 1\nline 2\nold_value = 1\nline 4\nline 5"
     new_block = "line 1\nline 2\nnew_value = 2\nline 4\nline 5"
@@ -350,7 +350,7 @@ def test_edit_file_renderer_computes_true_line_diff_with_context():
 
 def test_compute_line_diff_folds_distant_unchanged_lines():
     """Verify compute_line_diff keeps 3 context lines and folds larger gaps into hidden markers."""
-    from opscloud.ui.widgets.diff import compute_line_diff
+    from talkops.ui.widgets.diff import compute_line_diff
 
     old_lines = [f"ctx {i}" for i in range(1, 15)]
     new_lines = list(old_lines)
@@ -369,11 +369,11 @@ def test_compute_line_diff_folds_distant_unchanged_lines():
 
 def test_format_file_diff_header_and_render_diff_content_truncation():
     """Verify header format (<path>  +N -M) and 33-line truncation footer (f for full diff)."""
-    from opscloud.ui.widgets.diff import format_file_diff_header, render_diff_content
+    from talkops.ui.widgets.diff import format_file_diff_header, render_diff_content
 
     diff_lines = ["@@ -1,40 +1,40 @@"] + [f"+added line {i}" for i in range(1, 41)]
-    header = format_file_diff_header("src/opscloud/app.py", additions=40, deletions=0)
-    assert "src/opscloud/app.py" in header.plain
+    header = format_file_diff_header("src/talkops/app.py", additions=40, deletions=0)
+    assert "src/talkops/app.py" in header.plain
     assert "+40" in header.plain
     assert "File:" not in header.plain
 
@@ -390,7 +390,7 @@ def test_format_file_diff_header_and_render_diff_content_truncation():
 @pytest.mark.asyncio
 async def test_approval_menu_full_diff_toggle_and_auto_approve_hint():
     """Verify pressing 'f' toggles full diff in ApprovalMenu and shift+tab hint is shown."""
-    from opscloud.ui.widgets.tool_widgets import EditFileApprovalWidget
+    from talkops.ui.widgets.tool_widgets import EditFileApprovalWidget
 
     old_str = "\n".join(f"line {i}" for i in range(1, 45))
     new_str = "\n".join(f"modified {i}" for i in range(1, 45))
@@ -428,7 +428,7 @@ async def test_approval_menu_full_diff_toggle_and_auto_approve_hint():
 
 def test_tool_call_message_renders_diff_stats_and_diff_body_in_transcript():
     """Verify ToolCallMessage header shows +N -M and body renders diff lines for edit_file."""
-    from opscloud.ui.widgets.messages import ToolCallMessage
+    from talkops.ui.widgets.messages import ToolCallMessage
 
     msg = ToolCallMessage(
         "edit_file",
@@ -454,7 +454,7 @@ def test_tool_call_message_renders_diff_stats_and_diff_body_in_transcript():
 @pytest.mark.asyncio
 async def test_write_and_edit_tools_collapse_under_forward_arrow_summary():
     """Verify Write and Edit tools fold under a collapsible forward-arrow summary like Read."""
-    from opscloud.ui.widgets.messages import (
+    from talkops.ui.widgets.messages import (
         MessageList,
         ToolCallMessage,
         ToolGroupSummary,

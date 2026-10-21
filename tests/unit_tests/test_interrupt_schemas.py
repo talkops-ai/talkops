@@ -1,4 +1,4 @@
-"""Comprehensive unit tests for OpsCloud's terminal-native interrupt schemas."""
+"""Comprehensive unit tests for TalkOps's terminal-native interrupt schemas."""
 
 import json
 from uuid import uuid4
@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from opscloud.schema.interrupts import (
+from talkops.schema.interrupts import (
     # Tool approval / HITL
     ActionRequest,
     ApproveDecision,

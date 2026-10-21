@@ -1,11 +1,11 @@
 """Unit tests for rubric evaluation and goal prompt generation."""
 
-from opscloud.rubrics.generator import (
+from talkops.rubrics.generator import (
     GOAL_RUBRIC_SYSTEM_PROMPT,
     _goal_rubric_human_prompt,
     _goal_amendment_human_prompt,
 )
-from opscloud.middleware.goal_state_notice import is_conversation_control_message, build_goal_state_notice
+from talkops.middleware.goal_state_notice import is_conversation_control_message, build_goal_state_notice
 
 
 def test_goal_prompts():
@@ -29,11 +29,11 @@ def test_goal_state_notice_identification():
 
 def test_evaluate_rubric_structured_and_fallback(monkeypatch):
     from unittest.mock import MagicMock
-    from opscloud.rubrics.evaluator import evaluate_rubric
+    from talkops.rubrics.evaluator import evaluate_rubric
     from deepagents.middleware.rubric import GraderResponse
 
     mock_grader = MagicMock()
-    monkeypatch.setattr("opscloud.rubrics.evaluator.create_rubric_grader_agent", lambda **kwargs: mock_grader)
+    monkeypatch.setattr("talkops.rubrics.evaluator.create_rubric_grader_agent", lambda **kwargs: mock_grader)
 
     # 1. Structured response path
     expected = GraderResponse(

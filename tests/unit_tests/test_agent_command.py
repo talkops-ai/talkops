@@ -11,8 +11,8 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.errors import GraphInterrupt
 
-from opscloud.commands._base import CommandContext
-from opscloud.commands.power.agents import (
+from talkops.commands._base import CommandContext
+from talkops.commands.power.agents import (
     AgentInvokeHandler,
     AgentSessionState,
     AgentsHandler,
@@ -22,18 +22,18 @@ from opscloud.commands.power.agents import (
     resolve_plugin_agent,
     sync_agent_session_status_label,
 )
-from opscloud.middleware.agent_session import (
+from talkops.middleware.agent_session import (
     AGENT_SESSION_NODE_PREFIX,
     AgentSessionMiddleware,
 )
-from opscloud.state.agent_session_channels import (
+from talkops.state.agent_session_channels import (
     is_agent_session_turn,
 )
-from opscloud.ui.command_registry import (
+from talkops.ui.command_registry import (
     build_agent_commands,
     get_command,
 )
-from opscloud.ui.textual_adapter import _is_agent_session_namespace
+from talkops.ui.textual_adapter import _is_agent_session_namespace
 
 
 # ── Fakes & Helpers ──────────────────────────────────────────────────────────
@@ -453,8 +453,8 @@ def test_is_agent_session_namespace() -> None:
 
 
 def test_agent_autocomplete_prioritization_and_space() -> None:
-    from opscloud.ui.command_registry import get_all_entries
-    from opscloud.ui.widgets.autocomplete import SlashCommandController
+    from talkops.ui.command_registry import get_all_entries
+    from talkops.ui.widgets.autocomplete import SlashCommandController
 
     agents = _sample_plugin_agents()
     entries = build_agent_commands(agents)
@@ -536,8 +536,8 @@ def test_agent_session_middleware_excludes_heavy_channels_and_resets_on_agent_sw
 
 @pytest.mark.asyncio
 async def test_close_subagent_mcp_sessions_on_clear_and_agent_switch() -> None:
-    from opscloud.mcp.session_manager import MCPSessionManager
-    from opscloud.plugins.adapters.mcp import scoped_subagent_mcp_server_name
+    from talkops.mcp.session_manager import MCPSessionManager
+    from talkops.plugins.adapters.mcp import scoped_subagent_mcp_server_name
 
     finops_id = "aws-finops-agent@talkops-devops-plugins"
     sec_id = "aws-cloud-security-engineer@talkops-devops-plugins"

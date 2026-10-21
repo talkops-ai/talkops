@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Button, Input, OptionList
 
-from opscloud.ui.widgets.config_manager import ConfigManagerScreen, _InlineEditScreen
+from talkops.ui.widgets.config_manager import ConfigManagerScreen, _InlineEditScreen
 
 
 class DummyConfigApp(App[None]):
@@ -29,11 +31,28 @@ async def test_config_manager_screen_mount_and_search() -> None:
     app = DummyConfigApp(screen)
 
     async with app.run_test() as pilot:
+        tabs: Any = screen.query_one("#config-tabs")
+        assert tabs is not None
         search = screen.query_one("#config-search", Input)
         opt_list = screen.query_one("#config-options", OptionList)
         assert opt_list is not None
         assert opt_list.has_focus
         assert opt_list.option_count > 0
+
+        # Cycle through config tabs (All -> Cloud & Infra -> DevOps & Tools)
+        screen.action_cycle_tab()
+        await pilot.pause()
+        assert screen._active_tab == "cloud"
+        assert opt_list.option_count > 0
+
+        screen.action_cycle_tab()
+        await pilot.pause()
+        assert screen._active_tab == "devops"
+        assert opt_list.option_count > 0
+
+        # Reset back to All tab
+        tabs.activate_tab("all")
+        await pilot.pause()
 
         # Type search filter
         search.value = "theme"

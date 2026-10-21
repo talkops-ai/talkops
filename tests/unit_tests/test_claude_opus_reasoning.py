@@ -14,9 +14,9 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from opscloud.model.factory import clear_model_cache, create_model
-from opscloud.model.pool import DynamicModelPoolManager
-from opscloud.model.reasoning import (
+from talkops.model.factory import clear_model_cache, create_model
+from talkops.model.pool import DynamicModelPoolManager
+from talkops.model.reasoning import (
     current_effort_from_model_params,
     default_effort_for_model,
     has_explicit_effort_model_params,
@@ -198,4 +198,40 @@ def test_switch_from_opus_effort_to_chinese_models(monkeypatch):
     res_fw = create_model("fireworks:accounts/fireworks/models/qwen2p5-coder-32b-instruct", extra_kwargs={"reasoning_effort": "max"})
     assert res_fw.model is not None
     assert getattr(res_fw.model, "model_kwargs", {}) == {}
+
+
+def test_openai_responses_api_preserves_summary_auto_with_reasoning_effort():
+    """Verify OpenAI reasoning models preserve summary='auto' alongside effort in Responses API payload."""
+    clear_model_cache()
+    res_default = create_model("openai:gpt-5.6-luna")
+    assert res_default.model is not None
+    assert getattr(res_default.model, "use_responses_api", False) is True
+    assert getattr(res_default.model, "reasoning", None) == {"summary": "auto"}
+
+    clear_model_cache()
+    res_med = create_model("openai:gpt-5.6-luna", extra_kwargs={"reasoning_effort": "medium"})
+    assert res_med.model is not None
+    assert getattr(res_med.model, "reasoning", None) == {"summary": "auto", "effort": "medium"}
+    assert getattr(res_med.model, "reasoning_effort", None) is None
+
+    clear_model_cache()
+    res_off = create_model("openai:gpt-5.6-luna", extra_kwargs={"reasoning_effort": "off"})
+    assert res_off.model is not None
+    assert getattr(res_off.model, "reasoning", None) is None
+    assert getattr(res_off.model, "reasoning_effort", None) is None
+
+
+def test_gemini_provider_profile_preserves_include_thoughts_unless_disabled(monkeypatch):
+    """Verify Gemini reasoning models preserve include_thoughts=True from ProviderProfile unless effort='off'."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "dummy-google-key")
+    clear_model_cache()
+    res_default = create_model("google_genai:gemini-2.5-pro")
+    assert res_default.model is not None
+    assert getattr(res_default.model, "include_thoughts", None) is True
+
+    clear_model_cache()
+    res_off = create_model("google_genai:gemini-2.5-pro", extra_kwargs={"reasoning_effort": "off"})
+    assert res_off.model is not None
+    assert getattr(res_off.model, "include_thoughts", None) in (None, False)
+
 

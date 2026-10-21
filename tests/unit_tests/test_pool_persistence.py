@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 import pytest
-from opscloud.commands._base import CommandContext
-from opscloud.commands.core.pool import PoolHandler
-from opscloud.config.toml_config import (
+from talkops.commands._base import CommandContext
+from talkops.commands.core.pool import PoolHandler
+from talkops.config.toml_config import (
     clear_agent_pool,
     load_agent_pool,
     read_config_toml,
     save_agent_pool,
 )
-from opscloud.model.pool import DynamicModelPoolManager, get_model_pool_manager
+from talkops.model.pool import DynamicModelPoolManager, get_model_pool_manager
 
 
 def test_pool_save_and_load_persistence(tmp_path: Path):

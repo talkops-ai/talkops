@@ -1,4 +1,4 @@
-"""Unit tests for OpsCloud integrations: event bus, hooks, notifications, identity, and stream bridge."""
+"""Unit tests for TalkOps integrations: event bus, hooks, notifications, identity, and stream bridge."""
 
 from __future__ import annotations
 
@@ -12,15 +12,15 @@ import uuid
 
 import pytest
 
-from opscloud.integrations.base import IncomingMessage, InteractionPayload
-from opscloud.integrations.content_filter import filter_internal_content, is_internal_message
-from opscloud.integrations.event_bus import (
+from talkops.integrations.base import IncomingMessage, InteractionPayload
+from talkops.integrations.content_filter import filter_internal_content, is_internal_message
+from talkops.integrations.event_bus import (
     BypassTier,
     EventBus,
     ExternalEvent,
     default_unix_socket_path,
 )
-from opscloud.integrations.hooks import (
+from talkops.integrations.hooks import (
     HOOK_TOOL_OUTPUT_LIMIT,
     HookConfig,
     _sanitise_payload,
@@ -29,8 +29,8 @@ from opscloud.integrations.hooks import (
     drain_pending_hooks,
     load_hooks,
 )
-from opscloud.integrations.identity import IdentityMapper, UserIdentity
-from opscloud.integrations.notifications import (
+from talkops.integrations.identity import IdentityMapper, UserIdentity
+from talkops.integrations.notifications import (
     notify_cloud_event,
     notify_deploy_event,
     notify_session_end,
@@ -39,12 +39,12 @@ from opscloud.integrations.notifications import (
     notify_tool_result,
     notify_tool_use,
 )
-from opscloud.integrations.stream_bridge import (
+from talkops.integrations.stream_bridge import (
     GraphStreamBridge,
     StreamSink,
     _humanize_tool_name,
 )
-from opscloud.integrations.thread_store import ThreadStore
+from talkops.integrations.thread_store import ThreadStore
 
 
 # ── ThreadStore Tests ────────────────────────────────────────────────────────
@@ -324,28 +324,28 @@ def test_default_unix_socket_path() -> None:
 
 @pytest.mark.asyncio
 async def test_notifications_wrappers() -> None:
-    with patch("opscloud.integrations.notifications.dispatch_hook", new_callable=AsyncMock) as mock_dispatch:
+    with patch("talkops.integrations.notifications.dispatch_hook", new_callable=AsyncMock) as mock_dispatch:
         await notify_session_start("s-123", "gemini-2.5-pro")
         mock_dispatch.assert_called_once_with(
             "session.start",
             {"session_id": "s-123", "model": "gemini-2.5-pro"},
         )
 
-    with patch("opscloud.integrations.notifications.dispatch_hook", new_callable=AsyncMock) as mock_dispatch:
+    with patch("talkops.integrations.notifications.dispatch_hook", new_callable=AsyncMock) as mock_dispatch:
         await notify_session_end("s-123", 42.5)
         mock_dispatch.assert_called_once_with(
             "session.end",
             {"session_id": "s-123", "duration_s": 42.5},
         )
 
-    with patch("opscloud.integrations.notifications.dispatch_hook", new_callable=AsyncMock) as mock_dispatch:
+    with patch("talkops.integrations.notifications.dispatch_hook", new_callable=AsyncMock) as mock_dispatch:
         await notify_task_complete("Finished provisioning ECS cluster")
         mock_dispatch.assert_called_once_with(
             "task.complete",
             {"summary": "Finished provisioning ECS cluster"},
         )
 
-    with patch("opscloud.integrations.notifications.dispatch_hook_fire_and_forget") as mock_ff:
+    with patch("talkops.integrations.notifications.dispatch_hook_fire_and_forget") as mock_ff:
         notify_tool_use("aws_ec2_describe", "call-1", {"InstanceIds": ["i-1"]})
         mock_ff.assert_called_once_with(
             "tool.use",
@@ -356,7 +356,7 @@ async def test_notifications_wrappers() -> None:
             },
         )
 
-    with patch("opscloud.integrations.notifications.dispatch_hook_fire_and_forget") as mock_ff:
+    with patch("talkops.integrations.notifications.dispatch_hook_fire_and_forget") as mock_ff:
         notify_tool_result("aws_ec2_describe", "success", "[]")
         mock_ff.assert_called_once_with(
             "tool.result",
@@ -367,11 +367,11 @@ async def test_notifications_wrappers() -> None:
             },
         )
 
-    with patch("opscloud.integrations.notifications.dispatch_hook_fire_and_forget") as mock_ff:
+    with patch("talkops.integrations.notifications.dispatch_hook_fire_and_forget") as mock_ff:
         notify_deploy_event("terraform.apply", {"workspace": "prod"})
         mock_ff.assert_called_once_with("terraform.apply", {"workspace": "prod"})
 
-    with patch("opscloud.integrations.notifications.dispatch_hook_fire_and_forget") as mock_ff:
+    with patch("talkops.integrations.notifications.dispatch_hook_fire_and_forget") as mock_ff:
         notify_cloud_event("aws.resource.create", {"arn": "arn:aws:s3:::my-bucket"})
         mock_ff.assert_called_once_with("aws.resource.create", {"arn": "arn:aws:s3:::my-bucket"})
 

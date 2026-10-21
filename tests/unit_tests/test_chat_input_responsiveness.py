@@ -4,13 +4,13 @@ from unittest.mock import MagicMock
 import pytest
 from textual.events import Click, Key
 
-from opscloud.ui.command_registry import get_all_entries
-from opscloud.ui.widgets.autocomplete import (
+from talkops.ui.command_registry import get_all_entries
+from talkops.ui.widgets.autocomplete import (
     CompletionResult,
     MultiCompletionManager,
     SlashCommandController,
 )
-from opscloud.ui.widgets.chat_input import ChatInput, CompletionPopup, _CompletionViewAdapter
+from talkops.ui.widgets.chat_input import ChatInput, CompletionPopup, _CompletionViewAdapter
 
 
 class DummyApp:

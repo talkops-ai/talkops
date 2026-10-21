@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 
-from opscloud.ui.widgets.welcome_popup import WelcomeDetailPopup
+from talkops.ui.widgets.welcome_popup import WelcomeDetailPopup
 
 
 class DummyWelcomePopupApp(App[None]):

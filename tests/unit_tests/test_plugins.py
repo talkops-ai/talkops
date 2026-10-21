@@ -1,4 +1,4 @@
-"""Unit tests for OpsCloud local filesystem plugin management.
+"""Unit tests for TalkOps local filesystem plugin management.
 
 Tests cover:
 - Plugin ID parsing and marketplace source parsing
@@ -22,14 +22,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from opscloud.commands._base import CommandContext
-from opscloud.plugins.adapters.agents import plugin_subagents
-from opscloud.plugins.adapters.commands import plugin_commands
-from opscloud.plugins.adapters.mcp import _try_repair_mcp_json, discover_plugin_mcp_configs
-from opscloud.plugins.commands_cli import execute_plugin_command, setup_plugin_parser
-from opscloud.plugins.manifest import build_inventory, load_manifest
-from opscloud.plugins.marketplace import parse_marketplace_source
-from opscloud.plugins.models import (
+from talkops.commands._base import CommandContext
+from talkops.plugins.adapters.agents import plugin_subagents
+from talkops.plugins.adapters.commands import plugin_commands
+from talkops.plugins.adapters.mcp import _try_repair_mcp_json, discover_plugin_mcp_configs
+from talkops.plugins.commands_cli import execute_plugin_command, setup_plugin_parser
+from talkops.plugins.manifest import build_inventory, load_manifest
+from talkops.plugins.marketplace import parse_marketplace_source
+from talkops.plugins.models import (
     ComponentInventory,
     InstalledPluginEntry,
     LocalMarketplaceSource,
@@ -38,7 +38,7 @@ from opscloud.plugins.models import (
     UrlMarketplaceSource,
     split_plugin_id,
 )
-from opscloud.plugins.store import (
+from talkops.plugins.store import (
     _load_settings_enabled_plugins,
     _write_settings_enabled_plugins,
     add_installed_plugin,
@@ -168,7 +168,7 @@ class TestScopedEnablement:
 
     def test_user_scope_enablement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(
-            "opscloud.plugins.store._user_settings_path", lambda: tmp_path / "settings.json"
+            "talkops.plugins.store._user_settings_path", lambda: tmp_path / "settings.json"
         )
         set_plugin_enabled("test@mp", True)
         assert "test@mp" in load_user_enabled_plugin_ids()
@@ -177,68 +177,68 @@ class TestScopedEnablement:
         assert "test@mp" not in load_user_enabled_plugin_ids()
 
     def test_project_scope_enablement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from opscloud.config import paths
+        from talkops.config import paths
 
         project_root = tmp_path / "myproject"
         project_root.mkdir()
-        (project_root / ".opscloud").mkdir()
+        (project_root / ".talkops").mkdir()
 
         monkeypatch.setattr(
             paths,
             "project_settings_path",
-            lambda pr: pr / ".opscloud" / "settings.json",
+            lambda pr: pr / ".talkops" / "settings.json",
         )
         set_plugin_enabled_for_scope("test@mp", True, scope="project", project_root=project_root)
         result = load_project_enabled_plugin_ids(project_root)
         assert "test@mp" in result
 
     def test_local_scope_enablement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from opscloud.config import paths
+        from talkops.config import paths
 
         project_root = tmp_path / "myproject"
         project_root.mkdir()
-        (project_root / ".opscloud").mkdir()
+        (project_root / ".talkops").mkdir()
 
         monkeypatch.setattr(
             paths,
             "project_local_settings_path",
-            lambda pr: pr / ".opscloud" / "settings.local.json",
+            lambda pr: pr / ".talkops" / "settings.local.json",
         )
         monkeypatch.setattr(
-            "opscloud.plugins.store._ensure_local_settings_gitignored", lambda _: None
+            "talkops.plugins.store._ensure_local_settings_gitignored", lambda _: None
         )
         set_plugin_enabled_for_scope("test@mp", True, scope="local", project_root=project_root)
         result = load_local_enabled_plugin_ids(project_root)
         assert "test@mp" in result
 
     def test_merged_enablement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from opscloud.config import paths
+        from talkops.config import paths
 
         user_settings = tmp_path / "user" / "settings.json"
         project_root = tmp_path / "project"
         project_root.mkdir()
-        (project_root / ".opscloud").mkdir()
+        (project_root / ".talkops").mkdir()
 
         monkeypatch.setattr(
-            "opscloud.plugins.store._user_settings_path", lambda: user_settings
+            "talkops.plugins.store._user_settings_path", lambda: user_settings
         )
         monkeypatch.setattr(
             paths,
             "project_settings_path",
-            lambda pr: pr / ".opscloud" / "settings.json",
+            lambda pr: pr / ".talkops" / "settings.json",
         )
         monkeypatch.setattr(
             paths,
             "project_local_settings_path",
-            lambda pr: pr / ".opscloud" / "settings.local.json",
+            lambda pr: pr / ".talkops" / "settings.local.json",
         )
 
         _write_settings_enabled_plugins(user_settings, {"user-plugin@mp"})
         _write_settings_enabled_plugins(
-            project_root / ".opscloud" / "settings.json", {"project-plugin@mp"}
+            project_root / ".talkops" / "settings.json", {"project-plugin@mp"}
         )
         _write_settings_enabled_plugins(
-            project_root / ".opscloud" / "settings.local.json", {"local-plugin@mp"}
+            project_root / ".talkops" / "settings.local.json", {"local-plugin@mp"}
         )
 
         merged = load_all_enabled_plugin_ids(project_root=project_root)
@@ -260,7 +260,7 @@ class TestScopedInstallRegistry:
     def test_add_scoped_install_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         state_dir = tmp_path / "state"
         monkeypatch.setattr(
-            "opscloud.plugins.store._installed_plugins_path",
+            "talkops.plugins.store._installed_plugins_path",
             lambda: state_dir / "installed_plugins.json",
         )
 
@@ -281,7 +281,7 @@ class TestScopedInstallRegistry:
     def test_multi_scope_install(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         state_dir = tmp_path / "state"
         monkeypatch.setattr(
-            "opscloud.plugins.store._installed_plugins_path",
+            "talkops.plugins.store._installed_plugins_path",
             lambda: state_dir / "installed_plugins.json",
         )
 
@@ -310,7 +310,7 @@ class TestScopedInstallRegistry:
     def test_replace_same_scope_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         state_dir = tmp_path / "replace_test_state"
         monkeypatch.setattr(
-            "opscloud.plugins.store._installed_plugins_path",
+            "talkops.plugins.store._installed_plugins_path",
             lambda: state_dir / "installed_plugins.json",
         )
 
@@ -336,7 +336,7 @@ class TestScopedInstallRegistry:
     ):
         state_dir = tmp_path / "compat_test_state"
         monkeypatch.setattr(
-            "opscloud.plugins.store._installed_plugins_path",
+            "talkops.plugins.store._installed_plugins_path",
             lambda: state_dir / "installed_plugins.json",
         )
 
@@ -371,7 +371,7 @@ class TestScopedUninstall:
     def test_remove_single_scope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         state_dir = tmp_path / "remove_single_state"
         monkeypatch.setattr(
-            "opscloud.plugins.store._installed_plugins_path",
+            "talkops.plugins.store._installed_plugins_path",
             lambda: state_dir / "installed_plugins.json",
         )
 
@@ -402,7 +402,7 @@ class TestScopedUninstall:
     def test_remove_all_scopes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         state_dir = tmp_path / "remove_all_state"
         monkeypatch.setattr(
-            "opscloud.plugins.store._installed_plugins_path",
+            "talkops.plugins.store._installed_plugins_path",
             lambda: state_dir / "installed_plugins.json",
         )
 
@@ -421,11 +421,11 @@ class TestScopedUninstall:
     ):
         state_dir = tmp_path / "uninstall_orphan_state"
         monkeypatch.setattr(
-            "opscloud.plugins.store._installed_plugins_path",
+            "talkops.plugins.store._installed_plugins_path",
             lambda: state_dir / "installed_plugins.json",
         )
         monkeypatch.setattr(
-            "opscloud.plugins.store._user_settings_path",
+            "talkops.plugins.store._user_settings_path",
             lambda: tmp_path / "settings.json",
         )
 
@@ -447,14 +447,14 @@ class TestScopedUninstall:
             project_root=project_root,
         )
 
-        from opscloud.config import paths
+        from talkops.config import paths
 
         monkeypatch.setattr(
             paths,
             "project_settings_path",
-            lambda pr: pr / ".opscloud" / "settings.json",
+            lambda pr: pr / ".talkops" / "settings.json",
         )
-        (project_root / ".opscloud").mkdir(exist_ok=True)
+        (project_root / ".talkops").mkdir(exist_ok=True)
 
         uninstall_plugin("test@mp", scope="project", project_root=project_root)
         assert cache_dir.is_dir(), "Cache should survive when user scope still references it"
@@ -467,7 +467,7 @@ def test_plugin_mutation_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Verify plugin_mutation_lock executes cleanly and protects critical sections."""
     lock_dir = tmp_path / "lock_dir"
     lock_dir.mkdir()
-    monkeypatch.setenv("OPSCLOUD_PLUGIN_DIR", str(lock_dir))
+    monkeypatch.setenv("TALKOPS_PLUGIN_DIR", str(lock_dir))
 
     executed = []
 
@@ -486,7 +486,7 @@ def test_plugin_mutation_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 class TestCLIPluginCommands:
-    """Tests for opscloud plugin CLI parsing and execution."""
+    """Tests for talkops plugin CLI parsing and execution."""
 
     def test_setup_parser_subcommands(self):
         parser = argparse.ArgumentParser()
@@ -507,7 +507,7 @@ class TestCLIPluginCommands:
 
     def test_execute_plugin_list_empty(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(
-            "opscloud.plugins.commands_cli.list_available_plugins", lambda **kwargs: []
+            "talkops.plugins.commands_cli.list_available_plugins", lambda **kwargs: []
         )
         args = argparse.Namespace(plugin_command="list", output_format="text")
         output = execute_plugin_command(args)
@@ -515,7 +515,7 @@ class TestCLIPluginCommands:
 
     def test_execute_plugin_list_json(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(
-            "opscloud.plugins.commands_cli.list_available_plugins",
+            "talkops.plugins.commands_cli.list_available_plugins",
             lambda **kwargs: [("p1@mp", "Test Plugin", True)],
         )
         args = argparse.Namespace(plugin_command="list", output_format="json")
@@ -529,7 +529,7 @@ class TestCLIPluginCommands:
             enabled_calls.append((plugin_id, enabled))
 
         monkeypatch.setattr(
-            "opscloud.plugins.commands_cli.set_installed_plugin_enabled", mock_set_enabled
+            "talkops.plugins.commands_cli.set_installed_plugin_enabled", mock_set_enabled
         )
 
         args_en = argparse.Namespace(
@@ -647,7 +647,7 @@ def test_discover_plugin_mcp_configs_with_repair(tmp_path: Path):
         inventory=inventory,
     )
 
-    from opscloud.plugins.adapters.mcp import plugin_mcp_configs
+    from talkops.plugins.adapters.mcp import plugin_mcp_configs
 
     configs = plugin_mcp_configs([plugin])
     assert len(configs) == 1
@@ -658,7 +658,7 @@ def test_discover_plugin_mcp_configs_with_repair(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_plugins_handler_cli_fallback():
-    from opscloud.commands.core.plugins import PluginsHandler
+    from talkops.commands.core.plugins import PluginsHandler
 
     ctx = CommandContext(
         app=None,

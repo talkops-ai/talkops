@@ -8,22 +8,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-from opscloud.commands._base import CommandContext
-from opscloud.commands.power.runtime import ReloadHandler, RestartHandler
-from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
-from opscloud.server import ServerConfig, ServerProcess
-from opscloud.ui.app import (
-    OpsCloudApp,
+from talkops.commands._base import CommandContext
+from talkops.commands.power.runtime import ReloadHandler, RestartHandler
+from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+from talkops.server import ServerConfig, ServerProcess
+from talkops.ui.app import (
+    TalkOpsApp,
     _ServerRespawnResult,
     _format_mcp_server_changes,
 )
-from opscloud.ui.command_registry import (
+from talkops.ui.command_registry import (
     COMMANDS,
     BypassTier,
     get_all_entries,
 )
-from opscloud.ui.widgets.messages import SystemMessage
-from opscloud.ui.widgets.autocomplete import CompletionView, SlashCommandController
+from talkops.ui.widgets.messages import SystemMessage
+from talkops.ui.widgets.autocomplete import CompletionView, SlashCommandController
 
 
 # ── 1. Autocomplete Order & SlashCommand Metadata Tests ──────────
@@ -101,7 +101,7 @@ def test_slash_command_registry_metadata():
 
 @pytest.mark.asyncio
 async def test_reload_handler_delegation_to_app():
-    """Verify ReloadHandler schedules reload on OpsCloudApp."""
+    """Verify ReloadHandler schedules reload on TalkOpsApp."""
     mock_app = MagicMock()
     mock_app._schedule_reload = MagicMock()
 
@@ -237,21 +237,21 @@ def test_format_mcp_server_changes_diffs():
     assert "  - Reconfigured: tool_changed" in msg
 
 
-# ── 4. OpsCloudApp /reload and /restart Lifecycle Tests ─────────
+# ── 4. TalkOpsApp /reload and /restart Lifecycle Tests ─────────
 
 
 @pytest.mark.asyncio
 async def test_run_reload_unlocked_report_matches_expected():
     """Verify /reload outputs the exact structured report matching dcode."""
-    app = OpsCloudApp(defer_server_start=True)
+    app = TalkOpsApp(defer_server_start=True)
 
     # Mock settings reload (no changes)
     app._settings = MagicMock()
     app._settings.reload_from_environment.return_value = []
 
     # Mock theme reload
-    with patch("opscloud.ui.theme.reload_registry"), patch(
-        "opscloud.ui.theme.register_app_themes"
+    with patch("talkops.ui.theme.reload_registry"), patch(
+        "talkops.ui.theme.register_app_themes"
     ):
         # Mock skill discovery (13 plugin skills)
         app.get_discovered_skills = MagicMock(
@@ -280,13 +280,13 @@ async def test_run_reload_unlocked_report_matches_expected():
         app._mount_message = AsyncMock(side_effect=lambda msg: mounted_messages.append(msg))
 
         with patch(
-            "opscloud.plugins.discovery.discover_plugins",
+            "talkops.plugins.discovery.discover_plugins",
             return_value=mock_plugin_result,
         ), patch(
-            "opscloud.plugins.adapters.mcp.plugin_mcp_configs",
+            "talkops.plugins.adapters.mcp.plugin_mcp_configs",
             return_value=[],
         ), patch(
-            "opscloud.model.config.clear_caches"
+            "talkops.model.config.clear_caches"
         ):
             await app._run_reload_unlocked()
 
@@ -310,7 +310,7 @@ async def test_run_reload_unlocked_report_matches_expected():
 @pytest.mark.asyncio
 async def test_run_restart_respawn_flow():
     """Verify _run_restart_respawn success emits 'Restart complete.'."""
-    app = OpsCloudApp(defer_server_start=True)
+    app = TalkOpsApp(defer_server_start=True)
 
     app._restart_server_manual_result = AsyncMock(
         return_value=_ServerRespawnResult(restarted=True)
@@ -353,15 +353,15 @@ async def test_server_process_restart():
 @pytest.mark.asyncio
 async def test_on_server_start_failed_missing_credentials_message():
     """Verify _on_server_start_failed does not hardcode OpenAI and provides provider hint."""
-    from opscloud.exceptions import MissingCredentialsError
-    from opscloud.ui.widgets.messages import ErrorMessage
+    from talkops.exceptions import MissingCredentialsError
+    from talkops.ui.widgets.messages import ErrorMessage
 
-    app = OpsCloudApp(defer_server_start=True)
+    app = TalkOpsApp(defer_server_start=True)
     mounted: list[Any] = []
     app._mount_message = AsyncMock(side_effect=lambda msg: mounted.append(msg))
 
     err = MissingCredentialsError("API key missing", provider="google_genai", env_var="GEMINI_API_KEY")
-    event = OpsCloudApp.ServerStartFailed(err)
+    event = TalkOpsApp.ServerStartFailed(err)
 
     await app._on_server_start_failed(event)
 
@@ -378,14 +378,14 @@ async def test_on_server_start_failed_missing_credentials_message():
 @pytest.mark.asyncio
 async def test_on_server_start_failed_generic_error_message():
     """Verify general server startup errors do not contain hardcoded OpenAI/Anthropic references."""
-    from opscloud.ui.widgets.messages import ErrorMessage
+    from talkops.ui.widgets.messages import ErrorMessage
 
-    app = OpsCloudApp(defer_server_start=True)
+    app = TalkOpsApp(defer_server_start=True)
     mounted: list[Any] = []
     app._mount_message = AsyncMock(side_effect=lambda msg: mounted.append(msg))
 
     err = TimeoutError("Server at http://127.0.0.1:51314 failed to become healthy within 60.0s")
-    event = OpsCloudApp.ServerStartFailed(err)
+    event = TalkOpsApp.ServerStartFailed(err)
 
     await app._on_server_start_failed(event)
 
@@ -399,9 +399,9 @@ async def test_on_server_start_failed_generic_error_message():
 @pytest.mark.asyncio
 async def test_restart_lifecycle_deferred_server_guidance():
     """Verify running restart when server is deferred tells user it's waiting for a model."""
-    app = OpsCloudApp(
+    app = TalkOpsApp(
         defer_server_start=True,
-        server_kwargs={"assistant_id": "opscloud", "interactive": True},
+        server_kwargs={"assistant_id": "talkops", "interactive": True},
     )
 
     restored_notices: list[str] = []
@@ -419,7 +419,7 @@ async def test_restart_lifecycle_deferred_server_guidance():
 @pytest.mark.asyncio
 async def test_restart_lifecycle_remote_detection():
     """Verify running restart when server_kwargs is None indicates remote server."""
-    app = OpsCloudApp(server_url="http://remote-server:2024", server_kwargs=None)
+    app = TalkOpsApp(server_url="http://remote-server:2024", server_kwargs=None)
 
     restored_notices: list[str] = []
     app._restore_queue_to_input = AsyncMock(
@@ -435,7 +435,7 @@ async def test_restart_lifecycle_remote_detection():
 @pytest.mark.asyncio
 async def test_run_reload_reports_aws_and_pool_state():
     """Verify /reload report includes active AWS configuration and Agent model pool lines."""
-    app = OpsCloudApp(defer_server_start=True)
+    app = TalkOpsApp(defer_server_start=True)
     app._settings = MagicMock()
     app._settings.reload_from_environment.return_value = []
     app._settings.aws_profile = "test-profile"
@@ -445,22 +445,22 @@ async def test_run_reload_reports_aws_and_pool_state():
     app._mount_message = AsyncMock(side_effect=lambda msg: mounted_messages.append(msg))
     app.get_discovered_skills = MagicMock(return_value=[])
 
-    with patch("opscloud.ui.theme.reload_registry"), patch("opscloud.ui.theme.register_app_themes"), patch(
-        "opscloud.plugins.discovery.discover_plugins",
+    with patch("talkops.ui.theme.reload_registry"), patch("talkops.ui.theme.register_app_themes"), patch(
+        "talkops.plugins.discovery.discover_plugins",
         return_value=MagicMock(plugins=()),
     ), patch(
-        "opscloud.plugins.adapters.mcp.plugin_mcp_configs",
+        "talkops.plugins.adapters.mcp.plugin_mcp_configs",
         return_value=[],
     ), patch(
-        "opscloud.model.config.clear_caches"
+        "talkops.model.config.clear_caches"
     ), patch(
-        "opscloud.config.toml_config.load_agent_pool",
+        "talkops.config.toml_config.load_agent_pool",
         return_value={"fast": "gpt-4o-mini", "standard": "gpt-4o", "powerful": "o3", "provider": "openai"},
     ), patch(
-        "opscloud.config.cloud_profiles.get_active_aws_profile",
+        "talkops.config.cloud_profiles.get_active_aws_profile",
         return_value="test-profile",
     ), patch(
-        "opscloud.config.cloud_profiles.get_active_aws_region",
+        "talkops.config.cloud_profiles.get_active_aws_region",
         return_value="us-west-2",
     ):
         await app._run_reload_unlocked()
@@ -476,7 +476,7 @@ async def test_run_reload_reports_aws_and_pool_state():
 @pytest.mark.asyncio
 async def test_run_reload_detects_aws_profile_and_pool_changes():
     """Verify /reload report highlights changes when AWS profile or agent pool are updated."""
-    app = OpsCloudApp(defer_server_start=True)
+    app = TalkOpsApp(defer_server_start=True)
     app._settings = MagicMock()
     app._settings.reload_from_environment.return_value = []
 
@@ -496,22 +496,22 @@ async def test_run_reload_detects_aws_profile_and_pool_changes():
 
     new_pool = {"fast": "fast-m", "standard": "std-m", "powerful": "pow-m", "provider": "multi"}
 
-    with patch("opscloud.ui.theme.reload_registry"), patch("opscloud.ui.theme.register_app_themes"), patch(
-        "opscloud.plugins.discovery.discover_plugins",
+    with patch("talkops.ui.theme.reload_registry"), patch("talkops.ui.theme.register_app_themes"), patch(
+        "talkops.plugins.discovery.discover_plugins",
         return_value=MagicMock(plugins=()),
     ), patch(
-        "opscloud.plugins.adapters.mcp.plugin_mcp_configs",
+        "talkops.plugins.adapters.mcp.plugin_mcp_configs",
         return_value=[],
     ), patch(
-        "opscloud.model.config.clear_caches"
+        "talkops.model.config.clear_caches"
     ), patch(
-        "opscloud.config.toml_config.load_agent_pool",
+        "talkops.config.toml_config.load_agent_pool",
         return_value=new_pool,
     ), patch(
-        "opscloud.config.cloud_profiles.get_active_aws_profile",
+        "talkops.config.cloud_profiles.get_active_aws_profile",
         return_value="prod-profile",
     ), patch(
-        "opscloud.config.cloud_profiles.get_active_aws_region",
+        "talkops.config.cloud_profiles.get_active_aws_region",
         return_value="eu-west-1",
     ):
         await app._run_reload_unlocked()
@@ -526,9 +526,9 @@ async def test_run_reload_detects_aws_profile_and_pool_changes():
 
 def test_clear_caches_flushes_pool_and_aws_caches():
     """Verify clear_caches flushes model pool manager instances and AWS profile cache."""
-    from opscloud.model.config import clear_caches
-    from opscloud.model.pool import get_model_pool_manager
-    from opscloud.config import cloud_profiles
+    from talkops.model.config import clear_caches
+    from talkops.model.pool import get_model_pool_manager
+    from talkops.config import cloud_profiles
 
     pool_mgr = get_model_pool_manager()
     mock_instance = MagicMock()
@@ -549,7 +549,7 @@ def test_clear_caches_flushes_pool_and_aws_caches():
 
 def test_settings_reload_from_environment_picks_up_toml_aws_and_pool(monkeypatch):
     """Verify settings.reload_from_environment reloads AWS profile/region and pool from config.toml."""
-    from opscloud.config.settings import Settings
+    from talkops.config.settings import Settings
 
     # Isolate environment from outer shell environment variables (e.g. AWS_REGION)
     monkeypatch.delenv("AWS_REGION", raising=False)
@@ -559,7 +559,7 @@ def test_settings_reload_from_environment_picks_up_toml_aws_and_pool(monkeypatch
     s = Settings(aws_profile="old-prof", aws_region="us-east-1", agent_pool=None)
 
     with patch(
-        "opscloud.config.settings.load_config_toml",
+        "talkops.config.settings.load_config_toml",
         return_value={
             "aws": {"profile": "new-prof", "region": "eu-central-1"},
             "agent_pool": {"fast": "gpt-5-mini", "standard": "gpt-5", "powerful": "gpt-5-max", "provider": "openai"},
@@ -573,3 +573,157 @@ def test_settings_reload_from_environment_picks_up_toml_aws_and_pool(monkeypatch
     assert any("aws_profile: old-prof -> new-prof" in c for c in changes)
     assert any("aws_region: us-east-1 -> eu-central-1" in c for c in changes)
     assert any("agent_pool: default (dynamic discovery) -> fast='gpt-5-mini'" in c for c in changes)
+
+
+# ── 6. Status Bar Connection & Queue Sync & Lifecycle Guard Tests ──
+
+
+def test_sync_status_connection_and_queued_do_not_clobber_each_other():
+    """Verify _sync_status_connection and _sync_status_queued drive set_connection and set_queued independently."""
+    from talkops.ui.app import QueuedMessage
+
+    app = TalkOpsApp(defer_server_start=True)
+    mock_bar = MagicMock()
+    mock_bar._busy_message = ""
+    app._status_bar = mock_bar
+
+    # Initial connecting state
+    app._connecting = True
+    app._reconnecting = False
+    app._sync_status_connection()
+    mock_bar.set_connection.assert_called_with("connecting")
+
+    # Reconnecting state (during /restart or /reload)
+    app._connecting = True
+    app._reconnecting = True
+    app._sync_status_connection()
+    mock_bar.set_connection.assert_called_with("reconnecting")
+
+    # Queue updates during reconnect must use set_queued and never call set_status("Ready")
+    app._pending_messages.append(QueuedMessage(text="hello", mode="normal"))
+    app._sync_status_queued()
+    mock_bar.set_queued.assert_called_with(1)
+    mock_bar.set_status.assert_not_called()
+
+    # Clearing queue during reconnect keeps connection indicator intact
+    app._pending_messages.clear()
+    app._sync_status_queued()
+    mock_bar.set_queued.assert_called_with(0)
+    mock_bar.set_status.assert_not_called()
+
+    # Connection finished
+    app._connecting = False
+    app._reconnecting = False
+    app._sync_status_connection()
+    mock_bar.set_connection.assert_called_with("")
+
+
+@pytest.mark.asyncio
+async def test_finalize_connection_preserves_thread_on_respawn():
+    """Verify finalize_connection initializes thread and startup hooks only once across respawns."""
+    app = TalkOpsApp(
+        defer_server_start=True,
+        startup_cmd="echo hi",
+        initial_prompt="hello world",
+    )
+    app._mount_message = AsyncMock()
+    app._submit_input = AsyncMock()
+
+    # First connection initializes thread_id and runs startup hooks
+    await app._finalize_connection(MagicMock())
+    first_thread_id = app._agent_thread_id
+    assert first_thread_id is not None
+    assert app._initial_session_started is True
+    assert app._submit_input.await_count == 2
+
+    # Subsequent ServerReady (after /reload or /restart) preserves thread_id and skips startup hooks
+    app._submit_input.reset_mock()
+    await app._finalize_connection(MagicMock())
+    assert app._agent_thread_id == first_thread_id
+    assert app._submit_input.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_submit_input_coalesces_duplicate_reload_and_queues_during_reload():
+    """Verify duplicate /reload bypasses queue to coalesce while normal prompts queue during _reloading."""
+    app = TalkOpsApp(defer_server_start=True)
+    app._reloading = True
+    app._mount_message = AsyncMock()
+    app._process_message = AsyncMock()
+
+    # Duplicate /reload bypasses the queue so _schedule_reload can coalesce it
+    await app._submit_input("/reload", "command")
+    app._process_message.assert_awaited_once_with("/reload", "command")
+    assert len(app._pending_messages) == 0
+
+    # Normal prompt submitted while _reloading is queued
+    app._process_message.reset_mock()
+    await app._submit_input("check cluster health", "normal")
+    app._process_message.assert_not_awaited()
+    assert len(app._pending_messages) == 1
+    assert app._pending_messages[0].text == "check cluster health"
+
+
+@pytest.mark.asyncio
+async def test_handle_restart_command_sets_defer_flag_before_awaiting_echo():
+    """Verify handle_restart_command records _restart_requested_during_reload before awaiting UserMessage mount."""
+    app = TalkOpsApp(defer_server_start=True)
+    app._reloading = True
+    mock_task = MagicMock()
+    mock_task.done.return_value = False
+    app._reload_task = mock_task
+
+    flag_at_first_mount: list[bool] = []
+
+    async def _on_mount(_widget: Any) -> None:
+        flag_at_first_mount.append(app._restart_requested_during_reload)
+
+    app._mount_message = AsyncMock(side_effect=_on_mount)
+
+    await app._handle_restart_command("/restart")
+    assert flag_at_first_mount[0] is True
+    assert app._restart_requested_during_reload is True
+
+
+@pytest.mark.asyncio
+async def test_run_reload_unlocked_sets_and_clears_busy_status_and_reports_deferred_server():
+    """Verify /reload sets Reloading... busy status and reports deferred local server state."""
+    app = TalkOpsApp(
+        defer_server_start=True,
+        server_kwargs={"assistant_id": "talkops", "interactive": True},
+    )
+    app._settings = MagicMock()
+    app._settings.reload_from_environment.return_value = []
+
+    mock_bar = MagicMock()
+    mock_bar._busy_message = ""
+
+    def _set_busy(msg: str) -> None:
+        mock_bar._busy_message = msg
+
+    mock_bar.set_busy.side_effect = _set_busy
+    app._status_bar = mock_bar
+
+    mounted_messages: list[Any] = []
+    app._mount_message = AsyncMock(side_effect=lambda msg: mounted_messages.append(msg))
+    app.get_discovered_skills = MagicMock(return_value=[])
+
+    with patch("talkops.ui.theme.reload_registry"), patch(
+        "talkops.ui.theme.register_app_themes"
+    ), patch(
+        "talkops.plugins.discovery.discover_plugins",
+        return_value=MagicMock(plugins=()),
+    ), patch(
+        "talkops.plugins.adapters.mcp.plugin_mcp_configs",
+        return_value=[],
+    ), patch(
+        "talkops.model.config.clear_caches"
+    ):
+        await app._run_reload_unlocked()
+
+    assert mock_bar.set_busy.call_args_list[0].args == ("Reloading...",)
+    assert mock_bar.set_busy.call_args_list[-1].args == ("",)
+    assert len(mounted_messages) == 1
+    content = getattr(mounted_messages[0], "_raw_content", "")
+    assert "local server hasn't started yet" in content
+

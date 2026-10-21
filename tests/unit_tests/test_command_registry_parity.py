@@ -8,10 +8,10 @@ across canonical names, aliases, and bypass tiers.
 from __future__ import annotations
 
 import inspect
-from opscloud.commands import discover_command_handlers
-from opscloud.commands._base import BaseCommandHandler
-from opscloud.commands._types import BypassTier
-from opscloud.ui.command_registry import (
+from talkops.commands import discover_command_handlers
+from talkops.commands._base import BaseCommandHandler
+from talkops.commands._types import BypassTier
+from talkops.ui.command_registry import (
     COMMAND_DESCRIPTORS,
     CommandDescriptor,
     CommandEntry,

@@ -13,10 +13,10 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList, Static
 
-# `opscloud.config.settings` is shadowed by a Settings instance on the package.
-settings = importlib.import_module("opscloud.config.settings")
-from opscloud.ui.theme import get_css_variable_defaults, get_theme_colors, register_app_themes
-from opscloud.ui.widgets.modal_base import (
+# `talkops.config.settings` is shadowed by a Settings instance on the package.
+settings = importlib.import_module("talkops.config.settings")
+from talkops.ui.theme import get_css_variable_defaults, get_theme_colors, register_app_themes
+from talkops.ui.widgets.modal_base import (
     ModalDialog,
     ModalOptionRow,
     ModalSearchInput,
@@ -29,12 +29,12 @@ from opscloud.ui.widgets.modal_base import (
 
 
 class _ThemedModalApp(App):
-    """App carrying OpsCloud theme variables for testing modal screens."""
+    """App carrying TalkOps theme variables for testing modal screens."""
 
     def __init__(self, screen_to_mount: OpsModalScreen | None = None) -> None:
         super().__init__()
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
         self._screen_to_mount = screen_to_mount
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
@@ -517,30 +517,30 @@ async def test_workspace_modal_fills_bounded_viewport():
 
 def test_all_modal_subclasses_declare_dialog_classes():
     """Every concrete OpsModalScreen subclass must declare DIALOG_CLASSES explicitly."""
-    from opscloud.ui.widgets.agent_selector import AgentSelectorScreen
-    from opscloud.ui.widgets.approval import ApprovalModalScreen
-    from opscloud.ui.widgets.auth import AuthPromptScreen
-    from opscloud.ui.widgets.auth_manager import AuthManagerScreen
-    from opscloud.ui.widgets.auto_mode_notice import AutoModeNoticeScreen
-    from opscloud.ui.widgets.cloud_selector import CloudProfileSelectorScreen
-    from opscloud.ui.widgets.config_manager import ConfigManagerScreen, _InlineEditScreen
-    from opscloud.ui.widgets.debug_console import DebugConsoleScreen
-    from opscloud.ui.widgets.effort_selector import EffortSelectorScreen
-    from opscloud.ui.widgets.install_confirm import InstallProviderConfirmScreen
-    from opscloud.ui.widgets.mcp_viewer import (
+    from talkops.ui.widgets.agent_selector import AgentSelectorScreen
+    from talkops.ui.widgets.approval import ApprovalModalScreen
+    from talkops.ui.widgets.auth import AuthPromptScreen
+    from talkops.ui.widgets.auth_manager import AuthManagerScreen
+    from talkops.ui.widgets.auto_mode_notice import AutoModeNoticeScreen
+    from talkops.ui.widgets.cloud_selector import CloudProfileSelectorScreen
+    from talkops.ui.widgets.config_manager import ConfigManagerScreen, _InlineEditScreen
+    from talkops.ui.widgets.debug_console import DebugConsoleScreen
+    from talkops.ui.widgets.effort_selector import EffortSelectorScreen
+    from talkops.ui.widgets.install_confirm import InstallProviderConfirmScreen
+    from talkops.ui.widgets.mcp_viewer import (
         MCPServerErrorScreen,
         MCPToolDetailScreen,
         MCPViewerScreen,
     )
-    from opscloud.ui.widgets.model_selector import ModelSelectorScreen
-    from opscloud.ui.widgets.notification_settings import NotificationSettingsScreen
-    from opscloud.ui.widgets.permissions_manager import PermissionsManagerScreen, _AddRuleScreen
-    from opscloud.ui.widgets.plugin_manager import PluginManagerScreen
-    from opscloud.ui.widgets.pool_selector import PoolSelectorScreen
-    from opscloud.ui.widgets.skills_viewer import SkillDetailScreen, SkillsViewerScreen
-    from opscloud.ui.widgets.theme_selector import ThemeSelectorScreen
-    from opscloud.ui.widgets.thread_selector import DeleteThreadConfirmScreen, ThreadSelectorScreen
-    from opscloud.ui.widgets.welcome_popup import WelcomeDetailPopup
+    from talkops.ui.widgets.model_selector import ModelSelectorScreen
+    from talkops.ui.widgets.notification_settings import NotificationSettingsScreen
+    from talkops.ui.widgets.permissions_manager import PermissionsManagerScreen, _AddRuleScreen
+    from talkops.ui.widgets.plugin_manager import PluginManagerScreen
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
+    from talkops.ui.widgets.skills_viewer import SkillDetailScreen, SkillsViewerScreen
+    from talkops.ui.widgets.theme_selector import ThemeSelectorScreen
+    from talkops.ui.widgets.thread_selector import DeleteThreadConfirmScreen, ThreadSelectorScreen
+    from talkops.ui.widgets.welcome_popup import WelcomeDetailPopup
 
     expected_classes: dict[type[OpsModalScreen], str] = {
         # Content-hugging defaults

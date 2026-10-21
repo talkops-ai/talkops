@@ -11,12 +11,12 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
-from opscloud.agent.config import CLIContextSchema
-from opscloud.commands._base import CommandContext
-from opscloud.commands._types import BypassTier
-from opscloud.commands.power.btw import BtwHandler
-from opscloud.commands.power.copy import CopyHandler
-from opscloud.middleware.btw import (
+from talkops.agent.config import CLIContextSchema
+from talkops.commands._base import CommandContext
+from talkops.commands._types import BypassTier
+from talkops.commands.power.btw import BtwHandler
+from talkops.commands.power.copy import CopyHandler
+from talkops.middleware.btw import (
     BTW_PROMPT_PREFIX,
     BTW_TIMEOUT_SECONDS,
     BtwSideQuestionMiddleware,
@@ -24,9 +24,9 @@ from opscloud.middleware.btw import (
     is_btw_turn,
     is_ephemeral_message,
 )
-from opscloud.ui.command_registry import IMMEDIATE_CMDS, get_command
-from opscloud.ui.remote_client import RemoteAgent
-from opscloud.ui.widgets.btw_card import BtwCardPanel, BtwExchange, _truncate_answer
+from talkops.ui.command_registry import IMMEDIATE_CMDS, get_command
+from talkops.ui.remote_client import RemoteAgent
+from talkops.ui.widgets.btw_card import BtwCardPanel, BtwExchange, _truncate_answer
 
 
 def test_btw_prompt_prefix_and_timeout() -> None:
@@ -121,8 +121,8 @@ async def test_btw_middleware_in_langchain_create_agent_graph() -> None:
     from langchain.agents import create_agent
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.outputs import ChatGeneration, ChatResult
-    from opscloud.middleware.reliable_rubric import ReliableRubricMiddleware
-    from opscloud.state.base import OpsCloudAgentState
+    from talkops.middleware.reliable_rubric import ReliableRubricMiddleware
+    from talkops.state.base import TalkOpsAgentState
 
     bound_tools_seen: list[int] = []
 
@@ -162,7 +162,7 @@ async def test_btw_middleware_in_langchain_create_agent_graph() -> None:
         model=model,
         tools=[dummy_shell],
         middleware=mw_stack,
-        state_schema=OpsCloudAgentState,
+        state_schema=TalkOpsAgentState,
         context_schema=CLIContextSchema,
     )
 
@@ -341,11 +341,11 @@ def test_btw_card_panel_render_and_truncation() -> None:
     assert full == long_answer
 
 
-def test_opscloud_app_btw_store_and_bypass_queue() -> None:
-    """Verify OpsCloudApp /btw queue bypass, history navigation, expand toggle, and copy status."""
-    from opscloud.ui.app import OpsCloudApp
+def test_talkops_app_btw_store_and_bypass_queue() -> None:
+    """Verify TalkOpsApp /btw queue bypass, history navigation, expand toggle, and copy status."""
+    from talkops.ui.app import TalkOpsApp
 
-    app = OpsCloudApp(defer_server_start=True)
+    app = TalkOpsApp(defer_server_start=True)
     app._refresh_btw_card = MagicMock()  # type: ignore[method-assign]
 
     # /btw and /aside must bypass the busy queue even when _agent_running is True

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from opscloud.server import ServerConfig, ServerProcess, find_free_port, generate_langgraph_json
-from opscloud.ui.remote_client import (
+from talkops.server import ServerConfig, ServerProcess, find_free_port, generate_langgraph_json
+from talkops.ui.remote_client import (
     RemoteAgent,
     _convert_ai_message,
     _convert_tool_message,
@@ -18,7 +18,7 @@ from opscloud.ui.remote_client import (
 def test_server_config_environment_roundtrip():
     cfg = ServerConfig(
         model="anthropic:claude-3-5-sonnet-latest",
-        assistant_id="opscloud",
+        assistant_id="talkops",
         system_prompt="Test prompt",
         auto_approve=True,
         interactive=False,
@@ -27,17 +27,17 @@ def test_server_config_environment_roundtrip():
         approval_mode="smart",
     )
     env = cfg.to_env()
-    assert env["OPSCLOUD_SERVER_MODEL"] == "anthropic:claude-3-5-sonnet-latest"
-    assert env["OPSCLOUD_SERVER_AUTO_APPROVE"] == "true"
-    assert env["OPSCLOUD_SERVER_INTERACTIVE"] == "false"
-    assert env["OPSCLOUD_SERVER_APPROVAL_MODE"] == "smart"
-    assert env["OPSCLOUD_SERVER_CWD"] == "/tmp/workspace"
-    assert env["OPSCLOUD_SERVER_LOG_LEVEL"] == "WARNING"
+    assert env["TALKOPS_SERVER_MODEL"] == "anthropic:claude-3-5-sonnet-latest"
+    assert env["TALKOPS_SERVER_AUTO_APPROVE"] == "true"
+    assert env["TALKOPS_SERVER_INTERACTIVE"] == "false"
+    assert env["TALKOPS_SERVER_APPROVAL_MODE"] == "smart"
+    assert env["TALKOPS_SERVER_CWD"] == "/tmp/workspace"
+    assert env["TALKOPS_SERVER_LOG_LEVEL"] == "WARNING"
     assert cfg.server_log_level == "WARNING"
 
     # Custom log level
     custom_cfg = ServerConfig(server_log_level="DEBUG")
-    assert custom_cfg.to_env()["OPSCLOUD_SERVER_LOG_LEVEL"] == "DEBUG"
+    assert custom_cfg.to_env()["TALKOPS_SERVER_LOG_LEVEL"] == "DEBUG"
 
 
 def test_generate_langgraph_json_scaffolding(tmp_path: Path):
@@ -54,7 +54,7 @@ def test_generate_langgraph_json_scaffolding(tmp_path: Path):
     assert "server_graph.py:make_graph" in content
 
     checkpointer_content = (tmp_path / "checkpointer.py").read_text(encoding="utf-8")
-    assert "OpsCloudCheckpointer" in checkpointer_content
+    assert "TalkOpsCheckpointer" in checkpointer_content
 
 
 def test_find_free_port():
@@ -64,7 +64,7 @@ def test_find_free_port():
 
 
 def test_server_process_initialization():
-    from opscloud.utils.logger import get_active_log_file
+    from talkops.utils.logger import get_active_log_file
 
     cfg = ServerConfig()
     proc = ServerProcess(cfg, port=0)
@@ -186,13 +186,13 @@ def test_server_graph_import_performs_no_runtime_construction(monkeypatch):
     import importlib
     import sys
 
-    monkeypatch.setenv("OPSCLOUD_SERVER_PROCESS", "1")
-    sys.modules.pop("opscloud.server.server_graph", None)
+    monkeypatch.setenv("TALKOPS_SERVER_PROCESS", "1")
+    sys.modules.pop("talkops.server.server_graph", None)
     with patch(
-        "opscloud.model.factory.create_model",
+        "talkops.model.factory.create_model",
         side_effect=AssertionError("runtime construction happened during import"),
     ) as create_model:
-        importlib.import_module("opscloud.server.server_graph")
+        importlib.import_module("talkops.server.server_graph")
 
     create_model.assert_not_called()
 
@@ -200,7 +200,7 @@ def test_server_graph_import_performs_no_runtime_construction(monkeypatch):
 @pytest.mark.asyncio
 async def test_async_agent_factory_prepares_mcp_before_sync_compilation(tmp_path):
     """Server construction keeps MCP I/O async and compiles Deep Agents once in a worker."""
-    from opscloud.agent.factory import create_opscloud_agent_async
+    from talkops.agent.factory import create_talkops_agent_async
 
     project_context = MagicMock(user_cwd=tmp_path, project_root=tmp_path)
     prepared = {"agent": ({}, [], [])}
@@ -210,16 +210,16 @@ async def test_async_agent_factory_prepares_mcp_before_sync_compilation(tmp_path
     manager.register_servers = MagicMock()
 
     with (
-        patch("opscloud.agent.factory.list_subagents", return_value=[]),
-        patch("opscloud.plugins.adapters.mcp.prepare_subagents_mcp_async", new_callable=AsyncMock, return_value=prepared) as prepare_subagents,
-        patch("opscloud.mcp.discovery.discover_mcp_configs", return_value={"disabled": {"enabled": False}}),
-        patch("opscloud.mcp.preload.preload_mcp_metadata", new_callable=AsyncMock, return_value=[]) as preload,
-        patch("opscloud.mcp.preload.get_cached_mcp_server_infos", return_value=[]),
-        patch("opscloud.mcp.session_manager.MCPSessionManager.get_instance", return_value=manager),
-        patch("opscloud.mcp.session_manager.build_mcp_tools_from_server_infos", return_value=[]),
-        patch("opscloud.agent.factory.create_opscloud_agent", return_value=(graph, backend)) as compile_agent,
+        patch("talkops.agent.factory.list_subagents", return_value=[]),
+        patch("talkops.plugins.adapters.mcp.prepare_subagents_mcp_async", new_callable=AsyncMock, return_value=prepared) as prepare_subagents,
+        patch("talkops.mcp.discovery.discover_mcp_configs", return_value={"disabled": {"enabled": False}}),
+        patch("talkops.mcp.preload.preload_mcp_metadata", new_callable=AsyncMock, return_value=[]) as preload,
+        patch("talkops.mcp.preload.get_cached_mcp_server_infos", return_value=[]),
+        patch("talkops.mcp.session_manager.MCPSessionManager.get_instance", return_value=manager),
+        patch("talkops.mcp.session_manager.build_mcp_tools_from_server_infos", return_value=[]),
+        patch("talkops.agent.factory.create_talkops_agent", return_value=(graph, backend)) as compile_agent,
     ):
-        result = await create_opscloud_agent_async(
+        result = await create_talkops_agent_async(
             model=MagicMock(),
             cwd=tmp_path,
             project_context=project_context,
@@ -234,7 +234,7 @@ async def test_async_agent_factory_prepares_mcp_before_sync_compilation(tmp_path
 def test_server_graph_factory_signature():
     """Verify that make_graph matches LangGraph API 0-parameter factory requirements."""
     from langgraph_api._factory_utils import _classify_factory
-    from opscloud.server.server_graph import make_graph
+    from talkops.server.server_graph import make_graph
 
     classification = _classify_factory(make_graph)
     assert classification == {}
@@ -264,7 +264,7 @@ def test_wait_for_graph_ready_single_request():
 
 
 def test_wait_for_graph_ready_fallback():
-    """Verify wait_for_graph_ready falls back from agent to opscloud on 404."""
+    """Verify wait_for_graph_ready falls back from agent to talkops on 404."""
     from unittest.mock import MagicMock, patch
 
     cfg = ServerConfig()
@@ -280,7 +280,7 @@ def test_wait_for_graph_ready_fallback():
 
         assert mock_get.call_count == 2
         assert mock_get.call_args_list[0][0][0] == f"{proc.url}/assistants/agent/graph"
-        assert mock_get.call_args_list[1][0][0] == f"{proc.url}/assistants/opscloud/graph"
+        assert mock_get.call_args_list[1][0][0] == f"{proc.url}/assistants/talkops/graph"
 
 
 def test_server_prepare_launch_environment_sanitization(monkeypatch):
@@ -294,7 +294,7 @@ def test_server_prepare_launch_environment_sanitization(monkeypatch):
 
     assert "LD_PRELOAD" not in env
     assert "PYTHONEXECUTABLE" not in env
-    assert env["LANGGRAPH_AUTH_TYPE"] == "noop"
+    assert env["LANGGRAPH_AUTH_TYPE"] == "custom"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["LANGGRAPH_ALLOW_BLOCKING"] == "true"
     assert "--allow-blocking" in cmd
@@ -320,7 +320,7 @@ async def test_server_process_astart_success():
 
 def test_server_process_multi_workspace_isolation(tmp_path: Path):
     """Verify concurrent instances in different workspaces get isolated runtime dirs and ports."""
-    from opscloud._constants import SERVER_RUNTIME_DIR
+    from talkops._constants import SERVER_RUNTIME_DIR
 
     cfg = ServerConfig()
     proc1 = ServerProcess(cfg, port=8123)
@@ -369,7 +369,7 @@ async def test_server_process_astart_cancellation_calls_stop():
 
 def test_validate_server_ownership_never_signals_ambiguous_pids(tmp_path: Path):
     """Verify _validate_server_ownership requires matching server.json and rejects ambiguous PIDs (DV-03)."""
-    from opscloud.server.server import _validate_server_ownership
+    from talkops.server.server import _validate_server_ownership
     import json
     import os
 
@@ -434,7 +434,7 @@ def test_server_process_stop_escalates_to_killpg_when_descendant_ignores_sigterm
 def test_concurrent_same_port_and_free_port_toctou_resilience():
     """Verify concurrent same-port instances receive isolated runtime directories and free-port selection works (DV-11)."""
     import socket
-    from opscloud.server import ServerConfig, ServerProcess, find_free_port
+    from talkops.server import ServerConfig, ServerProcess, find_free_port
 
     # 1. find_free_port returns open port
     p1 = find_free_port()
@@ -466,9 +466,9 @@ def test_concurrent_same_port_and_free_port_toctou_resilience():
 async def test_in_process_server_handle_and_agent_lifecycle(tmp_path: Path):
     """Verify start_server_and_get_agent uses InProcessServerHandle by default without spawning a subprocess."""
     from langchain_core.messages import AIMessageChunk
-    from opscloud.cli.server_manager import InProcessServerHandle, start_server_and_get_agent
-    from opscloud.server.server_graph import ServerRuntime
-    from opscloud.ui.remote_client import InProcessAgent
+    from talkops.cli.server_manager import InProcessServerHandle, start_server_and_get_agent
+    from talkops.server.server_graph import ServerRuntime
+    from talkops.ui.remote_client import InProcessAgent
 
     fake_graph = MagicMock()
 
@@ -484,12 +484,12 @@ async def test_in_process_server_handle_and_agent_lifecycle(tmp_path: Path):
 
     with (
         patch(
-            "opscloud.server.server_graph._build_default_runtime_async",
+            "talkops.server.server_graph._build_default_runtime_async",
             new_callable=AsyncMock,
             return_value=fake_runtime,
         ) as mock_build_runtime,
         patch(
-            "opscloud.state.session.get_db_path",
+            "talkops.state.session.get_db_path",
             return_value=tmp_path / "sessions.db",
         ),
     ):
@@ -528,9 +528,9 @@ async def test_in_process_server_handle_and_agent_lifecycle(tmp_path: Path):
         # Also verify LangGraph's _coerce_context directly with CLIContextSchema and dict containing working_dir
         from langgraph.pregel.main import _coerce_context
         from langgraph.types import Interrupt
-        from opscloud.agent.config import CLIContextSchema
-        from opscloud.ui.remote_client import _convert_interrupts
-        from opscloud.ui.textual_adapter import TextualAdapter
+        from talkops.agent.config import CLIContextSchema
+        from talkops.ui.remote_client import _convert_interrupts
+        from talkops.ui.textual_adapter import TextualAdapter
 
         coerced = _coerce_context(
             CLIContextSchema,

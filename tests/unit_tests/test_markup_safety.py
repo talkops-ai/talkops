@@ -11,26 +11,26 @@ from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import OptionList, Static
 
-from opscloud.config.cloud_profiles import AWSProfileInfo
-from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
-from opscloud.ui.theme import register_app_themes
-from opscloud.ui.widgets.cloud_selector import (
+from talkops.config.cloud_profiles import AWSProfileInfo
+from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+from talkops.ui.theme import register_app_themes
+from talkops.ui.widgets.cloud_selector import (
     CloudProfileOption,
     CloudProfileSelectorScreen,
 )
-from opscloud.ui.widgets.mcp_viewer import (
+from talkops.ui.widgets.mcp_viewer import (
     MCPServerErrorScreen,
     MCPServerHeaderItem,
     MCPToolDetailScreen,
     MCPToolItem,
     MCPViewerScreen,
 )
-from opscloud.ui.widgets.modal_base import format_modal_option_row
-from opscloud.ui.widgets.model_selector import (
+from talkops.ui.widgets.modal_base import format_modal_option_row
+from talkops.ui.widgets.model_selector import (
     ModelOption,
     ModelSelectorScreen,
 )
-from opscloud.ui.widgets.skills_viewer import (
+from talkops.ui.widgets.skills_viewer import (
     SkillDetailScreen,
     SkillsViewerScreen,
 )
@@ -43,7 +43,7 @@ class _TestHarnessApp(App[None]):
         super().__init__()
         self._test_screen = screen_instance
         register_app_themes(self)
-        self.theme = "opscloud-dark"
+        self.theme = "talkops-dark"
 
     def compose(self) -> ComposeResult:
         yield from ()
@@ -135,7 +135,7 @@ async def test_model_selector_markup_safety() -> None:
     )
 
     with patch(
-        "opscloud.ui.widgets.model_selector.get_available_models_list",
+        "talkops.ui.widgets.model_selector.get_available_models_list",
         return_value=[malicious_model],
     ):
         screen = ModelSelectorScreen()

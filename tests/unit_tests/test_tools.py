@@ -2,9 +2,9 @@
 
 import json
 import pytest
-from opscloud.tools.registry import ToolRegistry
-from opscloud.tools.catalog import register_all_tools
-from opscloud.tools.goal_tools import _goal_snapshot, _rubric_snapshot
+from talkops.tools.registry import ToolRegistry
+from talkops.tools.catalog import register_all_tools
+from talkops.tools.goal_tools import _goal_snapshot, _rubric_snapshot
 
 
 def test_tool_registry():
@@ -34,7 +34,7 @@ def test_goal_and_rubric_snapshots():
 @pytest.mark.asyncio
 async def test_goal_tools_middleware_notice_generation_and_deduplication():
     from typing import Any
-    from opscloud.middleware.goal_tools import GoalToolsMiddleware
+    from talkops.middleware.goal_tools import GoalToolsMiddleware
 
     middleware = GoalToolsMiddleware()
     # No goal -> no notice
@@ -60,7 +60,7 @@ async def test_goal_tools_middleware_notice_generation_and_deduplication():
 
 def test_get_current_thread_id(monkeypatch):
     """Test get_current_thread_id with explicit config, get_config, and empty state."""
-    from opscloud.tools.thread import get_current_thread_id
+    from talkops.tools.thread import get_current_thread_id
 
     # 1. With config kwarg via invoke
     res = get_current_thread_id.invoke({}, config={"configurable": {"thread_id": "thread-123"}})
@@ -83,7 +83,7 @@ def test_get_current_thread_id(monkeypatch):
 
 def test_web_search_marker_and_factory(monkeypatch):
     """Test web_search marker, create_web_search_tool, and is_web_search_tool."""
-    from opscloud.tools.web_search import (
+    from talkops.tools.web_search import (
         create_web_search_tool,
         is_web_search_tool,
         web_search,
@@ -98,14 +98,14 @@ def test_web_search_marker_and_factory(monkeypatch):
     assert is_web_search_tool(bound_tool) is True
 
     # Other tools are not recognized
-    from opscloud.tools.fetch_url import fetch_url
+    from talkops.tools.fetch_url import fetch_url
 
     assert is_web_search_tool(fetch_url) is False
 
     # Calling web_search without Tavily key returns helpful error dictionary
     import sys
 
-    ws_mod = sys.modules["opscloud.tools.web_search"]
+    ws_mod = sys.modules["talkops.tools.web_search"]
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setattr(ws_mod, "_get_tavily_client", lambda: None)
     err_res = web_search.invoke({"query": "kubernetes pod status"})
@@ -118,7 +118,7 @@ def test_web_search_marker_and_factory(monkeypatch):
 
 def test_fetch_url_validation_and_user_agent(monkeypatch):
     """Test fetch_url SSRF guard and user-agent header."""
-    from opscloud.tools.fetch_url import fetch_url
+    from talkops.tools.fetch_url import fetch_url
 
     # SSRF guard blocks loopback
     res_loopback = fetch_url.invoke({"url": "http://127.0.0.1:8080/secret"})

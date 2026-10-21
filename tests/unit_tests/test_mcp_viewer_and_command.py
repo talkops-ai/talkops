@@ -10,14 +10,14 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.screen import Screen
 
-from opscloud.commands._base import CommandContext
-from opscloud.commands.core.mcp import McpHandler
-from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
-from opscloud.mcp.preload import (
+from talkops.commands._base import CommandContext
+from talkops.commands.core.mcp import McpHandler
+from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+from talkops.mcp.preload import (
     clear_cached_mcp_server_infos,
     set_cached_mcp_server_info,
 )
-from opscloud.ui.widgets.mcp_viewer import (
+from talkops.ui.widgets.mcp_viewer import (
     MCPServerHeaderItem,
     MCPToolDetailScreen,
     MCPToolItem,
@@ -212,11 +212,11 @@ async def test_mcp_command_status() -> None:
 
 
 @pytest.mark.asyncio
-async def test_opscloud_app_preload_metadata_background() -> None:
-    """Verify OpsCloudApp._preload_mcp_metadata_background loads servers and refreshes viewer."""
-    from opscloud.ui.app import OpsCloudApp
+async def test_talkops_app_preload_metadata_background() -> None:
+    """Verify TalkOpsApp._preload_mcp_metadata_background loads servers and refreshes viewer."""
+    from talkops.ui.app import TalkOpsApp
 
-    app = OpsCloudApp(defer_server_start=True, mcp_preload_kwargs={"no_mcp": False})
+    app = TalkOpsApp(defer_server_start=True, mcp_preload_kwargs={"no_mcp": False})
     assert app._mcp_server_info == []
 
     mock_infos = [
@@ -228,7 +228,7 @@ async def test_opscloud_app_preload_metadata_background() -> None:
         )
     ]
 
-    with patch("opscloud.mcp.preload.preload_mcp_server_info", AsyncMock(return_value=mock_infos)):
+    with patch("talkops.mcp.preload.preload_mcp_server_info", AsyncMock(return_value=mock_infos)):
         await app._preload_mcp_metadata_background()
         assert app._mcp_server_info == mock_infos
         assert app.get_mcp_servers() == mock_infos
