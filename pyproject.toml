@@ -1,6 +1,6 @@
 [project]
 name = "talkops-ai"
-version = "0.3.0b12"
+version = "0.3.0b13"
 description = "Autonomous Multi-Agent Framework for Software & Infrastructure Coding, Cloud Operations, DevOps, SRE, FinOps & Event-Driven Automation"
 readme = "README.md"
 requires-python = ">=3.12"

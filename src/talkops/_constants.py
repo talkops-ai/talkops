@@ -36,7 +36,7 @@ SERVER_ENV_PREFIX = "TALKOPS_SERVER_"
 # Tooling and shell execution
 SHELL_TIMEOUT_SECONDS = 60
 DEFAULT_PORT = 0  # Ephemeral
-DEFAULT_CONTROL_PLANE_URL = "http://localhost:8000"
+DEFAULT_CONTROL_PLANE_URL = "https://console.talkops.ai"
 
 # Large tool results prefix (used by rubrics and compaction)
 LARGE_TOOL_RESULTS_PREFIX = "/large_tool_results/"
