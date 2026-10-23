@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive configuration manager screen for /config.
 
 Dynamically discovers all configurable options from the manifest and displays
@@ -109,12 +123,14 @@ class _InlineEditScreen(OpsModalScreen[str | None]):
     """
 
     def __init__(self, label: str, current_value: str, placeholder: str = "") -> None:
+        """Initialize _InlineEditScreen."""
         super().__init__()
         self._label = label
         self._current_value = current_value
         self._placeholder = placeholder
 
     def compose_modal(self):
+        """Execute compose modal on _InlineEditScreen."""
         yield Static(f"Edit: {self._label}", classes="edit-title")
         yield Input(
             value=self._current_value,
@@ -126,6 +142,7 @@ class _InlineEditScreen(OpsModalScreen[str | None]):
             yield Button("Cancel", variant="default", id="cancel-btn")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         self.set_modal_title(f"Edit: {self._label}")
         self.set_modal_subtitle([
@@ -140,6 +157,7 @@ class _InlineEditScreen(OpsModalScreen[str | None]):
             pass
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button pressed events."""
         if event.button.id == "save-btn":
             val = self.query_one("#edit-input", Input).value
             self.dismiss(val)
@@ -147,9 +165,11 @@ class _InlineEditScreen(OpsModalScreen[str | None]):
             self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle input submitted events."""
         self.dismiss(event.value)
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(None)
 
 
@@ -170,6 +190,7 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
         """Posted when a setting field is updated."""
 
         def __init__(self, key: str, value: Any) -> None:
+            """Initialize SettingChanged."""
             super().__init__()
             self.key = key
             self.value = value
@@ -203,7 +224,7 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
     ConfigManagerScreen OptionList#config-options {
         height: 1fr;
         min-height: 5;
-        background: $background;
+        background: transparent;
         border: solid $primary 20%;
     }
 
@@ -237,6 +258,7 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
         settings: Settings | None = None,
         initial_tab: ConfigTabId = "all",
     ) -> None:
+        """Initialize ConfigManagerScreen."""
         super().__init__()
         if settings is None:
             from talkops.config.settings import settings as global_settings
@@ -251,6 +273,7 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
         self._toml_data: dict[str, Any] | None = None
 
     def compose_modal(self):
+        """Execute compose modal on ConfigManagerScreen."""
         yield Static("TalkOps Configuration", classes="config-title")
         yield PillTabs(
             _CONFIG_TABS,
@@ -268,6 +291,7 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
         )
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         glyphs = get_glyphs()
         self._toml_data = load_config_toml()
@@ -304,11 +328,13 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
             tabs.set_tab_count(tab_id, cnt)
 
     def on_pill_tabs_tab_changed(self, event: PillTabs.TabChanged) -> None:
+        """Handle pill tabs tab changed events."""
         if event.tab_id in _CONFIG_TAB_ORDER and event.tab_id != self._active_tab:
             self._active_tab = event.tab_id  # type: ignore[assignment]
             self._refresh_options()
 
     def action_cycle_tab(self) -> None:
+        """Execute the cycle tab action."""
         try:
             idx = _CONFIG_TAB_ORDER.index(self._active_tab)
         except ValueError:
@@ -322,6 +348,7 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
         self._refresh_options()
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         width = self._option_content_width("#config-options", fallback=84)
         if width != getattr(self, "_last_row_width", None):
             self._last_row_width = width
@@ -368,6 +395,7 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
             self._refresh_options()
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changed events."""
         if event.input.id == "config-search":
             self._filter_query = event.value.strip().lower()
             self._refresh_options()
@@ -452,6 +480,7 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
     # ── Selection Handler ─────────────────────────────────
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Handle option list option selected events."""
         key = event.option.id
         if not key or key.startswith("_group_") or key == "none":
             return
@@ -815,9 +844,11 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
             pass
 
     def action_focus_next_widget(self) -> None:
+        """Execute the focus next widget action."""
         self.screen.focus_next()
 
     def action_focus_prev_widget(self) -> None:
+        """Execute the focus prev widget action."""
         self.screen.focus_previous()
 
     def _refresh_options(self) -> None:
@@ -830,6 +861,7 @@ class ConfigManagerScreen(OpsModalScreen[bool]):
             pass
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(self._changes_made)
 
     @staticmethod

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive model selector screen for `/model` command."""
 
 from __future__ import annotations
@@ -5,7 +19,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any, ClassVar
 
-from talkops.ui.widgets.modal_base import escape_markup as escape
 from textual.binding import Binding, BindingType
 from textual.containers import Container, Vertical, VerticalScroll
 from textual.content import Content
@@ -32,6 +45,7 @@ from talkops.model.config import (
     save_default_model,
 )
 from talkops.ui.widgets.modal_base import ModalDialog, OpsModalScreen
+from talkops.ui.widgets.modal_base import escape_markup as escape
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -59,6 +73,7 @@ class ModelOption(Static):
         classes: str = "",
         show_provider: bool = False,
     ) -> None:
+        """Initialize ModelOption."""
         super().__init__(label, classes=classes, markup=True)
         self.model_spec = model_spec
         self.display_name = display_name or label.strip().lstrip("› ").strip()
@@ -85,6 +100,7 @@ class ModelOption(Static):
             index: int,
             effort: str | None = None,
         ) -> None:
+            """Initialize Clicked."""
             super().__init__()
             self.model_spec = model_spec
             self.provider = provider
@@ -92,6 +108,7 @@ class ModelOption(Static):
             self.effort = effort
 
     def on_click(self, event: Click) -> None:
+        """Handle mouse click events."""
         event.stop()
         if event.chain > 1:
             return
@@ -103,6 +120,7 @@ class ModelOption(Static):
         self.post_message(self.Clicked(self.model_spec, self.provider, self.index, self.effort))
 
     def render_label_text(self, show_specs: bool = False) -> str:
+        """Render label text."""
         cursor = "› " if self.is_selected else "  "
         main_name = self.model_spec if show_specs else self.display_name
         text = f"{cursor}{escape(main_name)}"
@@ -115,6 +133,7 @@ class ModelOption(Static):
         return text
 
     def set_selected(self, selected: bool, show_specs: bool = False) -> None:
+        """Set selected."""
         if self.is_selected == selected:
             return
         self.is_selected = selected
@@ -171,7 +190,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
         height: auto;
         min-height: 3;
         max-height: 24;
-        background: $background;
+        background: transparent;
         scrollbar-gutter: stable;
     }
 
@@ -221,7 +240,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
         padding: 0 1;
         margin-top: 1;
         border-top: solid $primary 20%;
-        background: $background;
+        background: transparent;
     }
 
     ModelSelectorScreen .model-selector-help {
@@ -235,6 +254,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
         current_provider: str | None = None,
         current_effort: str | None = None,
     ) -> None:
+        """Initialize ModelSelectorScreen."""
         super().__init__()
         self._current_model = current_model
         self._current_provider = current_provider
@@ -266,6 +286,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
     # ── Compose ──────────────────────────────────────────
 
     def compose_modal(self):
+        """Execute compose modal on ModelSelectorScreen."""
         if self._current_spec:
             title = f"Select Model (current: {self._current_spec})"
         else:
@@ -295,6 +316,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
         )
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         self._update_modal_chrome()
         try:
@@ -338,6 +360,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
         ])
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         self.call_after_refresh(self._fit_model_list)
 
     def _fit_model_list(self) -> None:
@@ -423,7 +446,9 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
                 ]
         elif self._recommended_only:
             self._filtered_models = [
-                m for m in self._all_models if m[0] in RECOMMENDED_SPECS
+                m
+                for m in self._all_models
+                if m[0] in RECOMMENDED_SPECS or (m[2] == "ollama" and "(installed)" in m[1])
             ]
         else:
             self._filtered_models = list(self._all_models)
@@ -432,6 +457,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
             self._selected_index = max(0, len(self._filtered_models) - 1)
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changed events."""
         if event.input.id == "model-filter":
             self._filter_text = event.value
             self._selected_index = 0
@@ -442,6 +468,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
             self._schedule_rebuild()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle input submitted events."""
         self.action_select()
 
     def _schedule_rebuild(self) -> None:
@@ -868,9 +895,11 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
     # ── Actions ──────────────────────────────────────────
 
     def action_move_up(self) -> None:
+        """Execute the move up action."""
         self._move_selection(-1)
 
     def action_move_down(self) -> None:
+        """Execute the move down action."""
         self._move_selection(1)
 
     def _visible_page_size(self) -> int:
@@ -891,6 +920,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
         return max(1, int(height * total_models / total_rows))
 
     def action_page_up(self) -> None:
+        """Execute the page up action."""
         if not self._option_widgets:
             return
         page = self._visible_page_size()
@@ -900,6 +930,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
             self._move_selection(delta)
 
     def action_page_down(self) -> None:
+        """Execute the page down action."""
         if not self._option_widgets:
             return
         count = len(self._option_widgets)
@@ -910,6 +941,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
             self._move_selection(delta)
 
     def action_select(self) -> None:
+        """Execute the select action."""
         if getattr(self, "_dismissed", False):
             return
         if not self._option_widgets:
@@ -1021,11 +1053,13 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
             return None
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         if getattr(self, "_dismissed", False):
             return
         self.dismiss(None)
 
     def action_tab_complete(self) -> None:
+        """Execute the tab complete action."""
         if not self._option_widgets:
             return
         opt = self._option_widgets[self._selected_index]
@@ -1037,6 +1071,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
             pass
 
     def action_set_default(self) -> None:
+        """Execute the set default action."""
         if not self._option_widgets:
             return
         opt = self._option_widgets[self._selected_index]
@@ -1055,6 +1090,7 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
             w.update(w.render_label_text(self._show_specs))
 
     def action_toggle_recommended(self) -> None:
+        """Execute the toggle recommended action."""
         self._recommended_only = not self._recommended_only
         self._selected_index = 0
         self._apply_filter()
@@ -1062,11 +1098,13 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
         self._update_info()
 
     def action_toggle_names(self) -> None:
+        """Execute the toggle names action."""
         self._show_specs = not self._show_specs
         for opt in self._option_widgets:
             opt.update(opt.render_label_text(self._show_specs))
 
     def on_model_option_clicked(self, event: ModelOption.Clicked) -> None:
+        """Handle model option clicked events."""
         if getattr(self, "_dismissed", False):
             return
         self._select_with_auth_check(event.model_spec, event.provider, event.effort)

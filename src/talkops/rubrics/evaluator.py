@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Grader tools, prompts, and standalone evaluator for rubric verification.
 
 Provides:
@@ -22,7 +36,7 @@ from deepagents.middleware.rubric import (
     GraderResponse,
     GraderVerdict,
 )
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool, tool
 
 from talkops.middleware._repository_bounds import (
@@ -66,7 +80,15 @@ def _rubric_grader_system_prompt(
         "2. Only mark a criterion satisfied if direct, verifiable evidence in the transcript, command outputs, or "
         "on-disk files demonstrates it. Never assume or extrapolate completion.\n"
         "3. If any criterion is not satisfied or is partially completed, provide clear, actionable feedback in the "
-        "deficiency report explaining exactly what is missing or failed."
+        "deficiency report explaining exactly what is missing or failed.\n\n"
+        "## 6-Axis Deliverable Conformance Checklist\n"
+        "Verify the agent's final deliverable across all six operational axes:\n"
+        "- **Deliverable**: Exact requested output format, manifest, code change, or structured table was produced.\n"
+        "- **Completeness**: Every sub-question, target resource/region, and acceptance criterion was addressed without omissions.\n"
+        "- **Conformance**: All explicit positive and negative constraints (e.g., read-only bounds, naming, tool limits) were respected.\n"
+        "- **Grounding**: Every factual claim, metric, and root cause is backed by verified tool output or file evidence (`file_path:line_number` or resource ARN/ID).\n"
+        "- **Appropriateness**: Technical depth, idempotency, and copy-pasteable CLI remediation commands meet production engineering standards.\n"
+        "- **Safety**: No unapproved destructive mutations, wildcard privilege escalations, or plaintext secrets were introduced."
     )
 
     if repository_root and repository_tool_names:
@@ -341,8 +363,6 @@ def evaluate_rubric(
     use_jev: bool | None = None,
 ) -> GraderResponse:
     """Directly evaluate criteria against evidence using the Rubric Grader Agent or Jev."""
-    from langchain_core.messages import BaseMessage
-
     if use_jev is True:
         from talkops.rubrics.jev_compiler import JevCriteriaCompiler
         from talkops.rubrics.jev_grader import JevHybridRubricGrader

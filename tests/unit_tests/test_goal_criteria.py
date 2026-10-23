@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for GoalCriteriaMiddleware, GoalProposal, and criteria agent factories."""
 
 from typing import Any
@@ -8,13 +22,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import ValidationError
 
 from talkops.middleware.goal_criteria import (
+    _REPOSITORY_RECURSION_LIMIT,
+    _STRUCTURED_OUTPUT_TOOL_NAME,
+    _WEB_SEARCH_CALL_LIMIT,
     GoalAmendRequest,
     GoalCreateRequest,
     GoalCriteriaMiddleware,
     GoalProposal,
-    _REPOSITORY_RECURSION_LIMIT,
-    _STRUCTURED_OUTPUT_TOOL_NAME,
-    _WEB_SEARCH_CALL_LIMIT,
     _raise_terminal_goal_state_size_error,
     create_goal_criteria_agent,
     create_goal_criteria_fallback_agent,
@@ -28,7 +42,9 @@ from talkops.state.goal_state_limits import (
 
 
 class TestGoalProposal:
+    """Test suite or helper class for test goal proposal."""
     def test_valid_proposal(self):
+        """Verify valid proposal."""
         prop = GoalProposal(
             objective="Deploy AWS RDS Postgres instance",
             criteria="- Multi-AZ enabled\n- KMS encryption enabled\n- Subnet group configured",
@@ -37,14 +53,17 @@ class TestGoalProposal:
         assert "Multi-AZ" in prop.criteria
 
     def test_empty_objective_rejected(self):
+        """Verify empty objective rejected."""
         with pytest.raises(ValidationError):
             GoalProposal(objective="   ", criteria="- Valid criterion")
 
     def test_empty_criteria_rejected(self):
+        """Verify empty criteria rejected."""
         with pytest.raises(ValidationError):
             GoalProposal(objective="Valid objective", criteria="   ")
 
     def test_overlong_individual_field_rejected(self):
+        """Verify overlong individual field rejected."""
         with pytest.raises(ValidationError):
             GoalProposal(
                 objective="x" * (GOAL_OBJECTIVE_CHAR_LIMIT + 1),
@@ -58,6 +77,7 @@ class TestGoalProposal:
 
     def test_combined_length_exceeded_rejected(self):
         # Even if individual fields fit their limits (8k and 12k), their sum cannot exceed 12k
+        """Verify combined length exceeded rejected."""
         with pytest.raises(ValidationError) as exc_info:
             GoalProposal(
                 objective="o" * 7_000,
@@ -67,8 +87,10 @@ class TestGoalProposal:
 
 
 class TestTerminalGoalStateSizeError:
+    """Test suite or helper class for test terminal goal state size error."""
     def test_combined_overshoot_raises_terminal_size_error(self):
         # Construct a fake structured-output exception where tool call arguments exceed 12k combined
+        """Verify combined overshoot raises terminal size error."""
         msg = AIMessage(
             content="",
             tool_calls=[
@@ -92,6 +114,7 @@ class TestTerminalGoalStateSizeError:
     def test_per_field_overshoot_returns_retry_feedback(self):
         # When an individual field overshot its max_length (e.g. objective > 8000),
         # this is published in the schema so the model should be allowed to retry
+        """Verify per field overshoot returns retry feedback."""
         msg = AIMessage(
             content="",
             tool_calls=[
@@ -113,12 +136,15 @@ class TestTerminalGoalStateSizeError:
 
 
 class TestAgentCreation:
+    """Test suite or helper class for test agent creation."""
     def test_create_fallback_agent(self):
+        """Verify create fallback agent."""
         model = GenericFakeChatModel(messages=iter([AIMessage(content="ok")]))
         agent = create_goal_criteria_fallback_agent(model=model)
         assert agent is not None
 
     def test_create_criteria_agent(self):
+        """Verify create criteria agent."""
         from deepagents.backends import StateBackend
 
         model = GenericFakeChatModel(messages=iter([AIMessage(content="ok")]))
@@ -133,7 +159,9 @@ class TestAgentCreation:
 
 
 class TestGoalCriteriaMiddleware:
+    """Test suite or helper class for test goal criteria middleware."""
     def test_update_valid_proposal(self):
+        """Verify update valid proposal."""
         middleware = GoalCriteriaMiddleware(criteria_agent=None, fallback_agent=None)
         req: GoalCreateRequest = {
             "kind": "create",
@@ -157,6 +185,7 @@ class TestGoalCriteriaMiddleware:
         assert update["goal_criteria_request"] is None
 
     def test_update_proposal_with_explicit_plan_and_todos(self):
+        """Verify update proposal with explicit plan and todos."""
         middleware = GoalCriteriaMiddleware(criteria_agent=None, fallback_agent=None)
         req: GoalCreateRequest = {
             "kind": "create",
@@ -186,7 +215,9 @@ class TestGoalCriteriaMiddleware:
 
 
 class TestGoalReviewMenuPlanRendering:
+    """Test suite or helper class for test goal review menu plan rendering."""
     def test_goal_review_menu_builds_plan_todos_and_rubric_markdown(self):
+        """Verify goal review menu builds plan todos and rubric markdown."""
         from talkops.ui.widgets.goal_review import GoalReviewMenu
 
         menu = GoalReviewMenu(
@@ -211,6 +242,7 @@ class TestGoalReviewMenuPlanRendering:
         assert "- SSE-KMS enabled" in rendered
 
     def test_extract_clarifying_questions_from_inline_markdown_and_choices(self):
+        """Verify extract clarifying questions from inline markdown and choices."""
         from talkops.rubrics.generator import extract_clarifying_questions
 
         plan_with_inline_questions = (
@@ -242,6 +274,7 @@ class TestGoalReviewMenuPlanRendering:
         assert any("exported to a file" in c.lower() for c in q1_choices)
 
     def test_goal_review_menu_interactive_questions_and_labeled_inputs(self):
+        """Verify goal review menu interactive questions and labeled inputs."""
         from talkops.ui.widgets.goal_review import GoalReviewMenu
 
         plan_md = (

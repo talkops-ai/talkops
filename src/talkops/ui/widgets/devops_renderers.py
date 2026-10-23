@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """DevOps-specific terminal output renderers for Terraform, Helm, Kubectl, and Ansible."""
 
 from __future__ import annotations
@@ -368,11 +382,13 @@ class TerraformPlanWidget(Widget):
     """
 
     def __init__(self, plan_output: str, is_json: bool = False, **kwargs: Any) -> None:
+        """Initialize TerraformPlanWidget."""
         super().__init__(**kwargs)
         self._plan_output = plan_output
         self._is_json = is_json
 
     def compose(self):
+        """Compose and yield child widgets for this component."""
         renderer = TerraformPlanRenderer()
         colors = get_theme_colors(self) if self.is_attached else get_theme_colors(None)
         if self._is_json:

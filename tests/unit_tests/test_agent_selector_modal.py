@@ -1,6 +1,22 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for AgentSelectorScreen OpsModalScreen migration."""
 
 from __future__ import annotations
+
+from unittest.mock import MagicMock
 
 import pytest
 from textual.app import App, ComposeResult
@@ -13,18 +29,22 @@ class DummyAgentApp(App[None]):
     """Minimal textual app to mount and test AgentSelectorScreen."""
 
     def __init__(self, screen_instance: AgentSelectorScreen) -> None:
+        """Initialize DummyAgentApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
 @pytest.mark.asyncio
 async def test_agent_selector_screen_mount_and_options() -> None:
+    """Verify agent selector screen mount and options."""
     agents = ["default", "devops-engineer", "security-auditor"]
     screen = AgentSelectorScreen(
         current_agent="devops-engineer",
@@ -54,6 +74,7 @@ async def test_agent_selector_screen_mount_and_options() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_selector_screen_empty() -> None:
+    """Verify agent selector screen empty."""
     screen = AgentSelectorScreen(
         current_agent=None,
         agent_names=[],
@@ -122,7 +143,7 @@ async def test_agent_selector_responsive_row_width() -> None:
 
 @pytest.mark.asyncio
 async def test_agents_handler_lists_plugin_agents() -> None:
-    from unittest.mock import MagicMock
+    """Verify agents handler lists plugin agents."""
     from talkops.commands._base import CommandContext
     from talkops.commands.power.agents import AgentsHandler
 
@@ -146,7 +167,9 @@ async def test_agents_handler_lists_plugin_agents() -> None:
 
 @pytest.mark.asyncio
 async def test_agents_handler_activates_session() -> None:
+    """Verify agents handler activates session."""
     from unittest.mock import AsyncMock, MagicMock
+
     from talkops.commands._base import CommandContext
     from talkops.commands.power.agents import AgentsHandler, get_agent_session_state
 

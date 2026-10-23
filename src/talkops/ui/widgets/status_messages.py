@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Status, system, skill, error, turn summary, and rubric message widgets.
 
 Extracted from `talkops.ui.widgets.messages` (Phase 5 UI modularization).
@@ -8,13 +22,19 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from rich.console import Console
+from rich.segment import Segment
+from rich.styled import Styled
+from rich.table import Table
 from rich.text import Text
+from rich.theme import Theme
 from textual import on
 from textual.containers import Vertical, VerticalScroll
-from textual.content import Content
+from textual.content import Content, Span
 from textual.events import Click
 from textual.message import Message
 from textual.reactive import var
+from textual.style import Style
 from textual.widgets import Static
 
 from talkops.config.settings import get_glyphs, is_ascii_mode
@@ -22,7 +42,8 @@ from talkops.ui import theme
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from rich.console import Console as RichConsole, ConsoleOptions, RenderResult
+    from rich.console import Console as RichConsole
+    from rich.console import ConsoleOptions, RenderResult
     from textual.app import ComposeResult
 
 logger = get_logger(__name__)
@@ -55,26 +76,28 @@ class _RichMarkdownWrapper:
     }
 
     _COMMAND_THEME_OVERRIDES: ClassVar[dict[str, str]] = {
-        "markdown.h1": "bold #2dd4bf underline",
-        "markdown.h2": "bold #7AA2F7",
-        "markdown.h3": "bold #2dd4bf",
-        "markdown.h4": "bold #BB9AF7",
-        "markdown.table.header": "bold #2dd4bf",
-        "markdown.table.border": "#3B3E52",
-        "markdown.code": "bold #BB9AF7",
-        "markdown.code_inline": "bold #2dd4bf",
-        "markdown.bullet": "bold #2dd4bf",
-        "markdown.link": "underline #7AA2F7",
-        "markdown.hr": "#3B3E52",
+        "markdown.h1": f"bold {theme.DC_TEAL} underline",
+        "markdown.h2": f"bold {theme.DC_CYAN}",
+        "markdown.h3": f"bold {theme.DC_TEAL}",
+        "markdown.h4": f"bold {theme.DC_PURPLE}",
+        "markdown.table.header": f"bold {theme.DC_TEAL}",
+        "markdown.table.border": theme.DC_BORDER_LT,
+        "markdown.code": f"bold {theme.DC_PURPLE}",
+        "markdown.code_inline": f"bold {theme.DC_TEAL}",
+        "markdown.bullet": f"bold {theme.DC_TEAL}",
+        "markdown.link": f"underline {theme.DC_CYAN}",
+        "markdown.hr": theme.DC_BORDER_LT,
     }
 
     def __init__(self, markup: str, *, is_command: bool = False) -> None:
+        """Initialize _RichMarkdownWrapper."""
         from rich.markdown import (
             Markdown as RichMarkdown,
+        )
+        from rich.markdown import (
             MarkdownElement,
             TableElement,
         )
-        from rich.table import Table
 
         class _FoldingTableElement(TableElement):
             """Render long Markdown table cells by folding instead of eliding."""
@@ -82,6 +105,7 @@ class _RichMarkdownWrapper:
             def __rich_console__(  # noqa: PLW3201
                 self, console: RichConsole, options: ConsoleOptions
             ) -> RenderResult:
+                """Execute rich console on _FoldingTableElement."""
                 for renderable in super().__rich_console__(console, options):
                     if isinstance(renderable, Table):
                         for column in renderable.columns:
@@ -103,14 +127,25 @@ class _RichMarkdownWrapper:
     def __rich_console__(  # noqa: PLW3201
         self, console: RichConsole, options: ConsoleOptions
     ) -> RenderResult:
-        from rich.styled import Styled
-        from rich.theme import Theme
-
-        overrides = (
-            self._COMMAND_THEME_OVERRIDES
-            if self._is_command
-            else self._MUTED_THEME_OVERRIDES
-        )
+        """Execute rich console on _RichMarkdownWrapper."""
+        if self._is_command:
+            c = theme.get_theme_colors()
+            border = theme.blend_hex(c.foreground, c.background, 0.25)
+            overrides = {
+                "markdown.h1": f"bold {c.primary} underline",
+                "markdown.h2": f"bold {c.secondary}",
+                "markdown.h3": f"bold {c.primary}",
+                "markdown.h4": f"bold {c.accent}",
+                "markdown.table.header": f"bold {c.primary}",
+                "markdown.table.border": border,
+                "markdown.code": f"bold {c.accent}",
+                "markdown.code_inline": f"bold {c.primary}",
+                "markdown.bullet": f"bold {c.primary}",
+                "markdown.link": f"underline {c.secondary}",
+                "markdown.hr": border,
+            }
+        else:
+            overrides = self._MUTED_THEME_OVERRIDES
         md_theme = Theme(overrides, inherit=True)
         try:
             with console.use_theme(md_theme):
@@ -137,11 +172,6 @@ def _markdown_to_content(
     is_command: bool = False,
 ) -> Content:
     """Render markdown to selectable `Content` at a fixed width."""
-    from rich.console import Console
-    from rich.segment import Segment
-    from textual.content import Span
-    from textual.style import Style
-
     render_width = max(width, 1)
     if console is None:
         console = Console(width=render_width)
@@ -253,6 +283,7 @@ class SkillMessage(Vertical):
         content: str = "",
         **kwargs: Any,
     ) -> None:
+        """Initialize SkillMessage."""
         super().__init__(**kwargs)
         self._skill_name = skill_name or name or "skill"
         self._description = description
@@ -266,6 +297,7 @@ class SkillMessage(Vertical):
         self._md_rendered: bool = False
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         from talkops.skills.invocation import format_skill_slash_name
 
         colors = theme.get_theme_colors(self)
@@ -295,6 +327,7 @@ class SkillMessage(Vertical):
         yield _SkillToggle("", classes="skill-hint", id="skill-hint")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         if is_ascii_mode():
             colors = theme.get_theme_colors(self)
             self.styles.border_left = ("ascii", colors.skill)
@@ -348,11 +381,13 @@ class SkillMessage(Vertical):
         self._md_rendered = True
 
     def toggle_body(self) -> None:
+        """Toggle body."""
         if not self._stripped_body.strip():
             return
         self._expanded = not self._expanded
 
     def watch__expanded(self, expanded: bool) -> None:
+        """React to changes in the expanded reactive attribute."""
         body = self._stripped_body.strip()
         if not body:
             return
@@ -414,6 +449,7 @@ class ErrorMessage(Static):
     """
 
     def __init__(self, content: str, **kwargs: Any) -> None:
+        """Initialize ErrorMessage."""
         self._raw_content = content
         text = Text()
         text.append("Error: ", style="bold red")
@@ -447,10 +483,11 @@ class SystemMessage(Static):
     """
 
     def __init__(self, content: str, *, command: str | None = None) -> None:
+        """Initialize SystemMessage."""
         self._raw_content = content
         self._timestamp = time.strftime("%H:%M:%S")
         self._show_timestamp = False
-        self._markdown_cache: tuple[int, Content] | None = None
+        self._markdown_cache: tuple[tuple[int, str], Content] | None = None
         self.command = command
         super().__init__("")
         self.auto_links = False
@@ -468,6 +505,7 @@ class SystemMessage(Static):
         return self.has_class("-command-output") or self.has_class("-card") or bool(self.command)
 
     def set_timestamp_visible(self, visible: bool) -> None:
+        """Set timestamp visible."""
         self._show_timestamp = visible
         self._markdown_cache = None
         self.refresh(layout=True)
@@ -498,6 +536,7 @@ class SystemMessage(Static):
         return content
 
     def render(self) -> Content:
+        """Render the widget content."""
         width = self.content_size.width
         if width <= 0:
             width = self.container_size.width
@@ -507,14 +546,19 @@ class SystemMessage(Static):
                 except Exception:
                     width = 80
         text = self._build_display_text()
-        if self._markdown_cache is None or self._markdown_cache[0] != width:
+        try:
+            theme_name = str(getattr(self.app, "theme", ""))
+        except Exception:
+            theme_name = ""
+        cache_key = (width, theme_name)
+        if self._markdown_cache is None or self._markdown_cache[0] != cache_key:
             try:
                 console = self.app.console
             except Exception:
                 console = None
             is_cmd = self._is_command_mode()
             content = _markdown_to_content(text, width, console, is_command=is_cmd)
-            self._markdown_cache = (width, content)
+            self._markdown_cache = (cache_key, content)
         return self._markdown_cache[1]
 
 
@@ -534,6 +578,7 @@ class CommandOutputMessage(SystemMessage):
     """
 
     def __init__(self, content: str, *, command: str | None = None) -> None:
+        """Initialize CommandOutputMessage."""
         super().__init__(content, command=command)
         self.add_class("-card")
         self.add_class("-command-output")
@@ -585,6 +630,7 @@ class TurnSummary(Static):
         tip: str | None = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize TurnSummary."""
         super().__init__(**kwargs)
         self.elapsed_seconds = max(0.0, elapsed_seconds)
         self.tool_count = max(0, tool_count)
@@ -598,6 +644,7 @@ class TurnSummary(Static):
         self.tip: str | None = cleaned_tip or None
 
     def summary_text(self) -> str:
+        """Execute summary text on TurnSummary."""
         from talkops.utils.session_stats import format_cost, format_token_count
 
         glyphs = get_glyphs()
@@ -611,6 +658,7 @@ class TurnSummary(Static):
         return f" {glyphs.separator} ".join(parts)
 
     def render(self) -> Content:
+        """Render the widget content."""
         glyphs = get_glyphs()
         parts: list[tuple[str, str] | str] = [
             (f"{glyphs.checkmark} ", "bold $success"),
@@ -633,7 +681,7 @@ class TurnSummary(Static):
 class CompactionMessage(Static):
     """Inline divider banner rendered when conversation history is compacted.
 
-    Modeled on Antigravity CLI's compaction marker:
+    Format:
     Line 1: ``──────────────────── Conversation compacted ────────────────────``
     Line 2: ``    18 steps summarized · context 172.4K → ~26.8K (4.2K summary) · took 3.1s``
     """
@@ -660,6 +708,7 @@ class CompactionMessage(Static):
         duration_seconds: float = 0.0,
         **kwargs: Any,
     ) -> None:
+        """Initialize CompactionMessage."""
         super().__init__(**kwargs)
         self.steps_summarized = max(0, int(steps_summarized))
         self.pre_tokens = max(0, int(pre_tokens))
@@ -702,6 +751,7 @@ class CompactionMessage(Static):
         return f" {glyphs.separator} ".join(parts)
 
     def render(self) -> Content:
+        """Render the widget content."""
         width = self.content_size.width
         if width <= 0:
             width = self.container_size.width
@@ -737,6 +787,7 @@ class RubricResultMessage(Vertical):
         """Posted when the grader-details expansion state changes."""
 
         def __init__(self, widget: RubricResultMessage, expanded: bool) -> None:
+            """Initialize ExpansionChanged."""
             super().__init__()
             self.widget = widget
             self.expanded = expanded
@@ -787,12 +838,14 @@ class RubricResultMessage(Vertical):
         details: str,
         **kwargs: Any,
     ) -> None:
+        """Initialize RubricResultMessage."""
         super().__init__(**kwargs)
         self._summary = summary
         self._details = details
         self._hint_widget: _RubricResultToggle | None = None
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield _RubricResultToggle(
             Content.styled(self._summary, "dim italic"),
             classes="rubric-result-summary",
@@ -805,6 +858,7 @@ class RubricResultMessage(Vertical):
         yield _RubricResultToggle("", classes="rubric-result-hint")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         self._hint_widget = self.query_one(
             ".rubric-result-hint",
             _RubricResultToggle,
@@ -815,10 +869,12 @@ class RubricResultMessage(Vertical):
         self._update_hint()
 
     def toggle_details(self) -> None:
+        """Toggle details."""
         if self._details:
             self._expanded = not self._expanded
 
     def watch__expanded(self, expanded: bool) -> None:
+        """React to changes in the expanded reactive attribute."""
         self._update_hint()
         if self.is_attached:
             self.post_message(self.ExpansionChanged(self, expanded))

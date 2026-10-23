@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for CLI settings management and startup workspace folder trust."""
 
 from __future__ import annotations
@@ -44,6 +58,7 @@ class TestResolvePathNoSlash:
     """Tests for resolve_path_no_slash canonical path normalization."""
 
     def test_strips_trailing_slash(self, tmp_path: Path):
+        """Verify strips trailing slash."""
         folder = tmp_path / "my_project"
         folder.mkdir()
         resolved = resolve_path_no_slash(f"{folder}/")
@@ -51,9 +66,11 @@ class TestResolvePathNoSlash:
         assert resolved == str(folder)
 
     def test_preserves_root_slash(self):
+        """Verify preserves root slash."""
         assert resolve_path_no_slash("/") == "/"
 
     def test_expands_tilde_and_normalizes_dot_segments(self):
+        """Verify expands tilde and normalizes dot segments."""
         home = str(Path.home())
         assert resolve_path_no_slash("~") == home
         assert resolve_path_no_slash("~/my_repo/../my_repo/") == f"{home}/my_repo"
@@ -63,6 +80,7 @@ class TestCliSettingParseValidateMarshalMerge:
     """Tests for CliSetting schema parsing, validation, sparse marshaling, and 3-way merge."""
 
     def test_marshal_sparse_omits_defaults_and_preserves_unknown_fields(self):
+        """Verify marshal sparse omits defaults and preserves unknown fields."""
         setting = CliSetting()
         # Default setting marshals to empty JSON object + trailing newline
         raw = setting.marshal_sparse().decode("utf-8")
@@ -87,6 +105,7 @@ class TestCliSettingParseValidateMarshalMerge:
         self, tmp_path: Path
     ):
         # Malformed JSON raises SettingsMalformedError
+        """Verify validate cli settings malformed json vs field validation errors."""
         with pytest.raises(SettingsMalformedError):
             validate_cli_settings(b"{invalid json")
 
@@ -111,6 +130,7 @@ class TestCliSettingParseValidateMarshalMerge:
         assert parsed.unknown_fields == {"extraFutureKey": {"nested": 1}}
 
     def test_three_way_merge_cli_settings(self):
+        """Verify three way merge cli settings."""
         base = CliSetting(
             color_scheme="TalkOps Dark",
             trusted_workspaces=["/ws/a"],
@@ -146,6 +166,7 @@ class TestAtomicWriteAndQuarantine:
     """Tests for atomic_write_settings (0600 tmp + rename) and quarantine_cli_settings."""
 
     def test_atomic_write_creates_0600_file_without_leftover_tmp(self, tmp_path: Path):
+        """Verify atomic write creates 0600 file without leftover tmp."""
         settings_path = tmp_path / "nested" / "settings.json"
         atomic_write_settings(settings_path, b'{"trustedWorkspaces": []}\n')
 
@@ -156,6 +177,7 @@ class TestAtomicWriteAndQuarantine:
         assert tmp_files == []
 
     def test_quarantine_cli_settings_renames_to_corrupted_timestamp(self, tmp_path: Path):
+        """Verify quarantine cli settings renames to corrupted timestamp."""
         settings_path = tmp_path / "settings.json"
         settings_path.write_text("{corrupted", encoding="utf-8")
 
@@ -176,6 +198,7 @@ class TestCliSettingsManagerWorkspaceTrust:
     """Tests for CliSettingsManager workspace trust persistence and project evaluation."""
 
     def test_untrusted_then_trust_workspace_persists_to_settings_json(self, tmp_path: Path):
+        """Verify untrusted then trust workspace persists to settings json."""
         settings_file = tmp_path / ".talkops" / "settings.json"
         workspace = tmp_path / "untrusted_repo"
         workspace.mkdir()
@@ -203,6 +226,7 @@ class TestCliSettingsManagerWorkspaceTrust:
         assert mgr2.workspace_trusted() is True
 
     def test_workspace_in_saved_project_is_trusted(self, tmp_path: Path):
+        """Verify workspace in saved project is trusted."""
         from talkops.config import paths
 
         settings_file = paths.DATA_DIR / "settings.json"
@@ -225,6 +249,7 @@ class TestCliSettingsManagerWorkspaceTrust:
         assert mgr.workspace_trusted() is True
 
     def test_write_cli_settings_refuses_to_overwrite_corrupted_disk_file(self, tmp_path: Path):
+        """Verify write cli settings refuses to overwrite corrupted disk file."""
         settings_file = tmp_path / ".talkops" / "settings.json"
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         settings_file.write_text("{corrupted json", encoding="utf-8")
@@ -247,6 +272,7 @@ class TestWorkspaceTrustTUI:
     async def test_untrusted_workspace_shows_prompt_and_accepting_persists_trust(
         self, tmp_path: Path
     ):
+        """Verify untrusted workspace shows prompt and accepting persists trust."""
         workspace = tmp_path / "my_new_workspace"
         workspace.mkdir()
         reset_cli_settings_manager_for_testing()
@@ -285,6 +311,7 @@ class TestWorkspaceTrustTUI:
     async def test_untrusted_workspace_selecting_no_exits_without_trusting(
         self, tmp_path: Path
     ):
+        """Verify untrusted workspace selecting no exits without trusting."""
         workspace = tmp_path / "untrusted_exit_workspace"
         workspace.mkdir()
         reset_cli_settings_manager_for_testing()
@@ -310,6 +337,7 @@ class TestWorkspaceTrustTUI:
     async def test_corrupted_settings_shows_error_screen_then_quarantines_and_prompts_trust(
         self, tmp_path: Path
     ):
+        """Verify corrupted settings shows error screen then quarantines and prompts trust."""
         from talkops.config import paths
 
         workspace = tmp_path / "workspace_after_corrupt"

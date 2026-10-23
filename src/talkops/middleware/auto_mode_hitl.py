@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Auto-mode HITL middleware — autonomous execution with safety gates.
 
 End-to-end classifier-backed approval policy for TalkOps.
@@ -28,20 +42,20 @@ Key types:
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Mapping, Sequence
 import contextlib
-from dataclasses import dataclass
-from enum import StrEnum
-from hashlib import sha256
 import json
 import os
-from pathlib import Path
 import re
 import shlex
 import stat
 import tempfile
 import time
+from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+from hashlib import sha256
+from pathlib import Path
 from typing import (
     Annotated,
     Any,
@@ -80,6 +94,12 @@ from typing_extensions import TypedDict
 from talkops._constants import READONLY_FS_TOOLS
 from talkops.middleware.goal_state_notice import project_goal_state
 from talkops.middleware.registry import register_middleware
+from talkops.security.approval_mode import (
+    ApprovalMode,
+    approval_mode_key,
+    coerce_approval_mode,
+)
+from talkops.security.jev_classifier import JevSecurityClassifier, JevToolVerdict
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -250,11 +270,13 @@ class DynamicInterruptMapping(dict):
         return False
 
     def __contains__(self, key: object) -> bool:
+        """Return whether the given item is present."""
         if isinstance(key, str):
             return not self.is_readonly_tool(key)
         return super().__contains__(key)
 
     def __getitem__(self, key: str) -> Any:
+        """Return the item for the given key or index."""
         if self.is_readonly_tool(key):
             raise KeyError(key)
         if super().__contains__(key):
@@ -280,6 +302,7 @@ class DynamicInterruptMapping(dict):
         return self._default_config if self._default_config is not None else default
 
     def __bool__(self) -> bool:
+        """Return the truthiness of this instance."""
         return True
 
 
@@ -425,13 +448,6 @@ class _ClassifierDeadlineExceededError(TimeoutError):
 # ---------------------------------------------------------------------------
 # Approval mode
 # ---------------------------------------------------------------------------
-
-from talkops.security.approval_mode import (
-    ApprovalMode,
-    approval_mode_key,
-    coerce_approval_mode,
-)
-from talkops.security.jev_classifier import JevSecurityClassifier, JevToolVerdict
 
 
 async def _live_mode(runtime: object) -> tuple[ApprovalMode, bool]:

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Canonical agent session state channels for TalkOps.
 
 ``AgentSessionChannels`` declares the checkpointed, schema-private channels used by
@@ -64,6 +78,7 @@ AGENT_SESSION_PRIVATE_KEYS: tuple[str, ...] = (
     "_active_agent_plugin_id",
     "_active_agent_description",
     "_agent_session_turn",
+    "_agent_session_error",
 )
 
 
@@ -79,6 +94,9 @@ class AgentSessionChannels(AgentState):
     Main-graph ``after_agent`` hooks (rubric grading, Stop hooks) must no-op
     on agent session turns because the main transcript did not change.
     """
+
+    _agent_session_error: Annotated[NotRequired[str | None], PrivateStateAttr]
+    """Error message when an active agent session turn fails."""
 
     _active_agent_id: Annotated[NotRequired[str | None], PrivateStateAttr]
     """Fully-qualified active plugin agent name, e.g. ``aws-compute@talkops-devops-plugins``."""

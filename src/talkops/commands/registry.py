@@ -1,6 +1,21 @@
-"""Command registry — facade over ``CommandRouter`` providing plugin-aware
-command management, source tracking, and the public API the plugin
-architecture audit expects.
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Command registry facade over ``CommandRouter`` for TalkOps.
+
+Provides plugin-aware command management, source tracking, and the public API
+the plugin architecture audit expects.
 
 This module provides ``CommandRegistry`` as a singleton that wraps
 ``CommandRouter`` with:
@@ -13,12 +28,12 @@ This module provides ``CommandRegistry`` as a singleton that wraps
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 import threading
 from typing import TYPE_CHECKING, Any
 
 from talkops.commands._base import BaseCommandHandler, CommandResult
 from talkops.commands._router import CommandRouter
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from talkops.commands._base import CommandContext
@@ -40,6 +55,7 @@ class CommandRegistry:
     _lock = threading.Lock()
 
     def __init__(self) -> None:
+        """Initialize CommandRegistry."""
         self._router = CommandRouter()
         self._plugin_handlers: dict[str, list[BaseCommandHandler]] = {}
         self._sources: dict[str, str] = {}  # handler_name -> source label
@@ -173,8 +189,9 @@ class CommandRegistry:
     def list_recommendable_commands(
         self, context: dict[str, Any] | None = None
     ) -> list[tuple[str, str]]:
-        """Return deduplicated `(command_name, model_facing_description)` pairs
-        for all commands that define a `model_facing_description` and pass
+        """Return deduplicated `(command_name, model_facing_description)` pairs.
+
+        Includes all commands that define a `model_facing_description` and pass
         `should_recommend(context)`.
         """
         self._ensure_discovered()

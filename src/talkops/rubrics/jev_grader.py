@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Jev-powered System One rubric grader and hybrid evaluator.
 
 Performs ultra-fast (<200ms) parallel criteria verification using TypeSafe AI Jev,
@@ -8,9 +22,10 @@ Tier 2 generative escalation and environmental blocker detection.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+import concurrent.futures
 import inspect
 import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, cast
 
 from deepagents.middleware.rubric import (
@@ -280,7 +295,6 @@ class JevHybridRubricGrader:
             loop = None
 
         if loop is not None and loop.is_running():
-            import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 return executor.submit(

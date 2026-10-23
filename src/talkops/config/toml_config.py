@@ -1,9 +1,22 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Atomic TOML configuration persistence for TalkOps."""
 
 from __future__ import annotations
 
 import contextlib
-from talkops.utils.logger import get_logger
 import os
 import tempfile
 import threading
@@ -14,6 +27,7 @@ from typing import Any
 import tomli_w
 
 from talkops.config.paths import CONFIG_PATH, STATE_DIR
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -173,6 +187,22 @@ def load_default_model(config_path: Path | None = None) -> str | None:
     if isinstance(recent, str) and recent.strip():
         return recent.strip()
     return None
+
+
+def load_model_providers(config_path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Load [models.providers] dictionary from config.toml."""
+    data = read_config_toml(config_path)
+    models_sec = data.get("models", {})
+    if not isinstance(models_sec, dict):
+        return {}
+    providers = models_sec.get("providers", {})
+    if not isinstance(providers, dict):
+        return {}
+    return {
+        str(k).strip(): dict(v)
+        for k, v in providers.items()
+        if isinstance(k, str) and k.strip() and isinstance(v, dict)
+    }
 
 
 def touch_recent_model(model_spec: str) -> bool:
@@ -346,13 +376,34 @@ def load_theme_preference(config_path: Path | None = None) -> str:
 
 
 def apply_stored_credentials() -> None:
-    """Apply any stored credentials from config into the environment."""
+    """Apply any stored credentials from config and credential storage into the environment."""
     data = read_config_toml()
     env_sec = data.get("env", {})
     if isinstance(env_sec, dict):
         for k, v in env_sec.items():
             if k not in os.environ and isinstance(v, str):
                 os.environ[k] = v
+    with contextlib.suppress(Exception):
+        from talkops.state.remote_session import _can_use_disk_auth_session
+
+        if _can_use_disk_auth_session():
+            from talkops.auth.storage import get_credential_storage
+
+            storage = get_credential_storage()
+            for prov in storage.list_provider_keys():
+                entry = storage.get_provider_entry(prov)
+                if not entry:
+                    continue
+                env_var = entry.get("env_var")
+                api_key = entry.get("api_key")
+                if isinstance(env_var, str) and env_var and isinstance(api_key, str) and api_key:
+                    if env_var not in os.environ:
+                        os.environ[env_var] = api_key
+                base_url_env = entry.get("base_url_env")
+                base_url = entry.get("base_url")
+                if isinstance(base_url_env, str) and base_url_env and isinstance(base_url, str) and base_url:
+                    if base_url_env not in os.environ:
+                        os.environ[base_url_env] = base_url
 
 
 def save_agent_pool(

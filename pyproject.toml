@@ -1,7 +1,7 @@
 [project]
 name = "talkops-ai"
-version = "0.3.0b11"
-description = "Extensible Terminal Multi-Agent Framework for Cloud Operations & DevOps Coding"
+version = "0.3.0b12"
+description = "Autonomous Multi-Agent Framework for Software & Infrastructure Coding, Cloud Operations, DevOps, SRE, FinOps & Event-Driven Automation"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,7 +9,7 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "anyio>=4.14.2",
     "boto3>=1.43.51",
-    "deepagents[quickjs]>=0.7.1",
+    "deepagents[quickjs]>=0.7.29",
     "deepagents-acp>=0.0.9",
     "filelock>=3.18.0",
     "httpx>=0.28.1",
@@ -143,4 +143,10 @@ markers = [
 
 [tool.ruff]
 target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["I", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 

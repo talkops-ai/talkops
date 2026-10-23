@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """``/skill:<name>`` — Dynamic skill invocation by name.
 
 Dispatched from the router via prefix matching on ``/skill:``.
@@ -5,10 +19,11 @@ Dispatched from the router via prefix matching on ``/skill:``.
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
+from pathlib import Path
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -27,22 +42,27 @@ class SkillInvokeHandler(BaseCommandHandler):
     @property
     def name(self) -> str:
         # Special prefix — handled by router startswith() check
+        """Return the primary slash command name."""
         return "/skill:"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
         # Untrusted skills may run code — moderate risk
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         from talkops.skills.invocation import parse_skill_command
 
         skill_name, args = parse_skill_command(ctx.raw_command)
@@ -100,6 +120,7 @@ class SkillInvokeHandler(BaseCommandHandler):
         # Fallback to direct skill loader discovery
         try:
             from pathlib import Path
+
             from talkops.config.settings import settings
             from talkops.skills.loader import list_skills
 
@@ -121,8 +142,6 @@ class SkillInvokeHandler(BaseCommandHandler):
 
     def _load_skill_content(self, skill: dict) -> str | None:
         """Read the SKILL.md file for a skill."""
-        from pathlib import Path
-
         skill_path = skill.get("path", "")
         if not skill_path:
             return None

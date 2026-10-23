@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for plugin scoping across agent-plugins, partner-built, and vertical-plugins.
 
 Verifies:
@@ -11,9 +25,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
 
+import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import tool
+
 from talkops.agent.factory import create_talkops_agent
 from talkops.mcp.discovery import MCPDiscovery
 from talkops.middleware.mcp_context import MCPContextMiddleware
@@ -25,6 +41,7 @@ from talkops.skills.registry import SkillRegistry
 
 @pytest.fixture(autouse=True)
 def reset_registries():
+    """Provide reset registries test helper or fixture."""
     SkillRegistry.reset()
     yield
     SkillRegistry.reset()
@@ -244,7 +261,6 @@ async def test_agent_factory_dynamic_subagents_and_coordinator_attachment(tmp_pa
     _create_partner_plugin(plugins_dir, "lseg")
     _create_vertical_plugin(plugins_dir, "equity-research")
 
-    from langchain_core.language_models.chat_models import BaseChatModel
 
     mock_model = MagicMock(spec=BaseChatModel)
     mock_model.bind_tools = MagicMock(return_value=mock_model)
@@ -359,7 +375,6 @@ async def test_subagent_mcp_tools_and_middleware_scoping_with_preloaded_tools(tm
 
     mock_mcp_tools = [mock_billing_tool, mock_aws_mcp_tool, mock_awspricing_tool]
 
-    from langchain_core.language_models.chat_models import BaseChatModel
 
     mock_model = MagicMock(spec=BaseChatModel)
     mock_model.bind_tools = MagicMock(return_value=mock_model)
@@ -445,7 +460,6 @@ async def test_subagent_mcp_tools_and_middleware_scoping_with_preloaded_tools(tm
 
 def test_coordinator_deep_agent_mcp_binding_and_isolation(tmp_path: Path):
     """Verify coordinator deep agent binds MCP tools & middleware without leaking subagent MCP tools."""
-    from langchain_core.tools import tool
     from talkops.agent.factory import create_talkops_agent
     from talkops.middleware.mcp_context import MCPContextMiddleware
     from talkops.middleware.mcp_middleware import MCPToolMiddleware
@@ -486,7 +500,6 @@ def test_coordinator_deep_agent_mcp_binding_and_isolation(tmp_path: Path):
         encoding="utf-8",
     )
 
-    from langchain_core.language_models.chat_models import BaseChatModel
 
     mock_model = MagicMock(spec=BaseChatModel)
     mock_model.bind_tools = MagicMock(return_value=mock_model)

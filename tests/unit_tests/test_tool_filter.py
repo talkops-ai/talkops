@@ -1,21 +1,40 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for ToolFilterMiddleware and tool pattern matching."""
 
 from __future__ import annotations
 
-import pytest
+import logging
 from unittest.mock import MagicMock
+
+import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from talkops.middleware.tool_filter import (
     ToolFilterMiddleware,
+    _entry_matches_tool,
     _expand_tool_patterns,
     _parse_mcp_pattern,
-    _entry_matches_tool,
 )
 
 
 def test_parse_mcp_pattern():
+    """Verify parse mcp pattern."""
     known = {"aws-mcp", "billing", "awspricing"}
     subagent = "aws-finops-agent"
 
@@ -52,6 +71,7 @@ def test_parse_mcp_pattern():
 
 
 def test_expand_tool_patterns():
+    """Verify expand tool patterns."""
     patterns = [
         "Read",
         "Bash",
@@ -80,6 +100,7 @@ def test_expand_tool_patterns():
 
 
 def test_tool_filter_middleware_allows_subagent_mcp_tools():
+    """Verify tool filter middleware allows subagent mcp tools."""
     allowed = [
         "Read",
         "Grep",
@@ -129,6 +150,7 @@ def test_tool_filter_middleware_allows_subagent_mcp_tools():
 
 
 def test_tool_filter_middleware_with_tool_objects():
+    """Verify tool filter middleware with tool objects."""
     mock_tool = MagicMock()
     mock_tool.name = "billing_cost-explorer"
     mock_tool.metadata = {
@@ -148,6 +170,7 @@ def test_tool_filter_middleware_with_tool_objects():
 
 
 def test_tool_filter_middleware_validates_request_and_rejects_unallowed():
+    """Verify tool filter middleware validates request and rejects unallowed."""
     allowed = ["read_file", "billing_cost-explorer"]
     mw = ToolFilterMiddleware(allowed_patterns=allowed)
 
@@ -238,8 +261,6 @@ def test_generic_open_source_mcp_matching_and_filtering():
 def test_tool_filter_wrap_model_call():
     """Verify wrap_model_call prunes disallowed tools before calling model."""
     from langchain.agents.middleware.types import ModelRequest
-    from langchain_core.language_models.fake_chat_models import FakeListChatModel
-    from langchain_core.tools import tool
 
     @tool("read_file")
     def mock_read(path: str) -> str:
@@ -262,6 +283,7 @@ def test_tool_filter_wrap_model_call():
     captured_tools = []
 
     def mock_handler(r):
+        """Provide mock handler test helper or fixture."""
         captured_tools.extend(r.tools)
         return fake_llm.invoke([])
 
@@ -274,8 +296,6 @@ def test_tool_filter_wrap_model_call():
 async def test_tool_filter_awrap_model_call():
     """Verify awrap_model_call asynchronously prunes disallowed tools before calling model."""
     from langchain.agents.middleware.types import ModelRequest
-    from langchain_core.language_models.fake_chat_models import FakeListChatModel
-    from langchain_core.tools import tool
 
     @tool("read_file")
     def mock_read(path: str) -> str:
@@ -298,6 +318,7 @@ async def test_tool_filter_awrap_model_call():
     captured_tools = []
 
     async def mock_handler(r):
+        """Provide mock handler test helper or fixture."""
         captured_tools.extend(r.tools)
         return await fake_llm.ainvoke([])
 
@@ -309,7 +330,6 @@ async def test_tool_filter_awrap_model_call():
 def test_subagent_scoped_mcp_tools_matching_and_model_pruning():
     """Verify subagent-scoped MCP tools with hashed names and plugin patterns are allowed and not pruned."""
     from langchain.agents.middleware.types import ModelRequest
-    from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
     mock_presigned_tool = MagicMock()
     mock_presigned_tool.name = "subagent__aws-cloud-securit_aws___get_presigned_url_d5d22cc1a56b"
@@ -368,6 +388,7 @@ def test_subagent_scoped_mcp_tools_matching_and_model_pruning():
 
     captured = []
     def handler(r):
+        """Provide handler test helper or fixture."""
         captured.extend(r.tools)
         return fake_llm.invoke([])
 
@@ -447,9 +468,7 @@ def test_subagent_scoped_mcp_tools_with_server_colon_and_bare_name_styles():
 
 def test_tool_filter_fail_loud_diagnostic_logging(caplog):
     """Verify ToolFilterMiddleware logs error when all MCP tools in request are pruned."""
-    import logging
     from langchain.agents.middleware.types import ModelRequest
-    from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
     mock_presigned_tool = MagicMock()
     mock_presigned_tool.name = "subagent__aws-cloud-securit_aws___get_presigned_url_d5d22cc1a56b"

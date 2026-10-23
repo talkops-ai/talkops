@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TalkOps integrations: event bus, hooks, notifications, identity, and stream bridge."""
 
 from __future__ import annotations
@@ -5,15 +19,19 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
-import uuid
 
 import pytest
+from langchain_core.messages import AIMessageChunk
 
 from talkops.integrations.base import IncomingMessage, InteractionPayload
-from talkops.integrations.content_filter import filter_internal_content, is_internal_message
+from talkops.integrations.content_filter import (
+    filter_internal_content,
+    is_internal_message,
+)
 from talkops.integrations.event_bus import (
     BypassTier,
     EventBus,
@@ -46,11 +64,11 @@ from talkops.integrations.stream_bridge import (
 )
 from talkops.integrations.thread_store import ThreadStore
 
-
 # ── ThreadStore Tests ────────────────────────────────────────────────────────
 
 
 def test_thread_store_resolution_and_reverse() -> None:
+    """Verify thread store resolution and reverse."""
     store = ThreadStore()
     assert store.has_thread("terminal", "sess-1") is False
 
@@ -76,6 +94,7 @@ def test_thread_store_resolution_and_reverse() -> None:
 
 def test_content_filter() -> None:
     # Internal protocol detection
+    """Verify content filter."""
     assert is_internal_message("## ACTIVE PLAN (LOCKED — DO NOT DEVIATE)") is True
     assert is_internal_message("### Execution Checklist\n⏳ (pending)") is True
     assert is_internal_message("[PLAN-APPROVED] Executing task") is True
@@ -107,6 +126,7 @@ def test_content_filter() -> None:
 
 
 def test_hooks_config_and_matching() -> None:
+    """Verify hooks config and matching."""
     hook = HookConfig(command=["echo", "event"], events=frozenset(["session.start", "aws.resource.create"]))
     assert hook.matches("session.start") is True
     assert hook.matches("aws.resource.create") is True
@@ -118,6 +138,7 @@ def test_hooks_config_and_matching() -> None:
 
 
 def test_hooks_sanitise_payload() -> None:
+    """Verify hooks sanitise payload."""
     payload = {"tool_name": "list_instances", "tool_output": "x" * 3000}
     sanitised = _sanitise_payload(payload)
     assert len(sanitised["tool_output"]) <= HOOK_TOOL_OUTPUT_LIMIT + 20
@@ -129,6 +150,7 @@ def test_hooks_sanitise_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_hooks_load_and_dispatch(tmp_path: Path) -> None:
+    """Verify hooks load and dispatch."""
     hooks_file = tmp_path / "hooks.json"
     hooks_data = {
         "hooks": [
@@ -156,7 +178,9 @@ async def test_hooks_load_and_dispatch(tmp_path: Path) -> None:
 
 
 class TestEventBusValidation:
+    """Test suite or helper class for test event bus validation."""
     def test_validates_prompt_event(self) -> None:
+        """Verify validates prompt event."""
         data = {
             "kind": "prompt",
             "payload": "Review AWS security group",
@@ -173,6 +197,7 @@ class TestEventBusValidation:
         assert event.bypass == BypassTier.QUEUED
 
     def test_validates_signal_event_sets_immediate_bypass(self) -> None:
+        """Verify validates signal event sets immediate bypass."""
         data = {"kind": "signal", "payload": "interrupt", "source": "watchdog"}
         event, error = EventBus._validate_event(cast(dict[str, Any], data))
         assert error is None
@@ -182,24 +207,28 @@ class TestEventBusValidation:
         assert event.bypass == BypassTier.IMMEDIATE
 
     def test_rejects_invalid_kind(self) -> None:
+        """Verify rejects invalid kind."""
         data = {"kind": "unsupported", "payload": "foo"}
         event, error = EventBus._validate_event(cast(dict[str, Any], data))
         assert event is None
         assert error is not None and "invalid kind" in error
 
     def test_rejects_empty_payload(self) -> None:
+        """Verify rejects empty payload."""
         data = {"kind": "command", "payload": "   "}
         event, error = EventBus._validate_event(cast(dict[str, Any], data))
         assert event is None
         assert error is not None and "non-empty" in error
 
     def test_rejects_invalid_signal(self) -> None:
+        """Verify rejects invalid signal."""
         data = {"kind": "signal", "payload": "terminate"}
         event, error = EventBus._validate_event(cast(dict[str, Any], data))
         assert event is None
         assert error is not None and "invalid signal" in error
 
     def test_rejects_non_dict(self) -> None:
+        """Verify rejects non dict."""
         event, error = EventBus._validate_event("string-payload")
         assert event is None
         assert error is not None and "expected JSON object" in error
@@ -207,6 +236,7 @@ class TestEventBusValidation:
 
 @pytest.mark.asyncio
 async def test_event_bus_lifecycle_and_queue() -> None:
+    """Verify event bus lifecycle and queue."""
     socket_path = Path(f"/tmp/optst_{uuid.uuid4().hex[:8]}.sock")
     bus = EventBus()
     try:
@@ -252,10 +282,12 @@ async def test_event_bus_lifecycle_and_queue() -> None:
 
 @pytest.mark.asyncio
 async def test_event_bus_sink_callback() -> None:
+    """Verify event bus sink callback."""
     socket_path = Path(f"/tmp/optst_{uuid.uuid4().hex[:8]}.sock")
     received: list[ExternalEvent] = []
 
     async def custom_sink(evt: ExternalEvent) -> None:
+        """Provide custom sink test helper or fixture."""
         received.append(evt)
 
     bus = EventBus()
@@ -284,6 +316,7 @@ async def test_event_bus_sink_callback() -> None:
 
 @pytest.mark.asyncio
 async def test_event_bus_error_responses() -> None:
+    """Verify event bus error responses."""
     socket_path = Path(f"/tmp/optst_{uuid.uuid4().hex[:8]}.sock")
     bus = EventBus()
     try:
@@ -314,6 +347,7 @@ async def test_event_bus_error_responses() -> None:
 
 
 def test_default_unix_socket_path() -> None:
+    """Verify default unix socket path."""
     path = default_unix_socket_path()
     assert isinstance(path, Path)
     assert "sock" in str(path)
@@ -324,6 +358,7 @@ def test_default_unix_socket_path() -> None:
 
 @pytest.mark.asyncio
 async def test_notifications_wrappers() -> None:
+    """Verify notifications wrappers."""
     with patch("talkops.integrations.notifications.dispatch_hook", new_callable=AsyncMock) as mock_dispatch:
         await notify_session_start("s-123", "gemini-2.5-pro")
         mock_dispatch.assert_called_once_with(
@@ -381,6 +416,7 @@ async def test_notifications_wrappers() -> None:
 
 def test_identity_mapper_defaults_and_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # 1. Default unmapped user
+    """Verify identity mapper defaults and env."""
     monkeypatch.delenv("IDENTITY_MAPPING_FILE", raising=False)
     monkeypatch.delenv("IDENTITY_MAPPING", raising=False)
 
@@ -428,6 +464,7 @@ def test_identity_mapper_defaults_and_env(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 def test_stream_bridge_humanize_tool_name() -> None:
     # AWS tool prefixes
+    """Verify stream bridge humanize tool name."""
     assert _humanize_tool_name("aws_describe_instances") == "Describe Instances"
     assert _humanize_tool_name("aws_create_bucket") == "Create Bucket"
 
@@ -447,54 +484,69 @@ def test_stream_bridge_humanize_tool_name() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_bridge_processing() -> None:
+    """Verify stream bridge processing."""
     class DummySink:
+        """Test suite or helper class for dummy sink."""
         def __init__(self) -> None:
+            """Initialize DummySink."""
             self.started = False
             self.tokens: list[str] = []
             self.ended = False
 
         async def on_stream_start(self, channel_id: str, thread_id: str) -> None:
+            """Provide on stream start test helper or fixture."""
             self.started = True
 
         async def on_token(self, token: str) -> None:
+            """Provide on token test helper or fixture."""
             self.tokens.append(token)
 
         async def on_thinking(self, text: str) -> None:
+            """Provide on thinking test helper or fixture."""
             pass
 
         async def on_tool_call_started(self, name: str, call_id: str, args: dict[str, Any]) -> None:
+            """Provide on tool call started test helper or fixture."""
             pass
 
         async def on_tool_call_completed(self, name: str, call_id: str, result: str) -> None:
+            """Provide on tool call completed test helper or fixture."""
             pass
 
         async def on_interrupt(self, interrupt_value: dict[str, Any]) -> None:
+            """Provide on interrupt test helper or fixture."""
             pass
 
         async def on_subagent_event(self, agent_name: str, status: str) -> None:
+            """Provide on subagent event test helper or fixture."""
             pass
 
         async def on_rubric_event(self, data: dict[str, Any]) -> None:
+            """Provide on rubric event test helper or fixture."""
             pass
 
         async def on_auto_mode_event(self, data: dict[str, Any]) -> None:
+            """Provide on auto mode event test helper or fixture."""
             pass
 
         async def on_stream_end(self) -> None:
+            """Provide on stream end test helper or fixture."""
             self.ended = True
 
         async def on_error(self, error: Exception) -> None:
+            """Provide on error test helper or fixture."""
             pass
 
         async def on_pre_interrupt(self) -> None:
+            """Provide on pre interrupt test helper or fixture."""
             pass
 
     sink = DummySink()
     bridge = GraphStreamBridge(cast(StreamSink, sink))
 
-    from langchain_core.messages import AIMessageChunk
 
     async def sample_stream():
+        """Provide sample stream test helper or fixture."""
         yield ("messages", (AIMessageChunk(content="Hello "), {}))
         yield ("messages", (AIMessageChunk(content="Cloud!"), {}))
 
@@ -506,6 +558,7 @@ async def test_stream_bridge_processing() -> None:
 
 
 def test_base_dataclasses() -> None:
+    """Verify base dataclasses."""
     incoming = IncomingMessage(
         text="deploy app",
         user_id="u-1",

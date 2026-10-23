@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for external editor opening and Markdown link handling."""
 
 from __future__ import annotations
@@ -7,6 +21,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from textual.app import App, ComposeResult
+from textual.widgets._markdown import MarkdownFence, MarkdownTable, MarkdownTableContent
+from textual.widgets._tooltip import Tooltip
+
 from talkops.editor import (
     TERMINAL_EDITORS,
     extract_file_path,
@@ -91,8 +109,6 @@ def test_autolink_file_paths() -> None:
 def test_assistant_markdown_parses_file_links_and_table_tooltips_safely() -> None:
     """Verify AssistantMarkdown renders file:// links and table cell tooltips never crash with MarkupError."""
     import talkops._textual_patches  # noqa: F401
-    from textual.widgets._markdown import MarkdownTable, MarkdownTableContent
-    from textual.widgets._tooltip import Tooltip
     from talkops.ui.widgets.chat_messages import _assistant_markdown_class
 
     md_cls = _assistant_markdown_class()
@@ -305,8 +321,6 @@ def test_extract_file_path(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_assistant_fence_click_opens_file(tmp_path: Path) -> None:
     """Verify clicking an AssistantFence containing a file path triggers editor opening."""
-    from textual.app import App, ComposeResult
-    from textual.widgets._markdown import MarkdownFence
     from talkops.ui.widgets.messages import AssistantMessage
 
     sample = tmp_path / "README.md"
@@ -316,7 +330,9 @@ async def test_assistant_fence_click_opens_file(tmp_path: Path) -> None:
     msg = AssistantMessage(content)
 
     class DummyApp(App[None]):
+        """Test suite or helper class for dummy app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield msg
 
     app = DummyApp()

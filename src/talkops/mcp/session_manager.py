@@ -1,12 +1,27 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """MCP Session Manager with connection pooling, normalization, and lifecycle management."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
-from contextlib import AsyncExitStack
 import fnmatch
 import os
+import time
+from collections.abc import Mapping, Sequence
+from contextlib import AsyncExitStack
 from typing import Any, cast
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
@@ -112,7 +127,25 @@ def _clean_mcp_schema(schema: Any, max_ref_depth: int = 3) -> dict[str, Any]:
             for k, v in node.items():
                 if k in ("$schema", "$id", "additionalProperties", "$defs", "definitions"):
                     continue
-                res[k] = _resolve(v, ref_depth, seen_refs)
+                if k == "default" and v is None:
+                    continue
+                if k == "properties" and isinstance(v, dict):
+                    res[k] = {
+                        pk: _resolve(pv, ref_depth, seen_refs)
+                        for pk, pv in v.items()
+                    }
+                else:
+                    res[k] = _resolve(v, ref_depth, seen_refs)
+
+            any_of = res.get("anyOf")
+            if isinstance(any_of, list):
+                non_null = [item for item in any_of if item != {"type": "null"}]
+                if len(non_null) == 1 and isinstance(non_null[0], dict):
+                    res.pop("anyOf", None)
+                    for bk, bv in non_null[0].items():
+                        res.setdefault(bk, bv)
+                elif non_null and len(non_null) < len(any_of):
+                    res["anyOf"] = non_null
             return res
 
         if isinstance(node, list):
@@ -390,8 +423,6 @@ def _build_cached_mcp_tool(
         Returns:
             Any: Tool call result payload.
         """
-        import time
-
         start_time = time.perf_counter()
         logger.info(
             "Invoking MCP tool '%s' on server '%s'",
@@ -423,7 +454,7 @@ def _build_cached_mcp_tool(
                 raise ToolException(_enhance_mcp_error_diagnostics(msg)) from None
 
             # Transient connection failure handling:
-            # Consistent with dcode's connection loss safety, do not automatically replay
+            # For connection-loss safety, do not automatically replay
             # mutating or destructive operations on a severed socket because the operation
             # may have already taken effect remotely on AWS.
             is_read_only = bool(
@@ -505,26 +536,35 @@ def _build_cached_mcp_tool(
     )
 
 
-def _lazy_mcp_tools_enabled() -> bool:
-    """Return True when global lazy MCP tool loading is enabled."""
+_AUTO_LAZY_MCP_TOOL_THRESHOLD = int(os.environ.get("TALKOPS_MCP_AUTO_LAZY_THRESHOLD", "30"))
+
+
+def _lazy_mcp_tools_enabled(*, default_lazy: bool = False) -> bool:
+    """Return True when global or automatic lazy MCP tool loading is enabled."""
     raw = (
         os.environ.get("TALKOPS_MCP_LAZY_TOOLS")
         or os.environ.get("TALKOPS_LAZY_MCP_TOOLS")
-        or "0"
+        or ""
     ).strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return default_lazy
 
 
 def split_enabled_tools_by_eager_lazy(
     info: MCPServerInfo,
     config: Mapping[str, Any] | None = None,
+    *,
+    default_lazy: bool = False,
 ) -> tuple[list[Any], list[Any]]:
     """Partition an MCP server's enabled tools into ``(eager_tools, lazy_tools)``.
 
     Resolution rules:
-    - Tools are eager by default so plugin subagents and skills can invoke their
-      declared ``<server>:<tool>`` tools directly in one turn, or lazy by default
-      when ``TALKOPS_MCP_LAZY_TOOLS=1`` / ``lazy_load: true`` / ``eager_tools`` is set.
+    - Tools are eager by default for small catalogs (<= 30 tools) and automatically lazy
+      for large catalogs (> 30 tools) or when ``TALKOPS_MCP_LAZY_TOOLS=1`` / ``lazy_load: true``
+      / ``eager_tools`` is set.
     - Server-level ``eager_load`` / ``eagerLoad: true`` marks all tools on the server eager
       unless overridden per tool in ``tool_config`` / ``toolConfig`` or ``lazy_tools``.
     - Server-level ``eager_tools`` / ``eagerTools`` list marks matching tools eager (and others lazy).
@@ -532,7 +572,7 @@ def split_enabled_tools_by_eager_lazy(
     - Per-tool ``tool_config[<tool_name>].eager_load`` / ``eagerLoad`` overrides the server default.
     """
     all_tools = list(getattr(info, "tools", ()) or ())
-    global_lazy = _lazy_mcp_tools_enabled()
+    global_lazy = _lazy_mcp_tools_enabled(default_lazy=default_lazy)
 
     tool_cfg_map: Mapping[str, Any] = {}
     eager_tools_list: tuple[str, ...] = ()
@@ -625,6 +665,7 @@ def build_call_mcp_tool(
     invokes the tool on the pooled ``MCPSessionManager`` session.
     """
     from langchain_mcp_adapters.tools import _convert_call_tool_result
+
     from talkops.mcp.preload import get_cached_mcp_server_infos, read_mcp_tool_schema
     from talkops.mcp.semantic_profiler import MCPSemanticProfiler
 
@@ -712,8 +753,7 @@ def build_call_mcp_tool(
         runtime: Any = None,
         **extra_kwargs: Any,
     ) -> Any:
-        import time
-
+        """Execute coroutine."""
         raw_server = server_name or ServerName or str(extra_kwargs.pop("server", "") or "")
         raw_tool = tool_name or ToolName or str(extra_kwargs.pop("tool", "") or "")
         raw_args = arguments if arguments is not None else Arguments
@@ -899,13 +939,24 @@ def build_mcp_tools_from_server_infos(
     active_infos: list[MCPServerInfo] = []
     cfg_lookup = configs if isinstance(configs, Mapping) else getattr(session_manager, "_config", {})
 
+    total_active_tools = sum(
+        len(getattr(i, "tools", ()) or ())
+        for i in server_infos
+        if i.enabled and i.status == "ok"
+    )
+    auto_lazy = total_active_tools > _AUTO_LAZY_MCP_TOOL_THRESHOLD
+
     for info in server_infos:
         if not info.enabled or info.status != "ok":
             continue
         active_infos.append(info)
         write_mcp_server_state(info)
         srv_cfg = cfg_lookup.get(info.name) if isinstance(cfg_lookup, Mapping) else None
-        eager_tools, lazy_tools = split_enabled_tools_by_eager_lazy(info, srv_cfg)
+        eager_tools, lazy_tools = split_enabled_tools_by_eager_lazy(
+            info,
+            srv_cfg,
+            default_lazy=auto_lazy,
+        )
         if lazy_tools:
             has_lazy_tools = True
         for t in eager_tools:
@@ -1188,6 +1239,7 @@ class MCPSessionManager:
                     if conn.get("transport") == "stdio":
                         from mcp import ClientSession
                         from mcp.client.stdio import StdioServerParameters, stdio_client
+
                         from talkops.utils.logger import DEFAULT_LOG_DIR
 
                         try:

@@ -1,9 +1,22 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Notification settings modal screen for `/notifications` command."""
 
 from __future__ import annotations
 
 import asyncio
-from talkops.utils.logger import get_logger
 from typing import TYPE_CHECKING, ClassVar
 
 from textual.binding import Binding, BindingType
@@ -13,6 +26,7 @@ from textual.widgets import Checkbox, Static
 
 from talkops.config.settings import get_glyphs
 from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -62,10 +76,12 @@ class NotificationSettingsScreen(OpsModalScreen[None]):
     """
 
     def __init__(self, suppressed: set[str] | None = None) -> None:
+        """Initialize NotificationSettingsScreen."""
         super().__init__()
         self._suppressed: set[str] = suppressed or set()
 
     def compose_modal(self):
+        """Execute compose modal on NotificationSettingsScreen."""
         yield Static("Notification Settings", classes="ns-title")
         for key, label in WARNING_TOGGLES:
             yield Checkbox(
@@ -76,6 +92,7 @@ class NotificationSettingsScreen(OpsModalScreen[None]):
         yield Static("↑/↓ or Tab navigate • Space toggle • Esc close", classes="ns-help")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         glyphs = get_glyphs()
         self.set_modal_title("Notification Settings", counter=f"{len(WARNING_TOGGLES)} rules")
@@ -90,6 +107,7 @@ class NotificationSettingsScreen(OpsModalScreen[None]):
             pass
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        """Handle checkbox changed events."""
         event.stop()
         checkbox_id = event.checkbox.id
         if not checkbox_id or not checkbox_id.startswith("ns-"):
@@ -110,6 +128,7 @@ class NotificationSettingsScreen(OpsModalScreen[None]):
             setattr(self.app, "_suppressed_warnings", self._suppressed)
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(None)
 
 

@@ -1,9 +1,23 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """PostgreSQL-backed configuration storage adapter.
 
 Implements storage for:
 - ``config_store`` — generic key/value configuration settings
 - ``model_preferences`` — default model, recent models MRU, effort-by-model, provider configs
-- ``mcp_servers`` — MCP server configs (matches OpsCode MCPServerConfig)
+- ``mcp_servers`` — MCP server configs (matches TalkOps MCPServerConfig)
 - ``plugins`` — installed plugin records with source for redeployment auto-rehydration
 - ``skills`` — skill metadata and content for redeployment auto-rehydration
 - ``subagents`` — subagent metadata and system prompt for redeployment auto-rehydration
@@ -47,7 +61,7 @@ CREATE TABLE IF NOT EXISTS model_preferences (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- MCP server configurations (matches OpsCode MCPServerConfig)
+-- MCP server configurations (matches TalkOps MCPServerConfig)
 CREATE TABLE IF NOT EXISTS mcp_servers (
     name TEXT PRIMARY KEY,
     transport TEXT NOT NULL DEFAULT 'stdio',

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Web search tool utilizing the Tavily API in TalkOps."""
 
 from __future__ import annotations
@@ -6,9 +20,9 @@ import functools
 import os
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
+import requests
 from langchain_core.tools import BaseTool, tool
 from pydantic import Field
-import requests
 
 from talkops.config.settings import get_settings
 from talkops.utils.logger import get_logger
@@ -83,7 +97,8 @@ def _search_with_tavily(
             MissingAPIKeyError,
             UsageLimitExceededError,
         )
-        from tavily.errors import ForbiddenError, TimeoutError as TavilyTimeoutError
+        from tavily.errors import ForbiddenError
+        from tavily.errors import TimeoutError as TavilyTimeoutError
     except ImportError as exc:
         return _missing_package_error(exc)
 
@@ -178,6 +193,7 @@ def create_web_search_tool(api_key: str) -> BaseTool:
     @tool("web_search")
     @functools.wraps(_web_search)
     def workspace_web_search(**kwargs: Any) -> dict[str, Any]:
+        """Execute workspace web search."""
         nonlocal client
         if not api_key:
             return _missing_tavily_key_error(kwargs.get("query"))

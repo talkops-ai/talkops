@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Server-side graph entry point for ``langgraph dev``.
 
 Module import intentionally performs no model, MCP, or graph construction. LangGraph
@@ -8,8 +22,8 @@ without blocking its graph-import worker.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 import os
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -153,8 +167,8 @@ async def _build_default_runtime_async(
     if config.shell_allow_list:
         os.environ["TALKOPS_SHELL_ALLOW_LIST"] = ",".join(config.shell_allow_list)
 
-    from talkops.model.factory import create_model
     from talkops.agent.factory import create_talkops_agent_async
+    from talkops.model.factory import create_model
 
     model_res = await asyncio.to_thread(create_model, config.model)
     model_res.apply_to_settings()
@@ -186,12 +200,13 @@ def _build_runtime_factory(
     """Build the cached factory for all server-owned runtime resources.
 
     The cache lives in this closure rather than in module-level mutable globals,
-    matching reference/dcode/server_graph.py.
+    for the TalkOps LangGraph server runtime.
     """
     runtime: ServerRuntime | None = None
     lock = asyncio.Lock()
 
     async def get_runtime() -> ServerRuntime:
+        """Retrieve runtime."""
         nonlocal runtime
         if runtime is not None:
             return runtime

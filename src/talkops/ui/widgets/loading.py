@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Loading widget with animated spinner for agent activity."""
 
 from __future__ import annotations
@@ -30,13 +44,16 @@ class Spinner:
     """Animated spinner using braille charset frames."""
 
     def __init__(self) -> None:
+        """Initialize Spinner."""
         self._position = 0
 
     @property
     def frames(self) -> tuple[str, ...]:
+        """Return the frames property."""
         return BRAILLE_SPINNER_FRAMES
 
     def next_frame(self) -> str:
+        """Execute next frame on Spinner."""
         frames = self.frames
         frame = frames[self._position]
         self._position = (self._position + 1) % len(frames)
@@ -47,9 +64,11 @@ class Spinner:
         return self.next_frame()
 
     def current_frame(self) -> str:
+        """Execute current frame on Spinner."""
         return self.frames[self._position]
 
     def reset(self) -> None:
+        """Reset spinner."""
         self._position = 0
 
 
@@ -89,6 +108,7 @@ class LoadingWidget(Static):
         started_at: float | None = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize LoadingWidget."""
         super().__init__(**kwargs)
         self._status = status
         self._spinner = Spinner()
@@ -109,14 +129,17 @@ class LoadingWidget(Static):
         return self._paused
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         if self._start_time is None:
             self._start_time = monotonic()
         self._animation_timer = self.set_interval(self._TICK_SECONDS, self._update_animation)
 
     def on_unmount(self) -> None:
+        """Clean up component resources when unmounted from the DOM."""
         self._stop_timer()
 
     def remove(self) -> AwaitRemove:
+        """Remove loading widget."""
         self._stop_timer()
         return super().remove()
 
@@ -164,6 +187,7 @@ class LoadingWidget(Static):
         return parts
 
     def render(self) -> Content:
+        """Render the widget content."""
         sep = "\u00b7"  # ·
         elapsed = format_duration(self._elapsed_seconds())
 
@@ -185,10 +209,12 @@ class LoadingWidget(Static):
         return Content.assemble(*parts)
 
     def set_status(self, status: str) -> None:
+        """Set status."""
         self._status = status
         self.refresh()
 
     def pause(self, status: str = "Awaiting decision") -> None:
+        """Execute pause on LoadingWidget."""
         if not self._paused and self._start_time is not None:
             self._paused_elapsed = monotonic() - self._start_time
         self._paused = True
@@ -197,6 +223,7 @@ class LoadingWidget(Static):
         self.refresh()
 
     def resume(self) -> None:
+        """Execute resume on LoadingWidget."""
         if not self._paused:
             return
         self._start_time = monotonic() - self._paused_elapsed
@@ -205,4 +232,5 @@ class LoadingWidget(Static):
         self.refresh()
 
     def stop(self) -> None:
+        """Stop loading widget."""
         self._stop_timer()

@@ -1,19 +1,33 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """AWS runtime context, credential discovery, and model SDK configuration for TalkOps."""
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from talkops.config.settings import resolve_env_var, sync_aws_env_aliases
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-# ── Canonical AWS Source Definitions (aligned with dcode) ───
+# ── Canonical AWS Source Definitions ─────────────────────────
 
 AWS_CREDENTIAL_ENV_SOURCES: dict[str, tuple[str, ...]] = {
     "profile_name": ("AWS_PROFILE", "AWS_DEFAULT_PROFILE"),
@@ -59,7 +73,7 @@ def resolve_env_kwargs(
 def validate_aws_credentials(
     lookup: Callable[[str], str | None] | None = None,
 ) -> tuple[bool, str | None]:
-    """Validate completeness of explicit AWS credentials (matches dcode pattern).
+    """Validate completeness of explicit AWS credentials.
 
     Returns:
         (is_valid, error_message)
@@ -173,7 +187,10 @@ def resolve_aws_identity(*, profile: str | None = None, region: str | None = Non
     """Query AWS STS get_caller_identity safely via boto3."""
     sync_aws_env_aliases()
 
-    from talkops.config.cloud_profiles import get_active_aws_profile, get_active_aws_region
+    from talkops.config.cloud_profiles import (
+        get_active_aws_profile,
+        get_active_aws_region,
+    )
 
     effective_profile = profile or get_active_aws_profile()
     effective_region = region or get_active_aws_region() or "us-east-1"

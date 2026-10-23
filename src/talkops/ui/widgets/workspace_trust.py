@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Startup Workspace Trust and Settings Error modal screens for TalkOps.
 
 Startup Workspace Trust Prompt Layout::
@@ -134,6 +148,7 @@ class WorkspaceTrustScreen(ModalScreen[bool]):
         *,
         product_name: str = DEFAULT_PRODUCT_NAME,
     ) -> None:
+        """Initialize WorkspaceTrustScreen."""
         super().__init__()
         self._workspace_dir = resolve_path_no_slash(workspace_dir) or str(workspace_dir)
         self._product_name = product_name
@@ -149,6 +164,7 @@ class WorkspaceTrustScreen(ModalScreen[bool]):
         return WORKSPACE_TRUST_OPTIONS
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         glyphs = get_glyphs()
         hint_text = (
             f"  {glyphs.arrow_up}/{glyphs.arrow_down} Navigate "
@@ -194,6 +210,7 @@ class WorkspaceTrustScreen(ModalScreen[bool]):
             )
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         self._refresh_options()
         self.focus()
 
@@ -219,6 +236,7 @@ class WorkspaceTrustScreen(ModalScreen[bool]):
                 pass
 
     def watch_selected(self, _old_value: int, _new_value: int) -> None:
+        """React to changes in the selected reactive attribute."""
         if self.is_mounted:
             self._refresh_options()
 
@@ -356,11 +374,13 @@ class SettingsErrorScreen(ModalScreen[bool]):
     selected: reactive[int] = reactive(0)
 
     def __init__(self, settings_path: str | Path, error: Exception | str) -> None:
+        """Initialize SettingsErrorScreen."""
         super().__init__()
         self._settings_path = str(settings_path)
         self._error_text = str(error)
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         glyphs = get_glyphs()
         hint_text = (
             f"  {glyphs.arrow_up}/{glyphs.arrow_down} Navigate "
@@ -406,6 +426,7 @@ class SettingsErrorScreen(ModalScreen[bool]):
             )
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         self._refresh_options()
         self.focus()
 
@@ -431,19 +452,24 @@ class SettingsErrorScreen(ModalScreen[bool]):
                 pass
 
     def watch_selected(self, _old_value: int, _new_value: int) -> None:
+        """React to changes in the selected reactive attribute."""
         if self.is_mounted:
             self._refresh_options()
 
     def action_cursor_up(self) -> None:
+        """Execute the cursor up action."""
         self.selected = (self.selected - 1) % len(SETTINGS_ERROR_OPTIONS)
 
     def action_cursor_down(self) -> None:
+        """Execute the cursor down action."""
         self.selected = (self.selected + 1) % len(SETTINGS_ERROR_OPTIONS)
 
     def action_confirm(self) -> None:
+        """Execute the confirm action."""
         self.dismiss(self.selected == 0)
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(False)
 
 

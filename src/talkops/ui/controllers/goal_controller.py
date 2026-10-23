@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Goal and rubric state controller extracted from `TalkOpsApp`."""
 
 from __future__ import annotations
@@ -8,6 +22,8 @@ import math
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, cast
+
+from langchain_core.messages import SystemMessage as LCSystemMessage
 
 from talkops.ui.widgets.messages import AppMessage, ErrorMessage, SystemMessage
 from talkops.utils.logger import get_logger
@@ -22,6 +38,7 @@ class GoalController:
     """Manages `/goal` state synchronization, checkpoint persistence, and rubric evaluation."""
 
     def __init__(self, app: TalkOpsApp) -> None:
+        """Initialize GoalController."""
         self._app = app
 
     @asynccontextmanager
@@ -143,7 +160,7 @@ class GoalController:
                 state = await client.aget_state(config)
                 if state and state.values:
                     res = dict(state.values)
-                    if not res.get("_goal_objective") and not is_remote:
+                    if not res.get("messages") and not is_remote:
                         local_state = await app._reconstruct_state_from_local_db(tid)
                         for k, v in local_state.items():
                             if (k not in res or res[k] is None) and v is not None:
@@ -167,19 +184,18 @@ class GoalController:
         thread_id: str,
     ) -> dict[str, Any]:
         """Reconstruct thread state from the local SQLite checkpoint database."""
-        from talkops.state.session import get_db_path
+        from talkops.state.session import _connect, get_db_path
 
         db_path = get_db_path()
         if not db_path.exists():
             return {}
 
         try:
-            import aiosqlite
             from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
             serde = JsonPlusSerializer()
 
-            async with aiosqlite.connect(db_path) as conn:
+            async with _connect() as conn:
                 async with conn.execute(
                     """
                     SELECT type, value
@@ -605,7 +621,6 @@ class GoalController:
         goal_state.pending_kind = None
         GoalHandler._sync_status_rubric(app, goal_state)
 
-        from langchain_core.messages import SystemMessage as LCSystemMessage
 
         notice = LCSystemMessage(content=f"Goal {'amended' if is_amendment else 'accepted'}.")
         state_update = dict(app._goal_state_update())

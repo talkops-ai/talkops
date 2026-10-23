@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Multi-cloud profile, subscription, project, and ambient service role management for TalkOps.
 
 Provides zero-latency in-memory discovery and switching across AWS, Microsoft Azure,
@@ -8,9 +22,10 @@ compatibility with AWS-specific callers (`AWSProfileInfo`, `list_aws_profiles`, 
 from __future__ import annotations
 
 import configparser
-from dataclasses import dataclass, replace
 import os
 import re
+import subprocess
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -231,7 +246,6 @@ def list_aws_profiles(*, force_refresh: bool = False) -> list[AWSProfileInfo]:
             logger.debug("Error reading ~/.aws/credentials: %s", exc)
 
     # Support unit tests that mock subprocess.run(["aws", "configure", "list-profiles"])
-    import subprocess
 
     if hasattr(subprocess.run, "_mock_name") or hasattr(subprocess.run, "assert_called"):
         try:

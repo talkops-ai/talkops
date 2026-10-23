@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Built-in CoreAuthAddon (`core-auth`) for TalkOps Server Mode.
 
 Wraps `src/talkops/server/auth.py` into a `ServerAddon` and `IdentityMapper`:
@@ -95,6 +109,7 @@ class CoreAuthAddon(BaseServerAddon):
     enabled_by_default = True
 
     async def on_startup(self, ctx: AddonContext) -> None:
+        """Handle startup events."""
         await super().on_startup(ctx)
         if ctx.identity_mapper is None:
             ctx.identity_mapper = self
@@ -123,6 +138,7 @@ class CoreAuthAddon(BaseServerAddon):
         return True
 
     def get_routes(self) -> list[BaseRoute]:
+        """Retrieve routes."""
         return [
             Route("/.well-known/openid-configuration", endpoint=oidc_configuration_endpoint, methods=["GET"]),
             Route("/.well-known/jwks.json", endpoint=oidc_jwks_endpoint, methods=["GET"]),
@@ -130,6 +146,7 @@ class CoreAuthAddon(BaseServerAddon):
         ]
 
     async def health_check(self) -> AddonHealthStatus:
+        """Execute health check on CoreAuthAddon."""
         return AddonHealthStatus(
             name=self.name,
             status="ok",

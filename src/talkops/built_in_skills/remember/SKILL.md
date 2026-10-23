@@ -116,6 +116,11 @@ For operator preferences, identity details, and DevOps guidelines that don't war
 ## Infrastructure Standards & Conventions
 - Enforce tags: Environment, Owner, ManagedBy=TalkOps
 - Avoid public S3 buckets unless explicitly authorized
+
+## Operational Experience Lessons (Cue -> Lesson -> Evidence)
+- **Cue**: When `aws eks update-kubeconfig` fails with `AccessDeniedException` on cluster X
+  - **Lesson**: Assume `arn:aws:iam::...:role/EKSClusterAdminRole` first rather than using the default developer profile
+  - **Evidence**: Verified via `aws eks describe-access-entry` on cluster X
 ```
 
 Use `read_file` to inspect the target `AGENTS.md` (e.g. `~/.talkops/AGENTS.md`) first. Check if the section or preference already exists. Then use `edit_file` to update/insert, or `write_file` if creating anew. Preserve existing markers and structure.

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Resilient composite credential storage (`talkops.auth.storage`).
 
 Implements the storage architecture specified in `talkops_enterprise_auth_plan.md`:
@@ -17,13 +31,13 @@ from __future__ import annotations
 
 import concurrent.futures
 import contextlib
-from datetime import UTC, datetime
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
 import time
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from talkops.auth.models import StoredSession, hash_api_key, mask_api_key
@@ -166,15 +180,18 @@ class CompositeCredentialStorage:
         auth_file_path: Path | None = None,
         env_file_path: Path | None = None,
     ) -> None:
+        """Initialize CompositeCredentialStorage."""
         self._auth_file_path = auth_file_path
         self._env_file_path = env_file_path
 
     @property
     def auth_path(self) -> Path:
+        """Return the auth path property."""
         return self._auth_file_path or paths_mod.AUTH_PATH
 
     @property
     def env_path(self) -> Path:
+        """Return the env path property."""
         return self._env_file_path or paths_mod.GLOBAL_ENV_PATH
 
     def _read_auth_json(self) -> dict[str, Any]:
@@ -371,18 +388,25 @@ class CompositeCredentialStorage:
 
     def get_provider_entry(self, provider: str) -> dict[str, Any] | None:
         """Return stored `{api_key, base_url, env_var, updated_at}` for `provider`."""
-        prov_key = provider.strip().lower()
+        from talkops.model.config import canonicalize_provider
+
+        raw_key = provider.strip().lower()
+        prov_key = canonicalize_provider(raw_key)
         data = self._read_auth_json()
         providers = data.get("providers", {})
-        entry = providers.get(prov_key)
+        entry = providers.get(prov_key) or providers.get(raw_key)
         if not isinstance(entry, dict):
-            kr_secret = self._keyring_get(f"provider:{prov_key}")
+            kr_secret = self._keyring_get(f"provider:{prov_key}") or (
+                self._keyring_get(f"provider:{raw_key}") if raw_key != prov_key else None
+            )
             if kr_secret:
                 return {"api_key": kr_secret, "key_prefix": mask_api_key(kr_secret)}
             return None
         result = dict(entry)
         if not result.get("api_key"):
-            kr_secret = self._keyring_get(f"provider:{prov_key}")
+            kr_secret = self._keyring_get(f"provider:{prov_key}") or (
+                self._keyring_get(f"provider:{raw_key}") if raw_key != prov_key else None
+            )
             if kr_secret:
                 result["api_key"] = kr_secret
         return result
@@ -406,12 +430,19 @@ class CompositeCredentialStorage:
         sync_dotenv: bool = True,
     ) -> bool:
         """Save a provider API key to `auth.json` (`0600`), Keyring, and `.env`."""
-        prov_key = provider.strip().lower()
-        cleaned_key = api_key.strip()
-        if not prov_key or not cleaned_key:
-            return False
+        from talkops.model.config import (
+            PROVIDER_KEY_ALIASES,
+            canonicalize_provider,
+            get_base_url_env_vars,
+            get_credential_env_var,
+        )
 
-        from talkops.model.config import get_base_url_env_vars, get_credential_env_var
+        raw_key = provider.strip().lower()
+        prov_key = canonicalize_provider(raw_key)
+        cleaned_key = api_key.strip()
+        cleaned_url = base_url.strip() if base_url else ""
+        if not prov_key or (not cleaned_key and not cleaned_url):
+            return False
 
         resolved_env_var = (
             env_var
@@ -423,37 +454,50 @@ class CompositeCredentialStorage:
             base_url_candidates[0] if base_url_candidates else f"{prov_key.upper()}_BASE_URL"
         )
 
-        self._keyring_set(f"provider:{prov_key}", cleaned_key)
+        if cleaned_key:
+            self._keyring_set(f"provider:{prov_key}", cleaned_key)
 
         data = self._read_auth_json()
         providers = data.setdefault("providers", {})
-        entry: dict[str, Any] = {
-            "api_key": cleaned_key,
-            "key_prefix": mask_api_key(cleaned_key),
-            "env_var": resolved_env_var,
-            "updated_at": time.time(),
-        }
-        if base_url:
-            entry["base_url"] = base_url.strip()
+        if raw_key != prov_key:
+            providers.pop(raw_key, None)
+        existing = providers.get(prov_key)
+        entry: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+        if cleaned_key:
+            entry["api_key"] = cleaned_key
+            entry["key_prefix"] = mask_api_key(cleaned_key)
+            entry["env_var"] = resolved_env_var
+        entry["updated_at"] = time.time()
+        if cleaned_url:
+            entry["base_url"] = cleaned_url
             entry["base_url_env"] = resolved_base_url_env
         providers[prov_key] = entry
         ok = self._write_auth_json(data)
 
-        os.environ[resolved_env_var] = cleaned_key
-        if base_url:
-            os.environ[resolved_base_url_env] = base_url.strip()
+        if cleaned_key:
+            os.environ[resolved_env_var] = cleaned_key
+            for alias_var in PROVIDER_KEY_ALIASES.get(prov_key, ()):
+                os.environ.setdefault(alias_var, cleaned_key)
+        if cleaned_url:
+            os.environ[resolved_base_url_env] = cleaned_url
 
         if sync_dotenv:
-            env_updates = {resolved_env_var: cleaned_key}
-            if base_url:
-                env_updates[resolved_base_url_env] = base_url.strip()
-            paths_mod.upsert_env_vars(env_updates, env_path=self.env_path)
+            env_updates: dict[str, str] = {}
+            if cleaned_key:
+                env_updates[resolved_env_var] = cleaned_key
+            if cleaned_url:
+                env_updates[resolved_base_url_env] = cleaned_url
+            if env_updates:
+                paths_mod.upsert_env_vars(env_updates, env_path=self.env_path)
 
         return ok
 
     def delete_provider_key(self, provider: str, *, sync_dotenv: bool = True) -> bool:
         """Delete stored credentials for `provider` (or `'all'`)."""
-        prov_key = provider.strip().lower()
+        from talkops.model.config import canonicalize_provider
+
+        raw_key = provider.strip().lower()
+        prov_key = canonicalize_provider(raw_key) if raw_key not in {"all", "*"} else raw_key
         data = self._read_auth_json()
         providers = data.get("providers", {})
         removed_any = False
@@ -465,10 +509,12 @@ class CompositeCredentialStorage:
             data["providers"] = {}
             self._write_auth_json(data)
         else:
-            self._keyring_delete(f"provider:{prov_key}")
-            if prov_key in providers:
-                providers.pop(prov_key, None)
-                removed_any = True
+            for target_k in {prov_key, raw_key}:
+                self._keyring_delete(f"provider:{target_k}")
+                if target_k in providers:
+                    providers.pop(target_k, None)
+                    removed_any = True
+            if removed_any:
                 self._write_auth_json(data)
 
         if sync_dotenv:

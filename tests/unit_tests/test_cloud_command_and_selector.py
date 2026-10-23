@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for multi-cloud /cloud command, provider aliases, agent cloud tools, and CloudProfileSelectorScreen."""
 
 from __future__ import annotations
@@ -45,6 +59,7 @@ def _isolate_cloud_state(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cloud_handler_aliases_and_use_subcommand():
+    """Verify cloud handler aliases and use subcommand."""
     handler = CloudHandler()
     for alias in ("/aws", "/azure", "/gcp", "/k8s"):
         assert alias in handler.aliases
@@ -69,6 +84,7 @@ async def test_cloud_handler_aliases_and_use_subcommand():
 
 @pytest.mark.asyncio
 async def test_cloud_handler_provider_alias_shortcut():
+    """Verify cloud handler provider alias shortcut."""
     handler = CloudHandler()
 
     # `/k8s eks-prod-cluster --region kube-system`
@@ -88,7 +104,11 @@ async def test_cloud_handler_provider_alias_shortcut():
 
 @pytest.mark.asyncio
 async def test_cloud_handler_mode_and_auth_subcommands(monkeypatch):
-    from talkops.config.credential_broker import CloudIdentityStatus, get_credential_broker
+    """Verify cloud handler mode and auth subcommands."""
+    from talkops.config.credential_broker import (
+        CloudIdentityStatus,
+        get_credential_broker,
+    )
 
     handler = CloudHandler()
 
@@ -142,6 +162,7 @@ async def test_cloud_handler_mode_and_auth_subcommands(monkeypatch):
 
 def test_agent_cloud_tools_list_switch_and_status():
     # 1. Switch to Azure subscription via tool
+    """Verify agent cloud tools list switch and status."""
     switch_raw = cloud_switch_context.invoke(
         {
             "provider": "azure",
@@ -173,6 +194,7 @@ def test_agent_cloud_tools_list_switch_and_status():
 
 @pytest.mark.asyncio
 async def test_cloud_selector_multicloud_tabs_and_local_profiles():
+    """Verify cloud selector multicloud tabs and local profiles."""
     from talkops.ui.app import TalkOpsApp
     from talkops.ui.widgets.cloud_selector import (
         CloudProfileOption,

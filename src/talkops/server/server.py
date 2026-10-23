@@ -1,18 +1,32 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """LangGraph server process lifecycle manager."""
 
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import os
+import shutil
 import signal
 import socket
-import shutil
 import subprocess
 import sys
 import time
 import uuid
-import atexit
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +61,7 @@ _SERVER_ENV_DENYLIST = frozenset(
 
 
 def find_free_port(host: str = _DEFAULT_HOST) -> int:
+    """Find and return free port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((host, 0))
         return s.getsockname()[1]
@@ -136,6 +151,7 @@ def generate_langgraph_json(
     enable_store: bool = False,
     enable_auth: bool = True,
 ) -> Path:
+    """Execute generate langgraph json."""
     output_dir.mkdir(parents=True, exist_ok=True)
     config: dict[str, Any] = {
         "dependencies": ["."],
@@ -276,6 +292,7 @@ class ServerProcess:
         port: int = DEFAULT_PORT,
         runtime_dir: Path | None = None,
     ) -> None:
+        """Initialize ServerProcess."""
         self.config = config
         self.host = host
         self.port = port or find_free_port(host)
@@ -330,7 +347,7 @@ class ServerProcess:
         env = os.environ.copy()
         env.update(self.config.to_env())
 
-        # Cleanse inherited carrier/hijack variables (matches reference dcode)
+        # Cleanse inherited carrier/hijack environment variables
         for key in _SERVER_ENV_DENYLIST:
             env.pop(key, None)
 

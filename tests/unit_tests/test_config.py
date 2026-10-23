@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Comprehensive unit tests for TalkOps Config Module.
 
 Tests:
@@ -14,14 +28,17 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+
 import pytest
 
+from talkops.config.adapters.sqlite import SqliteConfigAdapter
 from talkops.config.aws import (
     AWSIdentity,
     get_aws_credentials_dict,
     get_boto3_session,
     resolve_aws_identity,
 )
+from talkops.config.langsmith import apply_tracing_settings, get_langsmith_project_name
 from talkops.config.manifest import (
     OptionKind,
     coerce_str_value,
@@ -38,9 +55,9 @@ from talkops.config.paths import (
     DATA_DIR,
     ENV_PREFIX,
     GLOBAL_ENV_PATH,
-    TALKOPS_HOME,
     SESSIONS_DB_PATH,
     STATE_DIR,
+    TALKOPS_HOME,
     agent_dir,
     find_project_root,
     user_agent_md,
@@ -58,14 +75,12 @@ from talkops.config.settings import (
     sync_aws_env_aliases,
 )
 from talkops.config.store import ConfigCategory, ConfigStore
-from talkops.config.adapters.sqlite import SqliteConfigAdapter
-from talkops.config.langsmith import apply_tracing_settings, get_langsmith_project_name
-
 
 # ── 1. Paths & Root Detection Tests ───────────────────────
 
 
 def test_paths_constants():
+    """Verify paths constants."""
     assert ENV_PREFIX == "TALKOPS_"
     assert TALKOPS_HOME == DATA_DIR
     assert DATA_DIR.name == ".talkops"
@@ -76,6 +91,7 @@ def test_paths_constants():
 
 
 def test_aws_preserve_env_vars():
+    """Verify aws preserve env vars."""
     assert "AWS_REGION" in AWS_PRESERVE_ENV_VARS
     assert "AWS_DEFAULT_REGION" in AWS_PRESERVE_ENV_VARS
     assert "AWS_PROFILE" in AWS_PRESERVE_ENV_VARS
@@ -88,6 +104,7 @@ def test_aws_preserve_env_vars():
 
 def test_directory_helpers(tmp_path: Path):
     # Custom assistant
+    """Verify directory helpers."""
     skills_dir = user_skills_dir("aws-ops")
     assert skills_dir.name == "skills"
     agents_dir = user_agents_dir("aws-ops")
@@ -104,6 +121,7 @@ def test_directory_helpers(tmp_path: Path):
 
 
 def test_find_project_root_cdk(tmp_path: Path):
+    """Verify find project root cdk."""
     project_dir = tmp_path / "cdk-infra"
     project_dir.mkdir()
     (project_dir / "cdk.json").write_text('{"app": "npx ts-node bin/infra.ts"}')
@@ -116,6 +134,7 @@ def test_find_project_root_cdk(tmp_path: Path):
 
 
 def test_find_project_root_terraform(tmp_path: Path):
+    """Verify find project root terraform."""
     project_dir = tmp_path / "tf-infra"
     project_dir.mkdir()
     (project_dir / "main.tf").write_text('terraform { required_version = ">= 1.5.0" }')
@@ -128,6 +147,7 @@ def test_find_project_root_terraform(tmp_path: Path):
 
 
 def test_find_project_root_sam(tmp_path: Path):
+    """Verify find project root sam."""
     project_dir = tmp_path / "sam-app"
     project_dir.mkdir()
     (project_dir / "template.yaml").write_text("AWSTemplateFormatVersion: '2010-09-09'")
@@ -143,6 +163,7 @@ def test_find_project_root_sam(tmp_path: Path):
 
 
 def test_settings_defaults():
+    """Verify settings defaults."""
     s = Settings()
     assert s.assistant_id == "talkops"
     assert s.aws_region == "us-east-1"
@@ -156,6 +177,7 @@ def test_settings_defaults():
 
 
 def test_settings_model_property_alias():
+    """Verify settings model property alias."""
     s = Settings()
     s.model = "anthropic:claude-3-5-sonnet"
     assert s.model_name == "anthropic:claude-3-5-sonnet"
@@ -163,6 +185,7 @@ def test_settings_model_property_alias():
 
 
 def test_settings_set_and_reset_field(tmp_path: Path):
+    """Verify settings set and reset field."""
     s = Settings()
 
     # String field
@@ -201,6 +224,7 @@ def test_settings_set_and_reset_field(tmp_path: Path):
 
 
 def test_settings_to_display_dict():
+    """Verify settings to display dict."""
     s = Settings(model_name="openai:gpt-4o")
     disp = s.to_display_dict()
     assert "aws_region" in disp
@@ -211,6 +235,7 @@ def test_settings_to_display_dict():
 
 
 def test_parse_shell_allow_list():
+    """Verify parse shell allow list."""
     assert parse_shell_allow_list(None) is None
     assert parse_shell_allow_list("") == []
     assert parse_shell_allow_list("  ") == []
@@ -222,6 +247,7 @@ def test_parse_shell_allow_list():
 
 
 def test_sync_aws_env_aliases(monkeypatch):
+    """Verify sync aws env aliases."""
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
@@ -248,6 +274,7 @@ def test_sync_aws_env_aliases(monkeypatch):
 
 
 def test_resolve_env_var_priority(monkeypatch):
+    """Verify resolve env var priority."""
     monkeypatch.setenv("TALKOPS_TEST_KEY", "prefixed_val")
     monkeypatch.setenv("TEST_KEY", "plain_val")
     assert resolve_env_var("TEST_KEY") == "prefixed_val"
@@ -260,6 +287,7 @@ def test_resolve_env_var_priority(monkeypatch):
 
 
 def test_manifest_options_and_groups():
+    """Verify manifest options and groups."""
     options = get_config_options()
     assert len(options) > 10
 
@@ -283,6 +311,7 @@ def test_manifest_options_and_groups():
 
 def test_coercion_and_serialization(tmp_path: Path):
     # Bool
+    """Verify coercion and serialization."""
     assert coerce_str_value(OptionKind.BOOL, "true") is True
     assert coerce_str_value(OptionKind.BOOL, "0") is False
     assert serialize_typed_value(OptionKind.BOOL, True) == "true"
@@ -304,6 +333,7 @@ def test_coercion_and_serialization(tmp_path: Path):
 
 
 def test_resolve_scalar_precedence(monkeypatch):
+    """Verify resolve scalar precedence."""
     opt = get_option("aws.region")
     assert opt is not None
 
@@ -332,6 +362,7 @@ def test_resolve_scalar_precedence(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sqlite_config_store(tmp_path: Path):
+    """Verify sqlite config store."""
     db_file = tmp_path / "test_config.db"
     adapter = SqliteConfigAdapter(db_file)
     store = ConfigStore(adapter)
@@ -360,6 +391,7 @@ async def test_sqlite_config_store(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_settings_sync_to_store(tmp_path: Path):
+    """Verify settings sync to store."""
     db_file = tmp_path / "sync_config.db"
     adapter = SqliteConfigAdapter(db_file)
     store = ConfigStore(adapter)
@@ -377,6 +409,7 @@ async def test_settings_sync_to_store(tmp_path: Path):
 
 
 def test_aws_identity_dataclass():
+    """Verify aws identity dataclass."""
     ident = AWSIdentity(
         account_id="123456789012",
         region="us-west-2",
@@ -390,6 +423,7 @@ def test_aws_identity_dataclass():
 
 
 def test_get_boto3_session():
+    """Verify get boto3 session."""
     session = get_boto3_session(region="us-west-2")
     assert session is not None
     assert session.region_name == "us-west-2"
@@ -397,12 +431,14 @@ def test_get_boto3_session():
 
 def test_resolve_aws_identity_safe():
     # Calling in mock/local environment safely returns AWSIdentity without crashing
+    """Verify resolve aws identity safe."""
     ident = resolve_aws_identity(region="us-east-1")
     assert isinstance(ident, AWSIdentity)
     assert ident.region == "us-east-1"
 
 
 def test_get_aws_credentials_dict():
+    """Verify get aws credentials dict."""
     creds = get_aws_credentials_dict()
     assert isinstance(creds, dict)
 
@@ -411,6 +447,7 @@ def test_get_aws_credentials_dict():
 
 
 def test_langsmith_project_name(monkeypatch):
+    """Verify langsmith project name."""
     monkeypatch.setenv("LANGSMITH_API_KEY", "")
     monkeypatch.setenv("LANGCHAIN_API_KEY", "")
     assert get_langsmith_project_name() is None
@@ -422,6 +459,7 @@ def test_langsmith_project_name(monkeypatch):
 
 
 def test_apply_tracing_settings(monkeypatch):
+    """Verify apply tracing settings."""
     monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
     monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
 
@@ -441,6 +479,7 @@ def test_apply_tracing_settings(monkeypatch):
 
 
 def test_ui_glyphs():
+    """Verify ui glyphs."""
     glyphs = get_glyphs()
     assert glyphs is not None
     assert glyphs.checkmark in ("✓", "[OK]")
@@ -462,6 +501,7 @@ def test_project_cwd_not_in_persistent_manifest():
 
 
 def test_settings_cwd_and_server_context(monkeypatch, tmp_path: Path):
+    """Verify settings cwd and server context."""
     user_dir = tmp_path / "workspace_test"
     user_dir.mkdir()
 
@@ -485,6 +525,7 @@ def test_settings_cwd_and_server_context(monkeypatch, tmp_path: Path):
 
 
 def test_find_project_root_excludes_home(monkeypatch, tmp_path: Path):
+    """Verify find project root excludes home."""
     home_dir = tmp_path / "fake_home"
     home_dir.mkdir()
     (home_dir / "package.json").write_text("{}")
@@ -495,6 +536,7 @@ def test_find_project_root_excludes_home(monkeypatch, tmp_path: Path):
 
 
 def test_resolve_model_context_limit():
+    """Verify resolve model context limit."""
     from talkops.model.config import resolve_model_context_limit
 
     # 1. Known model in MODEL_PROFILES / langchain
@@ -716,7 +758,10 @@ def test_load_dotenv_read_project_dotenv_disabled(tmp_path: Path, monkeypatch):
 
 def test_strip_dotenv_loaded_values(tmp_path: Path, monkeypatch):
     """_strip_dotenv_loaded_values cleans injected keys but retains modified or pre-existing values."""
-    from talkops.config.settings import _strip_dotenv_loaded_values, _dotenv_loaded_values
+    from talkops.config.settings import (
+        _dotenv_loaded_values,
+        _strip_dotenv_loaded_values,
+    )
 
     project_dir = tmp_path / "strip_test"
     project_dir.mkdir()

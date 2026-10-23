@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Conversational message widgets: UserMessage, QueuedUserMessage, AssistantMessage, DiffMessage, ThinkingMessage.
 
 Extracted from `talkops.ui.widgets.messages` (Phase 5 UI modularization).
@@ -15,7 +29,8 @@ from textual.containers import Vertical
 from textual.content import Content
 from textual.geometry import Offset
 from textual.selection import Selection
-from textual.widgets import Static
+from textual.widgets import Markdown, Static
+from textual.widgets._markdown import MarkdownFence
 
 from talkops.config.settings import get_glyphs
 from talkops.ui import theme
@@ -91,6 +106,7 @@ class _UserMessageCollapsed:
 
     @property
     def text(self) -> str:
+        """Return the text property."""
         return f"{self.head}\n\n[... hidden ...]\n\n{self.tail}"
 
 
@@ -124,8 +140,8 @@ class UserMessage(Static):
         height: auto;
         padding: 0 1;
         margin: 1 0;
-        background: $accent 7%;
-        border-left: wide $accent;
+        background: $primary 8%;
+        border-left: wide $primary;
         pointer: text;
         link-color: $text;
         link-style: not underline;
@@ -161,6 +177,7 @@ class UserMessage(Static):
         *,
         media_snapshot: tuple[Any, ...] | None = (),
     ) -> None:
+        """Initialize UserMessage."""
         from talkops.ui.widgets.chat_input import detect_input_mode
 
         self._raw_content = content
@@ -185,6 +202,7 @@ class UserMessage(Static):
         self.add_class("-cancelled")
 
     def set_timestamp_visible(self, visible: bool) -> None:
+        """Set timestamp visible."""
         self._show_timestamp = visible
         self.refresh(layout=True)
 
@@ -215,7 +233,7 @@ class UserMessage(Static):
                 ("  incognito", "italic dim"),
             ]
 
-        parts: list[str | tuple[str, str]] = [("❯ ", "bold $accent")]
+        parts: list[str | tuple[str, str]] = [("❯ ", "bold $primary")]
         if content:
             parts.append(content)
         if self._media_snapshot:
@@ -255,6 +273,7 @@ class QueuedUserMessage(Static):
     """
 
     def __init__(self, content: str) -> None:
+        """Initialize QueuedUserMessage."""
         self._raw_content = content
         super().__init__("")
 
@@ -277,8 +296,6 @@ def _assistant_markdown_class() -> type[Markdown]:
     if _ASSISTANT_MARKDOWN_CLS is not None:
         return _ASSISTANT_MARKDOWN_CLS
 
-    from textual.widgets import Markdown
-    from textual.widgets._markdown import MarkdownFence
 
     class AssistantFence(MarkdownFence):
         """Code fence that shows its language label and opens file paths on click."""
@@ -292,6 +309,7 @@ def _assistant_markdown_class() -> type[Markdown]:
         """
 
         def __init__(self, markdown: Any, token: Any, code: str) -> None:
+            """Initialize AssistantFence."""
             super().__init__(markdown, token, code)
             self._apply_language_title()
 
@@ -334,6 +352,7 @@ def _assistant_markdown_class() -> type[Markdown]:
                     pass
 
         def on_mount(self) -> None:
+            """Initialize component state when mounted into the DOM."""
             self._apply_language_title()
 
         def _copy_context(self, block: Any) -> None:
@@ -380,6 +399,7 @@ def _assistant_markdown_class() -> type[Markdown]:
         }
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
+            """Initialize AssistantMarkdown."""
             kwargs.setdefault("parser_factory", _create_markdown_parser)
             super().__init__(*args, **kwargs)
 
@@ -471,7 +491,7 @@ class AssistantMessage(Vertical):
     AssistantMessage MarkdownFence {
         margin: 1 0;
         padding: 0 1;
-        background: transparent;
+        background: $surface 50%;
         border: round $foreground 18%;
         border-title-color: $text-muted;
         border-title-align: left;
@@ -521,6 +541,7 @@ class AssistantMessage(Vertical):
     """
 
     def __init__(self, content: str = "", **kwargs: Any) -> None:
+        """Initialize AssistantMessage."""
         super().__init__(**kwargs)
         self._content_parts: list[str] = [content] if content else []
         self._is_streaming: bool = not bool(content)
@@ -541,10 +562,11 @@ class AssistantMessage(Vertical):
         self._content_parts = [value] if value else []
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield _assistant_markdown_class()("", id="assistant-content", open_links=False)
 
     def on_mount(self) -> None:
-        from textual.widgets import Markdown
+        """Initialize component state when mounted into the DOM."""
         from talkops.ui.widgets._links import autolink_file_paths
 
         self._markdown = self.query_one("#assistant-content", Markdown)
@@ -567,19 +589,18 @@ class AssistantMessage(Vertical):
 
     def _get_markdown(self) -> Any:
         if self._markdown is None:
-            from textual.widgets import Markdown
 
             self._markdown = self.query_one("#assistant-content", Markdown)
         return self._markdown
 
     def _ensure_stream(self) -> Any:
         if self._stream is None:
-            from textual.widgets import Markdown
 
             self._stream = Markdown.get_stream(self._get_markdown())
         return self._stream
 
     def append_token(self, token: str) -> None:
+        """Append token."""
         if not token:
             return
         self._is_streaming = True
@@ -614,6 +635,7 @@ class AssistantMessage(Vertical):
             self._flush_timer = None
 
     def update_text(self, text: str) -> None:
+        """Update text."""
         self._is_streaming = True
         self._content = text
         self._stop_flush_timer()
@@ -637,6 +659,7 @@ class AssistantMessage(Vertical):
             pass
 
     def finish(self) -> None:
+        """Execute finish on AssistantMessage."""
         self._is_streaming = False
         self._stop_flush_timer()
         if not self._content_parts or not self._content.strip():
@@ -663,6 +686,7 @@ class AssistantMessage(Vertical):
             self.run_worker(_finalize(), exclusive=True, thread=False)
 
     async def on_markdown_link_clicked(self, event: Any) -> None:
+        """Handle markdown link clicked events."""
         event.stop()
         from talkops.ui.widgets._links import open_link_or_file_async
 
@@ -671,13 +695,13 @@ class AssistantMessage(Vertical):
             await open_link_or_file_async(href, app=self.app, notify_on_success=True)
 
     async def on_click(self, event: Any) -> None:
+        """Handle mouse click events."""
         if getattr(event, "chain", 1) > 1 or bool(
             getattr(self.screen, "selections", None)
         ):
             return
         from talkops.editor import extract_file_path, open_file_in_editor
         from talkops.ui.widgets._links import event_targets_link
-        from textual.widgets._markdown import MarkdownFence
 
         if event_targets_link(event):
             return
@@ -722,6 +746,7 @@ class DiffMessage(Static):
     """
 
     def __init__(self, patch_or_diff: str, file_path: str = "") -> None:
+        """Initialize DiffMessage."""
         lines = patch_or_diff.splitlines()
         additions = sum(
             1 for ln in lines if ln.startswith("+") and not ln.startswith("+++")
@@ -781,6 +806,7 @@ class ThinkingMessage(Static):
         live: bool = False,
         **kwargs: Any,
     ) -> None:
+        """Initialize ThinkingMessage."""
         super().__init__(**kwargs)
         self._content = content
         self._duration_seconds = max(0.0, duration_seconds)
@@ -792,10 +818,12 @@ class ThinkingMessage(Static):
 
     @property
     def is_live(self) -> bool:
+        """Return the is live property."""
         return self._live
 
     @property
     def topic(self) -> str | None:
+        """Return the topic property."""
         for line in self._content.splitlines():
             heading = _thinking_heading(line)
             if heading:
@@ -804,6 +832,7 @@ class ThinkingMessage(Static):
 
     @property
     def preview(self) -> str:
+        """Return the preview property."""
         paragraphs = re.split(r"\n\s*\n", self._content.strip())
         for para in reversed(paragraphs):
             words = " ".join(
@@ -816,6 +845,7 @@ class ThinkingMessage(Static):
     def update_thinking(
         self, content: str, duration_seconds: float | None = None
     ) -> None:
+        """Update thinking."""
         self._content = content
         if duration_seconds is not None and not self._live:
             self._duration_seconds = max(0.0, duration_seconds)
@@ -823,6 +853,7 @@ class ThinkingMessage(Static):
             self.refresh(layout=True)
 
     def finish(self) -> None:
+        """Execute finish on ThinkingMessage."""
         if not self._live:
             return
         self._live = False
@@ -832,16 +863,19 @@ class ThinkingMessage(Static):
             self.refresh(layout=True)
 
     def toggle_details(self) -> None:
+        """Toggle details."""
         if self._live or not self._content.strip():
             return
         self._expanded = not self._expanded
         self.refresh(layout=True)
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         if self._live:
             self._timer = self.set_interval(self._TICK_SECONDS, self._tick)
 
     def on_unmount(self) -> None:
+        """Clean up component resources when unmounted from the DOM."""
         self._stop_timer()
 
     def _stop_timer(self) -> None:
@@ -854,6 +888,7 @@ class ThinkingMessage(Static):
         self.refresh()
 
     def on_click(self, event: events.Click) -> None:
+        """Handle mouse click events."""
         if getattr(event, "chain", 1) > 1 or bool(
             getattr(self.screen, "selections", None)
         ):
@@ -878,6 +913,7 @@ class ThinkingMessage(Static):
         return text[: width - 1].rstrip() + ellipsis
 
     def render(self) -> Content:
+        """Render the widget content."""
         glyphs = get_glyphs()
         sep = glyphs.separator
 

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Authentication prompt modal for capturing and setting provider API keys.
 
 ``AuthPromptScreen`` accepts an API key for a single provider or service
@@ -14,9 +28,8 @@ Security notes:
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 import os
-from talkops.config.paths import GLOBAL_ENV_PATH, ensure_data_dir, upsert_env_vars
+import webbrowser
 from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar
 
@@ -29,13 +42,21 @@ from textual.screen import ModalScreen
 from textual.style import Style as TStyle
 from textual.widgets import Checkbox, Input, RadioButton, RadioSet, Static
 
+from talkops.config.paths import GLOBAL_ENV_PATH, ensure_data_dir, upsert_env_vars
 from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
     from textual.events import Click, MouseMove
 
-from talkops.model.config import get_credential_env_var, get_provider_display_name
+from talkops.model.config import (
+    canonicalize_provider,
+    get_base_url_env_var,
+    get_base_url_env_vars,
+    get_credential_env_var,
+    get_provider_display_name,
+)
 
 logger = get_logger(__name__)
 
@@ -44,6 +65,7 @@ class AuthCheckbox(Checkbox):
     """Checkbox that prevents Enter from toggling it so Enter saves the modal form."""
 
     def on_key(self, event: events.Key) -> None:
+        """Handle keyboard press events."""
         if event.key == "enter":
             event.prevent_default()
             event.stop()
@@ -57,6 +79,7 @@ class AuthCheckbox(Checkbox):
 PROVIDER_API_KEY_URLS: dict[str, str] = {
     "anthropic": "https://platform.claude.com/login?returnTo=%2Fsettings%2Fkeys",
     "baseten": "https://docs.baseten.co/organization/api-keys",
+    "cerebras": "https://cloud.cerebras.ai/",
     "cohere": "https://dashboard.cohere.com/welcome/login?redirect_uri=%2Fapi-keys",
     "deepseek": "https://platform.deepseek.com/api_keys",
     "fireworks": "https://app.fireworks.ai/settings/users/api-keys",
@@ -70,9 +93,11 @@ PROVIDER_API_KEY_URLS: dict[str, str] = {
     "mistralai": "https://console.mistral.ai/api-keys",
     "nvidia": "https://build.nvidia.com/settings/api-keys",
     "openai": "https://platform.openai.com/api-keys",
+    "openai_codex": "https://platform.openai.com/api-keys",
     "openrouter": "https://openrouter.ai/workspaces/default/keys",
     "talkops": "https://console.talkops.ai/settings/keys",
     "perplexity": "https://www.perplexity.ai/settings/api",
+    "sambanova": "https://cloud.sambanova.ai/apis",
     "together": "https://api.together.ai/settings/api-keys",
     "typesafe": "https://typesafe.ai/keys",
     "xai": "https://console.x.ai/team/default/api-keys",
@@ -82,11 +107,14 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "anthropic": "Anthropic",
     "azure_openai": "Azure OpenAI",
     "baseten": "Baseten",
+    "bedrock": "Amazon Bedrock",
+    "cerebras": "Cerebras",
     "cohere": "Cohere",
     "deepseek": "DeepSeek",
     "fireworks": "Fireworks",
     "google_genai": "Google Gemini",
     "google_vertexai": "Google Vertex AI",
+    "google_anthropic_vertex": "Google Vertex AI (Anthropic)",
     "groq": "Groq",
     "huggingface": "Hugging Face",
     "ibm": "IBM watsonx",
@@ -95,11 +123,13 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "meta": "Meta",
     "mistralai": "Mistral AI",
     "nvidia": "NVIDIA",
+    "ollama": "Ollama",
     "openai": "OpenAI",
-    "openai_codex": "OpenAI Codex (ChatGPT login)",
+    "openai_codex": "OpenAI Codex",
     "openrouter": "OpenRouter",
     "talkops": "TalkOps Control Plane",
     "perplexity": "Perplexity",
+    "sambanova": "SambaNova",
     "together": "Together AI",
     "typesafe": "TypeSafe AI (Jev)",
     "xai": "xAI",
@@ -230,19 +260,25 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         reason: str | None = None,
         allow_empty_submit: bool = False,
     ) -> None:
+        """Initialize AuthPromptScreen."""
         super().__init__()
-        self._provider = provider
+        self._is_langsmith = is_langsmith(provider)
+        self._provider = (
+            provider
+            if (self._is_langsmith or provider.lower() == "talkops")
+            else canonicalize_provider(provider)
+        )
         self._env_var = (
             env_var
-            or get_credential_env_var(provider)
-            or ("LANGSMITH_API_KEY" if is_langsmith(provider) else f"{provider.upper()}_API_KEY")
+            or get_credential_env_var(self._provider)
+            or ("LANGSMITH_API_KEY" if self._is_langsmith else f"{self._provider.upper()}_API_KEY")
         )
         self._reason = reason
         self._allow_empty_submit = allow_empty_submit
         self._advanced_visible = False
-        self._is_langsmith = is_langsmith(provider)
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         provider_label = self._get_display_name()
         self.set_modal_title(f"API Key: {provider_label}")
@@ -253,6 +289,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         ])
 
     def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on AuthPromptScreen."""
         provider_label = self._get_display_name()
         yield Static("", classes="auth-prompt-title")
 
@@ -380,7 +417,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             lbl_proj.display = self._advanced_visible
             yield lbl_proj
 
-            current_proj = os.environ.get("LANGSMITH_PROJECT") or os.environ.get("OPSCODE_LANGSMITH_PROJECT") or "talkops"
+            current_proj = os.environ.get("LANGSMITH_PROJECT") or os.environ.get("TALKOPS_LANGSMITH_PROJECT") or "talkops"
             proj_input = Input(
                 value=current_proj,
                 placeholder="LANGSMITH_PROJECT (default: talkops)",
@@ -408,8 +445,17 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             base_url_label.display = self._advanced_visible
             yield base_url_label
 
+            initial_base_url = ""
+            if self._provider == "talkops":
+                initial_base_url = os.environ.get("TALKOPS_SERVER_URL") or ""
+            else:
+                for env_name in get_base_url_env_vars(self._provider):
+                    val = os.environ.get(env_name, "").strip()
+                    if val:
+                        initial_base_url = val
+                        break
             base_url_input = Input(
-                value="",
+                value=initial_base_url,
                 placeholder="Base URL",
                 id="auth-prompt-base-url",
             )
@@ -451,6 +497,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         )
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        """Handle radio set changed events."""
         if not self._is_langsmith:
             return
         pressed = getattr(event, "pressed", None)
@@ -500,6 +547,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         return f"{marker} Advanced (F2)"
 
     def action_toggle_advanced(self) -> None:
+        """Execute the toggle advanced action."""
         self._advanced_visible = not self._advanced_visible
         if self._is_langsmith:
             is_custom = False
@@ -538,6 +586,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             self.query_one("#auth-prompt-input", Input).focus()
 
     def on_click(self, event: Click) -> None:
+        """Handle mouse click events."""
         widget = event.widget
         if (
             widget is not None
@@ -548,11 +597,11 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             event.stop()
             return
         if event.style.link:
-            import webbrowser
             webbrowser.open(event.style.link)
             event.stop()
 
     def on_mouse_move(self, event: MouseMove) -> None:
+        """Handle mouse move events."""
         widget = event.widget
         self.styles.pointer = (
             "pointer"
@@ -562,12 +611,15 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         )
 
     def on_leave(self) -> None:
+        """Handle leave events."""
         self.styles.pointer = "default"
 
     def action_save(self) -> None:
+        """Execute the save action."""
         self._perform_save()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle input submitted events."""
         event.stop()
         self._perform_save()
 
@@ -648,7 +700,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = vertex_env_val
 
         if not cleaned:
-            if self._provider == "google_genai" and use_vertex:
+            if (self._provider == "google_genai" and use_vertex) or (self._provider == "ollama" and base_url):
                 pass
             elif self._allow_empty_submit:
                 self.dismiss(AuthResult.CANCELLED)
@@ -672,7 +724,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         base_url_var = (
             "TALKOPS_SERVER_URL"
             if self._provider == "talkops"
-            else f"{self._provider.upper()}_BASE_URL"
+            else get_base_url_env_var(self._provider)
         )
         if base_url:
             os.environ[base_url_var] = base_url
@@ -718,7 +770,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
                     ),
                     sync_dotenv=True,
                 )
-            elif cleaned:
+            elif cleaned or base_url:
                 storage.set_provider_key(
                     self._provider,
                     cleaned,
@@ -749,6 +801,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             pass
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(AuthResult.CANCELLED)
 
 

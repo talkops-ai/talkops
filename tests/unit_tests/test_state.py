@@ -1,10 +1,24 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Comprehensive unit tests for TalkOps state channels, cloud context, and sessions."""
 
 import asyncio
 from pathlib import Path
 from typing import Any, get_type_hints
-import pytest
 
+import pytest
 from langchain.agents.middleware.types import PrivateStateAttr
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -28,6 +42,17 @@ from talkops.state.goal_channels import (
     coerce_model_spec,
 )
 from talkops.state.resume_state import ResumeState
+from talkops.state.service_context import (
+    ManagedService,
+    ServiceContextState,
+    ServiceOperationRecord,
+    _merge_managed_services,
+    _merge_operations_log,
+    _merge_plugin_state,
+    _merge_unique_strings,
+    make_operation_record,
+    make_service_record,
+)
 from talkops.state.session import (
     SessionManager,
     _count_messages_from_deltas,
@@ -44,19 +69,7 @@ from talkops.state.session import (
     set_db_path,
     thread_exists,
 )
-from talkops.state.service_context import (
-    ManagedService,
-    ServiceContextState,
-    ServiceOperationRecord,
-    _merge_managed_services,
-    _merge_operations_log,
-    _merge_plugin_state,
-    _merge_unique_strings,
-    make_operation_record,
-    make_service_record,
-)
 from talkops.state.state_migration import migrate_legacy_state
-
 
 # ── 1. TalkOpsAgentState Schema Structure ────────────────────────────────────
 
@@ -106,6 +119,7 @@ def test_private_state_channel_annotations():
 
 def test_service_context_reducers():
     # Managed services merge
+    """Verify service context reducers."""
     svc1 = make_service_record("svc-1", "payments", "aws", "ecs_service", status="healthy")
     svc2 = make_service_record("svc-2", "auth", "k8s", "deployment", status="degraded")
     merged = _merge_managed_services(None, {"svc-1": svc1})
@@ -146,6 +160,7 @@ def test_service_context_reducers():
 # ── 2. Cloud Context & Operational State ──────────────────────────────────────
 
 def test_cloud_provider_coercion():
+    """Verify cloud provider coercion."""
     assert coerce_cloud_provider("aws") == "aws"
     assert coerce_cloud_provider("kubernetes") == "kubernetes"
     assert coerce_cloud_provider("azure") == "azure"
@@ -156,6 +171,7 @@ def test_cloud_provider_coercion():
 
 
 def test_format_cloud_badge():
+    """Verify format cloud badge."""
     aws_ctx: CloudEnvironmentContext = {
         "active_provider": "aws",
         "aws": {"profile": "prod-infra", "region": "us-west-2"},
@@ -184,6 +200,7 @@ def test_format_cloud_badge():
 
 
 def test_merge_cloud_context_reducer():
+    """Verify merge cloud context reducer."""
     initial: CloudEnvironmentContext = {
         "active_provider": "aws",
         "aws": {"region": "us-east-1", "profile": "default"},
@@ -205,6 +222,7 @@ def test_merge_cloud_context_reducer():
 
 
 def test_merge_cloud_resources_reducer():
+    """Verify merge cloud resources reducer."""
     r1 = make_resource_ref("aws", "s3_bucket", "my-data-bucket", "created")
     r2 = make_resource_ref("aws", "iam_role", "app-role", "created")
     r3 = make_resource_ref("aws", "s3_bucket", "my-data-bucket", "modified")
@@ -225,6 +243,7 @@ def test_merge_cloud_resources_reducer():
 # ── 3. Goal & Resume State Coercion ───────────────────────────────────────────
 
 def test_goal_and_resume_coercion():
+    """Verify goal and resume coercion."""
     assert coerce_goal_status("active") == "active"
     assert coerce_goal_status("paused") == "paused"
     assert coerce_goal_status("invalid") is None
@@ -242,6 +261,7 @@ def test_goal_and_resume_coercion():
 # ── 4. ResumeStateMiddleware Context Token Extraction ─────────────────────────
 
 def test_resume_state_middleware_after_model():
+    """Verify resume state middleware after model."""
     mw = ResumeStateMiddleware()
     msg = AIMessage(
         content="I have provisioned the requested S3 bucket.",
@@ -256,6 +276,7 @@ def test_resume_state_middleware_after_model():
 # ── 5. Delta Message Counting ─────────────────────────────────────────────────
 
 def test_delta_message_counting():
+    """Verify delta message counting."""
     m1 = HumanMessage(content="Hello")
     m2 = AIMessage(content="Hi there")
     deltas = [[m1], [m2]]
@@ -267,6 +288,7 @@ def test_delta_message_counting():
 
 @pytest.mark.asyncio
 async def test_session_lifecycle(tmp_path: Path):
+    """Verify session lifecycle."""
     test_db = tmp_path / "test_sessions.db"
     set_db_path(test_db)
 
@@ -297,6 +319,7 @@ async def test_session_lifecycle(tmp_path: Path):
 # ── 7. State Migration ────────────────────────────────────────────────────────
 
 def test_state_migration(tmp_path: Path):
+    """Verify state migration."""
     legacy_dir = tmp_path / "legacy_talkops"
     legacy_dir.mkdir()
     state_dir = tmp_path / ".state"

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Dynamic Model Pool Manager for Jev-powered autonomous model routing.
 
 Discovers candidate models and provider-native reasoning parameters directly
@@ -7,9 +21,9 @@ without hardcoding provider model strings.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
 import threading
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -120,6 +134,7 @@ class DynamicModelPoolManager:
     """Manages dynamic model tiering and hot instances for the Jev model router."""
 
     def __init__(self) -> None:
+        """Initialize DynamicModelPoolManager."""
         self._instances: dict[str, ModelResult] = {}
         self._lock = threading.Lock()
 
@@ -258,7 +273,7 @@ class DynamicModelPoolManager:
         if not specs and base_spec:
             specs = [normalize_model_spec(base_spec)]
         elif not specs:
-            specs = ["google_genai:gemini-2.5-flash"]
+            specs = ["google_genai:gemini-3.7-flash"]
 
         pro_tokens = {"pro", "opus", "o3", "astra", "sol", "reasoner", "r1"}
         fast_tokens = {"flash", "mini", "haiku", "lite", "micro", "scout", "small"}
@@ -379,7 +394,7 @@ class DynamicModelPoolManager:
             tuple[BaseChatModel, selected_spec, effort_level, model_settings]
         """
         tiers = self.discover_tiers(provider=provider, base_spec=base_spec)
-        selected_spec, default_effort = tiers.get(tier, tiers.get(1, (base_spec or "google_genai:gemini-2.5-flash", "off")))
+        selected_spec, default_effort = tiers.get(tier, tiers.get(1, (base_spec or "google_genai:gemini-3.7-flash", "off")))
         effort = requested_effort or default_effort
         is_disabled_effort = tier == 0 or effort in ("off", "none", "clear", "0", "reset")
         if is_disabled_effort or not supported_efforts_for_model(selected_spec):

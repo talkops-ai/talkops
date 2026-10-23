@@ -1,12 +1,40 @@
-"""Unit tests for ServerProcess, ServerConfig, stream item parsing, and RemoteAgent connection."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for ServerProcess, ServerConfig, stream item parsing, and RemoteAgent connection."""
 import asyncio
+import importlib
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessageChunk
 
-from talkops.server import ServerConfig, ServerProcess, find_free_port, generate_langgraph_json
+from talkops.server import (
+    ServerConfig,
+    ServerProcess,
+    find_free_port,
+    generate_langgraph_json,
+)
 from talkops.ui.remote_client import (
     RemoteAgent,
     _convert_ai_message,
@@ -16,6 +44,7 @@ from talkops.ui.remote_client import (
 
 
 def test_server_config_environment_roundtrip():
+    """Verify server config environment roundtrip."""
     cfg = ServerConfig(
         model="anthropic:claude-3-5-sonnet-latest",
         assistant_id="talkops",
@@ -41,6 +70,7 @@ def test_server_config_environment_roundtrip():
 
 
 def test_generate_langgraph_json_scaffolding(tmp_path: Path):
+    """Verify generate langgraph json scaffolding."""
     target = generate_langgraph_json(tmp_path)
     assert target.exists()
     assert target.name == "langgraph.json"
@@ -58,12 +88,14 @@ def test_generate_langgraph_json_scaffolding(tmp_path: Path):
 
 
 def test_find_free_port():
+    """Verify find free port."""
     port = find_free_port()
     assert isinstance(port, int)
     assert port > 1024
 
 
 def test_server_process_initialization():
+    """Verify server process initialization."""
     from talkops.utils.logger import get_active_log_file
 
     cfg = ServerConfig()
@@ -75,6 +107,7 @@ def test_server_process_initialization():
 
 def test_parse_stream_item_conformance():
     # 1. 3-tuple with namespace and data: (namespace, mode, data)
+    """Verify parse stream item conformance."""
     chunk3 = (("subagent",), "messages", ({"type": "ai", "content": "hi"}, {}))
     parsed3 = _parse_stream_item(chunk3)
     assert parsed3 == (("subagent",), "messages", ({"type": "ai", "content": "hi"}, {}))
@@ -96,6 +129,7 @@ def test_parse_stream_item_conformance():
 
 def test_convert_ai_message_and_tools():
     # Streaming chunks with tool_call_chunks
+    """Verify convert ai message and tools."""
     ai_dict = {
         "type": "ai",
         "content": "Analyzing cluster...",
@@ -126,6 +160,7 @@ def test_convert_ai_message_and_tools():
 
 @pytest.mark.asyncio
 async def test_remote_agent_acancel_active_runs():
+    """Verify remote agent acancel active runs."""
     agent = RemoteAgent(url="http://127.0.0.1:9999", graph_name="agent")
     mock_graph = MagicMock()
     mock_client = MagicMock()
@@ -183,9 +218,6 @@ async def test_remote_agent_acancel_active_runs_keeps_run_id_on_failure():
 
 def test_server_graph_import_performs_no_runtime_construction(monkeypatch):
     """LangGraph import must not instantiate models, MCP clients, or graphs."""
-    import importlib
-    import sys
-
     monkeypatch.setenv("TALKOPS_SERVER_PROCESS", "1")
     sys.modules.pop("talkops.server.server_graph", None)
     with patch(
@@ -234,6 +266,7 @@ async def test_async_agent_factory_prepares_mcp_before_sync_compilation(tmp_path
 def test_server_graph_factory_signature():
     """Verify that make_graph matches LangGraph API 0-parameter factory requirements."""
     from langgraph_api._factory_utils import _classify_factory
+
     from talkops.server.server_graph import make_graph
 
     classification = _classify_factory(make_graph)
@@ -370,8 +403,6 @@ async def test_server_process_astart_cancellation_calls_stop():
 def test_validate_server_ownership_never_signals_ambiguous_pids(tmp_path: Path):
     """Verify _validate_server_ownership requires matching server.json and rejects ambiguous PIDs (DV-03)."""
     from talkops.server.server import _validate_server_ownership
-    import json
-    import os
 
     # 1. No server.json exists -> MUST return False even if PID is alive
     current_pid = os.getpid()
@@ -396,12 +427,6 @@ def test_validate_server_ownership_never_signals_ambiguous_pids(tmp_path: Path):
 
 def test_server_process_stop_escalates_to_killpg_when_descendant_ignores_sigterm():
     """Verify _stop_process verifies process-group disappearance and escalates to SIGKILL for descendants ignoring SIGTERM (DV-06)."""
-    import os
-    import signal
-    import subprocess
-    import sys
-    import time
-
     if os.name == "nt":
         pytest.skip("Process groups via killpg are POSIX-only")
 
@@ -433,7 +458,6 @@ def test_server_process_stop_escalates_to_killpg_when_descendant_ignores_sigterm
 
 def test_concurrent_same_port_and_free_port_toctou_resilience():
     """Verify concurrent same-port instances receive isolated runtime directories and free-port selection works (DV-11)."""
-    import socket
     from talkops.server import ServerConfig, ServerProcess, find_free_port
 
     # 1. find_free_port returns open port
@@ -465,8 +489,10 @@ def test_concurrent_same_port_and_free_port_toctou_resilience():
 @pytest.mark.asyncio
 async def test_in_process_server_handle_and_agent_lifecycle(tmp_path: Path):
     """Verify start_server_and_get_agent uses InProcessServerHandle by default without spawning a subprocess."""
-    from langchain_core.messages import AIMessageChunk
-    from talkops.cli.server_manager import InProcessServerHandle, start_server_and_get_agent
+    from talkops.cli.server_manager import (
+        InProcessServerHandle,
+        start_server_and_get_agent,
+    )
     from talkops.server.server_graph import ServerRuntime
     from talkops.ui.remote_client import InProcessAgent
 
@@ -528,6 +554,7 @@ async def test_in_process_server_handle_and_agent_lifecycle(tmp_path: Path):
         # Also verify LangGraph's _coerce_context directly with CLIContextSchema and dict containing working_dir
         from langgraph.pregel.main import _coerce_context
         from langgraph.types import Interrupt
+
         from talkops.agent.config import CLIContextSchema
         from talkops.ui.remote_client import _convert_interrupts
         from talkops.ui.textual_adapter import TextualAdapter
@@ -553,7 +580,6 @@ async def test_in_process_server_handle_and_agent_lifecycle(tmp_path: Path):
         assert isinstance(converted_ints[0], Interrupt)
         assert converted_ints[0].id == "int-tuple-1"
 
-        from typing import Any
 
         adapter = TextualAdapter.__new__(TextualAdapter)
         pending: dict[str, Any] = {}

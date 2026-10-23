@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """LangChain AgentMiddleware for custom slash commands and skills.
 
 Provides:
@@ -15,10 +29,10 @@ Provides:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping, Sequence
 import fnmatch
-from pathlib import Path
 import re
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from deepagents.middleware._utils import append_to_system_message
@@ -31,6 +45,7 @@ from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.prebuilt.tool_node import ToolCallRequest
+from pydantic import BaseModel, ConfigDict, Field
 
 from talkops.commands.custom.expansion import (
     expand_custom_command_prompt,
@@ -284,9 +299,9 @@ def create_custom_command_skill_tool(
         )
         return f"{expanded.xml_command_message}\n\n{expanded.expanded_prompt}"
 
-    from pydantic import BaseModel, ConfigDict, Field
 
     class SkillToolSchema(BaseModel):
+        """Represent skill tool schema."""
         model_config = ConfigDict(populate_by_name=True)
         skill: str = Field(description="The skill or custom command name to execute")
         args: str = Field(default="", description="Optional arguments for the skill")
@@ -314,6 +329,7 @@ class CustomCommandsMiddleware(AgentMiddleware):
         inject_system_prompt: bool = True,
         model_resolver: Callable[[str], Any] | None = None,
     ) -> None:
+        """Initialize CustomCommandsMiddleware."""
         self.cwd = cwd
         self.project_root = project_root
         self.enforce_allowed_tools = enforce_allowed_tools
@@ -393,6 +409,7 @@ class CustomCommandsMiddleware(AgentMiddleware):
         state: Mapping[str, Any],
         runtime: Any = None,
     ) -> dict[str, Any] | None:
+        """Execute asynchronous pre-agent lifecycle hook."""
         return await asyncio.to_thread(self.before_agent, state, runtime)
 
     def _prepare_model_request(self, request: ModelRequest) -> ModelRequest:
@@ -511,6 +528,7 @@ class CustomCommandsMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
+        """Intercept and wrap synchronous model invocation."""
         modified_req = self._prepare_model_request(request)
         return handler(modified_req)
 
@@ -519,6 +537,7 @@ class CustomCommandsMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
+        """Intercept and wrap asynchronous model invocation."""
         modified_req = await asyncio.to_thread(self._prepare_model_request, request)
         return await handler(modified_req)
 
@@ -593,6 +612,7 @@ class CustomCommandsMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Any],
     ) -> ToolMessage | Any:
+        """Intercept and wrap synchronous tool execution."""
         blocked = self._validate_and_track_tool_call(request)
         if blocked is not None:
             return blocked
@@ -603,6 +623,7 @@ class CustomCommandsMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Any]],
     ) -> ToolMessage | Any:
+        """Intercept and wrap asynchronous tool execution."""
         blocked = await asyncio.to_thread(self._validate_and_track_tool_call, request)
         if blocked is not None:
             return blocked

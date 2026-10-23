@@ -1,14 +1,28 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Runtime command handlers for talkops (/reload, /restart, /install, /update, /auto-update)."""
 
 from __future__ import annotations
 
 import asyncio
-from talkops.utils.logger import get_logger
 import subprocess
 from pathlib import Path
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -21,21 +35,26 @@ class ReloadHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/reload"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         app = ctx.app
         if app is not None and hasattr(app, "_schedule_reload"):
             app._schedule_reload()
@@ -54,8 +73,14 @@ class ReloadHandler(BaseCommandHandler):
         except Exception:
             pass
 
-        from talkops.config.cloud_profiles import get_active_aws_profile, get_active_aws_region
-        from talkops.config.toml_config import format_agent_pool_summary, load_agent_pool
+        from talkops.config.cloud_profiles import (
+            get_active_aws_profile,
+            get_active_aws_region,
+        )
+        from talkops.config.toml_config import (
+            format_agent_pool_summary,
+            load_agent_pool,
+        )
 
         active_prof = (
             get_active_aws_profile()
@@ -92,21 +117,26 @@ class RestartHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/restart"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.ALWAYS
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         app = ctx.app
         if app is not None and hasattr(app, "_handle_restart_command"):
             await app._handle_restart_command(command=ctx.raw_command)
@@ -127,21 +157,26 @@ class InstallHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/install"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         args = ctx.args.strip()
         if not args:
             return CommandResult(
@@ -169,25 +204,30 @@ class InstallHandler(BaseCommandHandler):
 
 
 class UpdateHandler(BaseCommandHandler):
-    """Handler for /update — check for and apply OpsCode software updates."""
+    """Handler for /update — check for and apply TalkOps software updates."""
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/update"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         args = ctx.args.strip()
         parts = args.split() if args else []
 
@@ -224,7 +264,7 @@ class UpdateHandler(BaseCommandHandler):
         if latest == current_version:
             return CommandResult(
                 success=True,
-                message=f"OpsCode v{current_version} is currently running (latest version).",
+                message=f"TalkOps v{current_version} is currently running (latest version).",
                 mount_as_app_message=True,
             )
 
@@ -235,7 +275,7 @@ class UpdateHandler(BaseCommandHandler):
             return CommandResult(
                 success=True,
                 message=f"Updated from v{current_version} → v{latest}.\n"
-                "Restart OpsCode to use the new version (`/restart`).",
+                "Restart TalkOps to use the new version (`/restart`).",
                 mount_as_app_message=True,
             )
 
@@ -254,21 +294,26 @@ class AutoUpdateHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/auto-update"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.SIDE_EFFECT_FREE
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         arg = ctx.args.strip().lower()
         if ctx.settings is not None:
             if arg in ("on", "enable", "true", "1"):

@@ -1,15 +1,33 @@
-"""Unit tests for TalkOps agent factory and LangGraph compilation."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for TalkOps agent factory and LangGraph compilation."""
 from pathlib import Path
 from unittest.mock import MagicMock
+
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+
 from talkops.agent.factory import create_talkops_agent
 from talkops.backend.composite import TalkOpsCompositeBackend
-from langchain_core.language_models.chat_models import BaseChatModel
 
 
 def test_create_talkops_agent_compilation(tmp_path):
     # Mock chat model
+    """Verify create talkops agent compilation."""
     mock_model = MagicMock(spec=BaseChatModel)
     mock_model.bind_tools = MagicMock(return_value=mock_model)
     mock_model.profile = {}
@@ -28,6 +46,7 @@ def test_create_talkops_agent_compilation(tmp_path):
 
 
 def test_create_talkops_agent_with_project_context(tmp_path):
+    """Verify create talkops agent with project context."""
     from talkops.project_utils import ProjectContext
 
     mock_model = MagicMock(spec=BaseChatModel)
@@ -54,8 +73,7 @@ def test_create_talkops_agent_with_project_context(tmp_path):
 
 @pytest.mark.asyncio
 async def test_create_talkops_agent_webhook_sre_vs_coding_prompt(tmp_path):
-    from langchain_core.messages import AIMessage, BaseMessage
-    from langchain_core.outputs import ChatGeneration, ChatResult
+    """Verify create talkops agent webhook sre vs coding prompt."""
     from talkops.agent.config import CLIContextSchema
 
     captured_messages: list[list[BaseMessage]] = []
@@ -68,6 +86,7 @@ async def test_create_talkops_agent_webhook_sre_vs_coding_prompt(tmp_path):
             return "openai-chat"
 
         def bind_tools(self, tools, **kwargs):
+            """Provide bind tools test helper or fixture."""
             return self
 
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):

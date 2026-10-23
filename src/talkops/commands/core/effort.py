@@ -1,11 +1,26 @@
-"""Reasoning effort command handler for OpsCode."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Reasoning effort command handler for TalkOps."""
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
+import os
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -17,21 +32,26 @@ class EffortHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/effort"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.CORE
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.READ_ONLY
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         level = ctx.args.strip().lower()
 
         current = getattr(ctx.settings, "reasoning_effort", None)
@@ -80,10 +100,9 @@ class EffortHandler(BaseCommandHandler):
                 message=f"Unknown effort level `{level}` for model `{model}`. Supported: {', '.join(supported_efforts)}, clear",
             )
 
-        import os
         if ctx.settings is not None:
             ctx.settings.reasoning_effort = level
-        os.environ["OPSCODE_REASONING_EFFORT"] = level
+        os.environ["TALKOPS_REASONING_EFFORT"] = level
 
         from talkops.config.toml_config import save_effort_for_model
         save_effort_for_model(model, level)

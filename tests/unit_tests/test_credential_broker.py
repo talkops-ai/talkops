@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Tri-Mode Credential Broker, OIDC Provider, and Process-Scoped Environment Isolation."""
 
 from __future__ import annotations
@@ -17,6 +31,7 @@ from talkops.server.oidc_provider import OIDCProvider
 
 
 def test_detect_runtime_auth_mode(monkeypatch):
+    """Verify detect runtime auth mode."""
     monkeypatch.delenv("TALKOPS_DEPLOYMENT_MODE", raising=False)
     monkeypatch.delenv("TALKOPS_SERVER_MODE", raising=False)
     assert detect_runtime_auth_mode() == "local"

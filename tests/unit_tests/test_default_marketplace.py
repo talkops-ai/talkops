@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Default Marketplace Configurations, Live Discovery, and Dynamic Categories."""
 
 from __future__ import annotations
@@ -313,6 +327,7 @@ def test_materialize_plugin_source_triggers_on_demand_clone(
     cloned_paths: list[Path] = []
 
     def mock_clone(source, git_url, *, cache_key, destination=None, validate=None):
+        """Provide mock clone test helper or fixture."""
         target = destination or tmp_path
         target.mkdir(parents=True, exist_ok=True)
         plugin_dir = target / "plugins" / "agent-plugins" / "aws-finops-agent"

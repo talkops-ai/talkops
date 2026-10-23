@@ -1,8 +1,22 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """LangChain middleware for non-blocking background shell command execution.
 
-Brings Antigravity-style ``wait_ms_before_async`` command execution, live task
+Provides ``wait_ms_before_async`` command execution, live task
 management (``manage_task``), state channel persistence (``background_tasks``),
-and reactive completion notification delivery into TalkOps.
+and reactive completion notification delivery in TalkOps.
 """
 
 from __future__ import annotations
@@ -260,6 +274,7 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
         task_manager: BackgroundTaskManager | None = None,
         default_wait_ms_before_async: int = DEFAULT_WAIT_MS_BEFORE_ASYNC,
     ) -> None:
+        """Initialize BackgroundCommandMiddleware."""
         super().__init__()
         self._backend = backend
         self._working_dir = Path(working_dir).resolve() if working_dir else Path.cwd().resolve()
@@ -555,6 +570,7 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
     ) -> ModelResponse[ResponseT] | ExtendedModelResponse[ResponseT]:
+        """Intercept and wrap synchronous model invocation."""
         return handler(self._prepare_model_request(request))
 
     @override
@@ -563,6 +579,7 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
     ) -> ModelResponse[ResponseT] | ExtendedModelResponse[ResponseT]:
+        """Intercept and wrap asynchronous model invocation."""
         return await handler(self._prepare_model_request(request))
 
     # ── Before Model Hook: Deliver Completed & Stdin-Waiting Notifications ──
@@ -640,6 +657,7 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
         state: AgentState[Any],
         runtime: Runtime[ContextT] | None = None,
     ) -> dict[str, Any] | None:
+        """Execute synchronous pre-model lifecycle hook."""
         return self._collect_notification_update(state, runtime)
 
     @override
@@ -648,6 +666,7 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
         state: AgentState[Any],
         runtime: Runtime[ContextT] | None = None,
     ) -> dict[str, Any] | None:
+        """Execute asynchronous pre-model lifecycle hook."""
         return self._collect_notification_update(state, runtime)
 
     # ── Tool Call Interception: Non-Blocking `execute` Race ─────────────────
@@ -775,6 +794,7 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
+        """Intercept and wrap asynchronous tool execution."""
         tool_call = getattr(request, "tool_call", None)
         if isinstance(tool_call, dict) and tool_call.get("name") == "execute":
             return await self._aexecute_with_background_race(request)
@@ -786,6 +806,7 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
+        """Intercept and wrap synchronous tool execution."""
         tool_call = getattr(request, "tool_call", None)
         if isinstance(tool_call, dict) and tool_call.get("name") == "execute":
             try:

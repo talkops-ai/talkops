@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive reasoning effort selector modal for `/effort`."""
 
 from __future__ import annotations
@@ -43,7 +57,7 @@ class EffortSelectorScreen(OpsModalScreen[str | None]):
     EffortSelectorScreen OptionList {
         height: auto;
         max-height: 14;
-        background: $background;
+        background: transparent;
         border: solid $primary 20%;
     }
 
@@ -66,6 +80,7 @@ class EffortSelectorScreen(OpsModalScreen[str | None]):
         current_effort: str | None = None,
         default_effort: str | None = None,
     ) -> None:
+        """Initialize EffortSelectorScreen."""
         super().__init__()
         self._model_spec = model_spec
         self._efforts = efforts or ("low", "medium", "high")
@@ -108,6 +123,7 @@ class EffortSelectorScreen(OpsModalScreen[str | None]):
         return options
 
     def compose_modal(self):
+        """Execute compose modal on EffortSelectorScreen."""
         highlighted_effort = self._current_effort or self._default_effort
         try:
             highlighted = self._efforts.index(highlighted_effort)
@@ -123,6 +139,7 @@ class EffortSelectorScreen(OpsModalScreen[str | None]):
         yield Static(help_text, classes="effort-selector-help")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         glyphs = get_glyphs()
         self.set_modal_title("Reasoning Effort", counter=self._model_spec)
@@ -138,6 +155,7 @@ class EffortSelectorScreen(OpsModalScreen[str | None]):
         self.call_after_refresh(self._reformat_options)
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         width = self._option_content_width("#effort-options", fallback=50)
         if width != self._last_row_width:
             self._last_row_width = width
@@ -181,6 +199,7 @@ class EffortSelectorScreen(OpsModalScreen[str | None]):
             return None
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Handle option list option selected events."""
         if getattr(self, "_dismissed", False):
             return
         effort = event.option.id
@@ -188,17 +207,20 @@ class EffortSelectorScreen(OpsModalScreen[str | None]):
             self.dismiss(effort)
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         if getattr(self, "_dismissed", False):
             return
         self.dismiss(None)
 
     def action_cursor_down(self) -> None:
+        """Execute the cursor down action."""
         try:
             self.query_one("#effort-options", OptionList).action_cursor_down()
         except NoMatches:
             pass
 
     def action_cursor_up(self) -> None:
+        """Execute the cursor up action."""
         try:
             self.query_one("#effort-options", OptionList).action_cursor_up()
         except NoMatches:

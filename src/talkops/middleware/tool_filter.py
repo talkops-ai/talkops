@@ -1,9 +1,23 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tool filtering proxy middleware for restricting subagent tool access."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
 import fnmatch
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest
@@ -265,7 +279,7 @@ def _entry_matches_tool(
 ) -> bool:
     """Return True if a single filter entry matches any tool candidate.
 
-    Aligned directly with dcode's _entry_matches_tool candidate matching:
+    Evaluates candidate tool patterns against allow/deny filter entries:
     checks candidates via case-insensitive fnmatchcase when glob metachars are present,
     or case-insensitive equality otherwise. Also checks structured MCP qualifiers.
     """
@@ -390,6 +404,7 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
         mcp_tools: Sequence[Any] | None = None,
         known_mcp_servers: Sequence[str] | set[str] | None = None,
     ) -> None:
+        """Initialize ToolFilterMiddleware."""
         super().__init__()
         self._subagent_name = subagent_name
         self._known_mcp_servers: set[str] = set(known_mcp_servers or ())
@@ -464,7 +479,7 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
         unprefixed_name: str | None = None,
         subagent_owner: str | None = None,
     ) -> list[str]:
-        """Generate dcode-aligned candidate names for a tool."""
+        """Generate normalized candidate names for a tool."""
         server_names: list[str] = []
         if server_name:
             server_names.append(server_name)
@@ -700,6 +715,7 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ) -> Any:
+        """Intercept and wrap synchronous tool execution."""
         err = self._validate_tool_call(request)
         if err is not None:
             return err
@@ -710,6 +726,7 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ) -> Any:
+        """Intercept and wrap asynchronous tool execution."""
         err = self._validate_tool_call(request)
         if err is not None:
             return err
@@ -723,11 +740,15 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
         """Prune unavailable tools from model request before sending to LLM."""
         if self._allowed_patterns and request.tools:
             filtered_tools = []
+            seen_names: set[str] = set()
             for t in request.tools:
                 raw_name = getattr(t, "name", None) if not isinstance(t, dict) else t.get("name")
                 name = str(raw_name) if raw_name is not None else ""
+                if not name or name in seen_names:
+                    continue
                 tool_obj = t if not isinstance(t, dict) else None
-                if name and self.is_tool_allowed(name, tool_obj=tool_obj):
+                if self.is_tool_allowed(name, tool_obj=tool_obj):
+                    seen_names.add(name)
                     filtered_tools.append(t)
 
             # Fail-loud diagnostic if all MCP tools are dropped
@@ -777,11 +798,15 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
         """Asynchronously prune unavailable tools from model request before sending to LLM."""
         if self._allowed_patterns and request.tools:
             filtered_tools = []
+            seen_names: set[str] = set()
             for t in request.tools:
                 raw_name = getattr(t, "name", None) if not isinstance(t, dict) else t.get("name")
                 name = str(raw_name) if raw_name is not None else ""
+                if not name or name in seen_names:
+                    continue
                 tool_obj = t if not isinstance(t, dict) else None
-                if name and self.is_tool_allowed(name, tool_obj=tool_obj):
+                if self.is_tool_allowed(name, tool_obj=tool_obj):
+                    seen_names.add(name)
                     filtered_tools.append(t)
 
             # Fail-loud diagnostic if all MCP tools are dropped

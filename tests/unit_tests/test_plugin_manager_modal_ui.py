@@ -1,9 +1,24 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for PluginManagerScreen modal UI, pill tabs, and border styling."""
 
 from __future__ import annotations
 
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
+
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Static
@@ -22,13 +37,16 @@ class DummyModalApp(App):
     """Test app to mount and interact with PluginManagerScreen."""
 
     def __init__(self, screen_instance: PluginManagerScreen) -> None:
+        """Initialize DummyModalApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
@@ -169,6 +187,7 @@ async def test_plugin_manager_details_mode_and_escape_back() -> None:
             from textual.widgets._option_list import Option
 
             class DummyOptionSelected:
+                """Test suite or helper class for dummy option selected."""
                 option = Option("AWS Core", id="detail:aws-core@talkops")
 
             await screen.on_option_list_option_selected(cast(Any, DummyOptionSelected()))
@@ -197,13 +216,17 @@ async def test_plugin_manager_close_reload_prompt_flow() -> None:
     dismiss_result = None
 
     class TrackingApp(App):
+        """Test suite or helper class for tracking app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield from ()
 
         async def on_mount(self) -> None:
+            """Initialize component state when mounted into the DOM."""
             nonlocal dismiss_result
 
             def on_close(res: Any) -> None:
+                """Provide on close test helper or fixture."""
                 nonlocal dismiss_result
                 dismiss_result = res
 
@@ -242,19 +265,24 @@ async def test_plugin_manager_check_reload_required_detects_changes() -> None:
     dismiss_result = None
 
     async def mock_check() -> bool:
+        """Provide mock check test helper or fixture."""
         return True
 
     screen = PluginManagerScreen(check_reload_required=mock_check)
     mock_state = _mock_state()
 
     class TrackingApp(App):
+        """Test suite or helper class for tracking app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield from ()
 
         async def on_mount(self) -> None:
+            """Initialize component state when mounted into the DOM."""
             nonlocal dismiss_result
 
             def on_close(res: Any) -> None:
+                """Provide on close test helper or fixture."""
                 nonlocal dismiss_result
                 dismiss_result = res
 
@@ -285,9 +313,11 @@ async def test_refresh_all_marketplaces_shows_intermediate_status_and_completes(
     mock_state = _mock_state()
 
     def fake_refresh(**kw: Any) -> dict[str, Any]:
+        """Provide fake refresh test helper or fixture."""
         return {}
 
     class DummyEvent:
+        """Test suite or helper class for dummy event."""
         option = Option("Refresh", id="refresh-all-marketplaces")
 
     with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state), \
@@ -323,6 +353,7 @@ async def test_refresh_single_marketplace_shows_intermediate_status_and_complete
     mock_mp.plugins = []
 
     class DummyEvent:
+        """Test suite or helper class for dummy event."""
         option = Option("Refresh", id="action:refresh-marketplace")
 
     with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state), \

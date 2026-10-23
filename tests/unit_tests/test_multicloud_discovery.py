@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for multi-cloud discovery, ambient cloud service role detection, and AWS ambient session safety."""
 
 from __future__ import annotations
@@ -36,6 +50,7 @@ def _clean_discovery_caches(monkeypatch):
 
 
 def test_detect_aws_eks_irsa():
+    """Verify detect aws eks irsa."""
     env = {
         "AWS_WEB_IDENTITY_TOKEN_FILE": "/var/run/secrets/eks.amazonaws.com/serviceaccount/token",
         "AWS_ROLE_ARN": "arn:aws:iam::123456789012:role/talkops-eks-agent-role",
@@ -54,6 +69,7 @@ def test_detect_aws_eks_irsa():
 
 
 def test_detect_aws_ecs_task_role_and_pod_identity():
+    """Verify detect aws ecs task role and pod identity."""
     ecs_env = {
         "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/uuid-1234",
         "AWS_DEFAULT_REGION": "us-west-2",
@@ -75,13 +91,16 @@ def test_detect_aws_ecs_task_role_and_pod_identity():
 
 
 def test_detect_aws_ec2_imdsv2_probe(monkeypatch):
+    """Verify detect aws ec2 imdsv2 probe."""
     monkeypatch.setattr("talkops.config.cloud_discovery._read_dmi_hint", lambda: "amazon ec2")
 
     def fake_put(url: str, headers=None, timeout=0.15):
+        """Provide fake put test helper or fixture."""
         assert "latest/api/token" in url
         return "imdsv2-token-xyz"
 
     def fake_get(url: str, headers=None, timeout=0.15):
+        """Provide fake get test helper or fixture."""
         assert headers and headers.get("X-aws-ec2-metadata-token") == "imdsv2-token-xyz"
         if url.endswith("/security-credentials/"):
             return "talkops-ec2-prod-role\n"
@@ -102,6 +121,7 @@ def test_detect_aws_ec2_imdsv2_probe(monkeypatch):
 
 
 def test_detect_azure_aks_workload_identity_and_msi():
+    """Verify detect azure aks workload identity and msi."""
     aks_env = {
         "AZURE_FEDERATED_TOKEN_FILE": "/var/run/secrets/azure/tokens/azure-identity-token",
         "AZURE_CLIENT_ID": "11112222-3333-4444-5555-666677778888",
@@ -127,6 +147,7 @@ def test_detect_azure_aks_workload_identity_and_msi():
 
 
 def test_detect_gcp_cloud_run_and_metadata_server(monkeypatch):
+    """Verify detect gcp cloud run and metadata server."""
     cr_env = {
         "K_SERVICE": "talkops-worker",
         "GOOGLE_CLOUD_PROJECT": "talkops-gcp-prod",
@@ -144,6 +165,7 @@ def test_detect_gcp_cloud_run_and_metadata_server(monkeypatch):
     monkeypatch.setattr("talkops.config.cloud_discovery._read_dmi_hint", lambda: "google compute engine")
 
     def fake_gcp_get(url: str, headers=None, timeout=0.15):
+        """Provide fake gcp get test helper or fixture."""
         assert headers and headers.get("Metadata-Flavor") == "Google"
         if url.endswith("/project/project-id"):
             return "gke-prod-project-123"
@@ -162,6 +184,7 @@ def test_detect_gcp_cloud_run_and_metadata_server(monkeypatch):
 
 
 def test_detect_k8s_in_cluster_service_account(tmp_path: Path):
+    """Verify detect k8s in cluster service account."""
     sa_dir = tmp_path / "serviceaccount"
     sa_dir.mkdir(parents=True)
     (sa_dir / "token").write_text("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...", encoding="utf-8")
@@ -182,7 +205,7 @@ def test_detect_k8s_in_cluster_service_account(tmp_path: Path):
 
 
 def test_discover_azure_with_utf8_bom(tmp_path: Path):
-    """Verify ~/.azure/azureProfile.json with UTF-8 BOM (\\ufeff) is parsed cleanly."""
+    r"""Verify ~/.azure/azureProfile.json with UTF-8 BOM (\\ufeff) is parsed cleanly."""
     az_profile = tmp_path / "azureProfile.json"
     az_config = tmp_path / "config"
 
@@ -229,6 +252,7 @@ def test_discover_azure_with_utf8_bom(tmp_path: Path):
 
 
 def test_discover_gcp_configurations(tmp_path: Path):
+    """Verify discover gcp configurations."""
     gcloud_dir = tmp_path / "gcloud"
     configs_dir = gcloud_dir / "configurations"
     configs_dir.mkdir(parents=True)
@@ -267,6 +291,7 @@ def test_discover_gcp_configurations(tmp_path: Path):
 
 
 def test_discover_k8s_kubeconfig(tmp_path: Path):
+    """Verify discover k8s kubeconfig."""
     kc = tmp_path / "config"
     kc.write_text(
         "apiVersion: v1\n"

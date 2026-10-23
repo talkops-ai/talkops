@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Rubric middleware with transport retry, event streaming, and isolated grading.
 
 ``ReliableRubricMiddleware`` extends the SDK's ``RubricMiddleware`` with:
@@ -15,6 +29,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -27,16 +42,17 @@ from typing import (
     NotRequired,
     cast,
 )
-import warnings
 
+import deepagents.middleware.rubric as _rubric_mod
 import httpx
 from deepagents.middleware.rubric import (
     RUBRIC_GRADER_MESSAGE_SOURCE,
     GraderResponse,
-    RubricMiddleware as BaseRubricMiddleware,
     RubricState,
 )
-import deepagents.middleware.rubric as _rubric_mod
+from deepagents.middleware.rubric import (
+    RubricMiddleware as BaseRubricMiddleware,
+)
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     AgentState,
@@ -218,6 +234,7 @@ with warnings.catch_warnings():
             inherit_main_model: bool = False,
             runtime_bootstrap_model: str | BaseChatModel | None = None,
         ) -> None:
+            """Initialize ReliableRubricMiddleware."""
             kwargs: dict[str, Any] = {
                 "model": model or "anthropic:claude-3-5-haiku-20241022",
                 "max_iterations": max_iterations,
@@ -394,7 +411,10 @@ with warnings.catch_warnings():
             self, state: ReliableRubricState, context: object | None
         ) -> Any:
             """Select the effective grader model without mutating shared middleware."""
-            from talkops.middleware.resume_state import INHERIT_RUBRIC_MODEL, coerce_model_spec
+            from talkops.middleware.resume_state import (
+                INHERIT_RUBRIC_MODEL,
+                coerce_model_spec,
+            )
 
             grader_context = self._context(context)
             selected = coerce_model_spec(state.get("_rubric_model_spec"))
@@ -444,7 +464,10 @@ with warnings.catch_warnings():
                         failing_text = "\n".join(f"- {item}" for item in failing)
                         try:
                             from deepagents._models import resolve_model
-                            from langchain_core.messages import HumanMessage, SystemMessage
+                            from langchain_core.messages import (
+                                HumanMessage,
+                                SystemMessage,
+                            )
 
                             model_spec = getattr(grader_context, "model", None) or getattr(self, "_grader_model_spec", None) or "anthropic:claude-3-5-haiku-20241022"
                             chat_model = resolve_model(model_spec) if isinstance(model_spec, str) else model_spec
@@ -530,7 +553,10 @@ with warnings.catch_warnings():
                         failing_text = "\n".join(f"- {item}" for item in failing)
                         try:
                             from deepagents._models import resolve_model
-                            from langchain_core.messages import HumanMessage, SystemMessage
+                            from langchain_core.messages import (
+                                HumanMessage,
+                                SystemMessage,
+                            )
 
                             model_spec = getattr(grader_context, "model", None) or getattr(self, "_grader_model_spec", None) or "anthropic:claude-3-5-haiku-20241022"
                             chat_model = resolve_model(model_spec) if isinstance(model_spec, str) else model_spec
@@ -663,6 +689,7 @@ with warnings.catch_warnings():
             state: RubricState,
             runtime: Runtime[Any],
         ) -> dict[str, Any] | None:
+            """Execute synchronous post-agent lifecycle hook."""
             prep = self._prepare_evaluation(state, runtime)
             if prep is None:
                 return None
@@ -710,6 +737,7 @@ with warnings.catch_warnings():
             state: RubricState,
             runtime: Runtime[Any],
         ) -> dict[str, Any] | None:
+            """Execute asynchronous post-agent lifecycle hook."""
             prep = self._prepare_evaluation(state, runtime)
             if prep is None:
                 return None

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Harbor adapter, 4-part controlled ablation runner, and `talkops benchmark` CLI (Phase 4)."""
 
 from __future__ import annotations
@@ -29,7 +43,9 @@ if TYPE_CHECKING:
 
 
 class TestHarborAdapterAndPassAt1Contract:
+    """Test suite or helper class for test harbor adapter and pass at1 contract."""
     def test_harbor_version_and_cli_command_construction(self, tmp_path: Path) -> None:
+        """Verify harbor version and cli command construction."""
         assert HARBOR_VERSION_PIN == "0.1.28"
         assert DEFAULT_MAX_TURNS == 200
 
@@ -60,6 +76,7 @@ class TestHarborAdapterAndPassAt1Contract:
 
     def test_infrastructure_failure_detector_distinguishes_harness_vs_agent_errors(self) -> None:
         # Pre-Turn-0 Docker daemon failure -> True
+        """Verify infrastructure failure detector distinguishes harness vs agent errors."""
         is_infra, reason = is_infrastructure_harness_failure(
             1,
             stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
@@ -77,9 +94,11 @@ class TestHarborAdapterAndPassAt1Contract:
         assert is_infra_agent is False
 
     def test_run_task_retries_infra_crash_once_but_never_semantic_failure(self, tmp_path: Path) -> None:
+        """Verify run task retries infra crash once but never semantic failure."""
         calls: list[int] = []
 
         def fake_runner(cmd: Sequence[str], timeout: int) -> subprocess.CompletedProcess[str]:
+            """Provide fake runner test helper or fixture."""
             calls.append(len(calls) + 1)
             if len(calls) == 1:
                 return subprocess.CompletedProcess(
@@ -117,6 +136,7 @@ class TestHarborAdapterAndPassAt1Contract:
 
 
 class TestFourPartControlledAblationRunner:
+    """Test suite or helper class for test four part controlled ablation runner."""
     @pytest.mark.parametrize(
         ("ablation", "expected_len"),
         [
@@ -128,16 +148,19 @@ class TestFourPartControlledAblationRunner:
         ],
     )
     def test_build_ablation_matrix_shapes(self, ablation: str, expected_len: int) -> None:
+        """Verify build ablation matrix shapes."""
         matrix = build_ablation_matrix(ablation)
         assert len(matrix) == expected_len
 
     def test_run_ablation_suite_end_to_end_and_markdown_report(self, tmp_path: Path) -> None:
+        """Verify run ablation suite end to end and markdown report."""
         tasks = [
             HarborTaskSpec(task_id=f"task-{i}", prompt=f"Incident {i}", suite="sregym")
             for i in range(6)
         ]
 
         def fake_runner(cmd: Sequence[str], timeout: int) -> subprocess.CompletedProcess[str]:
+            """Provide fake runner test helper or fixture."""
             is_flat = "--no-subagents" in cmd
             payload = {
                 "data": {
@@ -187,7 +210,9 @@ class TestFourPartControlledAblationRunner:
 
 
 class TestBenchmarkCLISubcommands:
+    """Test suite or helper class for test benchmark cli subcommands."""
     def test_cli_benchmark_run_dry_run_json(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """Verify cli benchmark run dry run json."""
         rc = main(
             [
                 "benchmark",
@@ -209,6 +234,7 @@ class TestBenchmarkCLISubcommands:
         assert len(out["data"]["configs"]) == 3
 
     def test_cli_benchmark_score_and_report(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """Verify cli benchmark score and report."""
         sample_file = tmp_path / "sregym_case.json"
         sample_file.write_text(
             json.dumps(
@@ -280,6 +306,7 @@ class TestBenchmarkCLISubcommands:
         _ = capsys.readouterr()
 
     def test_evaluate_trajectory_files_direct(self, tmp_path: Path) -> None:
+        """Verify evaluate trajectory files direct."""
         openrca_file = tmp_path / "openrca.json"
         openrca_file.write_text(
             json.dumps(

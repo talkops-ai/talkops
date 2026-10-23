@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Runtime compatibility patches for Textual internals.
 
 Applies targeted enhancements and bug fixes for Textual terminal widgets:
@@ -8,7 +22,6 @@ Applies targeted enhancements and bug fixes for Textual terminal widgets:
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 import re
 from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, cast
@@ -18,6 +31,8 @@ from textual import __version__ as _textual_version
 from textual.content import Content
 from textual.geometry import Offset
 from textual.selection import Selection
+
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -32,7 +47,7 @@ logger = get_logger(__name__)
 _ESC_PREFIX_LEN = 2
 _DOUBLE_CLICK_CHAIN = 2
 _TRIPLE_CLICK_CHAIN = 3
-_OPSCODE_WORD_SELECT_ACTIVE = "_talkops_word_select_active"
+_TALKOPS_WORD_SELECT_ACTIVE = "_talkops_word_select_active"
 
 
 # ── 1. Keyboard Parser Patch ──────────────────────────────────
@@ -69,6 +84,7 @@ def _install_keyboard_parser_patch() -> None:
     real_modifier_mask = 0b111111
 
     def is_spurious_caps_lock(sequence: str) -> bool:
+        """Return whether spurious caps lock."""
         match = kitty_csi_u.fullmatch(sequence)
         if match is None:
             return False
@@ -80,24 +96,28 @@ def _install_keyboard_parser_patch() -> None:
         return modifier_bits & real_modifier_mask == 0 and not has_text
 
     def clean_kitty_subfields(sequence: str) -> str:
+        """Execute clean kitty subfields."""
         body, terminator = sequence[2:-1], sequence[-1]
         fields = body.split(";")
         fields[:2] = [field.split(":", 1)[0] for field in fields[:2]]
         return f"\x1b[{';'.join(fields)}{terminator}"
 
     def parse_lock_key_event(sequence: str) -> events.Key | None:
+        """Parse lock key event."""
         match = kitty_key_sequence.fullmatch(sequence)
         if match is None or match.group(1) not in kitty_lock_codes:
             return None
         return events.Key(kitty_lock_names[match.group(1)], None)
 
     def emit_alt_keys(keys: tuple, character: str | None) -> Iterable[events.Key]:
+        """Emit alt keys."""
         for key in keys:
             yield events.Key(f"alt+{key.value}", character)
 
     def sequence_to_key_events_patched(
         parser_self: XTermParser, sequence: str, alt: bool = False
     ) -> Iterable[events.Key]:
+        """Execute sequence to key events patched."""
         if (lock_event := parse_lock_key_event(sequence)) is not None:
             yield lock_event
             return
@@ -229,6 +249,7 @@ def _install_word_selection_patch() -> None:
         return
 
     def is_word_select_initiator(screen: Screen, event: Event) -> bool:
+        """Return whether word select initiator."""
         if not isinstance(event, _events.MouseDown) or screen.app.mouse_captured:
             return False
 
@@ -250,24 +271,26 @@ def _install_word_selection_patch() -> None:
         )
 
     def forward_event_patched(self: Screen, event: Event) -> None:
+        """Execute forward event patched."""
         if isinstance(event, _events.MouseDown):
             setattr(
                 self,
-                _OPSCODE_WORD_SELECT_ACTIVE,
+                _TALKOPS_WORD_SELECT_ACTIVE,
                 is_word_select_initiator(self, event),
             )
         try:
             original_forward_event(self, event)
         finally:
             if isinstance(event, _events.MouseUp):
-                setattr(self, _OPSCODE_WORD_SELECT_ACTIVE, False)
+                setattr(self, _TALKOPS_WORD_SELECT_ACTIVE, False)
 
     def watch_select_state_patched(
         self: Screen,
         select_state: SelectState | None,
     ) -> None:
+        """React to changes in the select state patched reactive attribute."""
         original_watch_select_state(self, select_state)
-        if not getattr(self, _OPSCODE_WORD_SELECT_ACTIVE, False):
+        if not getattr(self, _TALKOPS_WORD_SELECT_ACTIVE, False):
             return
 
         selections = dict(self.selections)
@@ -283,6 +306,7 @@ def _install_word_selection_patch() -> None:
             self.selections = selections
 
     async def widget_on_click_patched(self: Widget, event: Click) -> None:
+        """Execute widget on click patched."""
         if (
             event.widget is self
             and self.allow_select
@@ -335,6 +359,7 @@ def _install_detached_hit_patch() -> None:
         x: int,
         y: int,
     ) -> tuple[Widget | None, Offset | None]:
+        """Retrieve widget and offset at safe."""
         widget, offset = original_get_widget_and_offset_at(self, x, y)
         if (
             widget is not None
@@ -356,8 +381,8 @@ def _install_detached_hit_patch() -> None:
 
 # ── 4. Scroll Hover Recalculation Coalescing Patch ────────────
 
-_OPSCODE_SCROLL_SUPPRESS_HOVER_UNTIL = "_talkops_scroll_suppress_hover_until"
-_OPSCODE_HOVER_CHECK_PENDING = "_talkops_hover_check_pending"
+_TALKOPS_SCROLL_SUPPRESS_HOVER_UNTIL = "_talkops_scroll_suppress_hover_until"
+_TALKOPS_HOVER_CHECK_PENDING = "_talkops_hover_check_pending"
 
 
 def _install_scroll_hover_patch() -> None:
@@ -372,6 +397,7 @@ def _install_scroll_hover_patch() -> None:
     """
     try:
         import time
+
         from textual.app import App as _App
         from textual.errors import NoWidget
 
@@ -384,18 +410,20 @@ def _install_scroll_hover_patch() -> None:
         return
 
     def update_mouse_over_patched(self: Any, screen: Screen) -> None:
+        """Update mouse over patched."""
         if self.mouse_over is None or not screen.is_active:
             return
-        suppress_until = getattr(self, _OPSCODE_SCROLL_SUPPRESS_HOVER_UNTIL, 0.0)
+        suppress_until = getattr(self, _TALKOPS_SCROLL_SUPPRESS_HOVER_UNTIL, 0.0)
         if suppress_until and time.monotonic() < suppress_until:
             return
-        if getattr(screen, _OPSCODE_HOVER_CHECK_PENDING, False):
+        if getattr(screen, _TALKOPS_HOVER_CHECK_PENDING, False):
             return
-        setattr(screen, _OPSCODE_HOVER_CHECK_PENDING, True)
+        setattr(screen, _TALKOPS_HOVER_CHECK_PENDING, True)
 
         async def check_mouse() -> None:
-            setattr(screen, _OPSCODE_HOVER_CHECK_PENDING, False)
-            suppress = getattr(self, _OPSCODE_SCROLL_SUPPRESS_HOVER_UNTIL, 0.0)
+            """Check mouse."""
+            setattr(screen, _TALKOPS_HOVER_CHECK_PENDING, False)
+            suppress = getattr(self, _TALKOPS_SCROLL_SUPPRESS_HOVER_UNTIL, 0.0)
             if suppress and time.monotonic() < suppress:
                 return
             try:
@@ -441,6 +469,7 @@ def _install_scrollbar_lifecycle_patch() -> None:
     """
     try:
         import contextlib
+
         from textual.app import App as _App
         from textual.widget import Widget as _Widget
 
@@ -455,6 +484,7 @@ def _install_scrollbar_lifecycle_patch() -> None:
         return
 
     def start_widget_patched(self: Any, parent: Widget, widget: Widget) -> None:
+        """Start widget patched."""
         if (
             not getattr(parent, "_running", False)
             or getattr(parent, "_closing", False)
@@ -468,12 +498,14 @@ def _install_scrollbar_lifecycle_patch() -> None:
         original_start_widget(self, parent, widget)
 
     def widget_on_show_patched(self: Widget, event: Any) -> None:
+        """Execute widget on show patched."""
         if self._horizontal_scrollbar is not None:
             self._horizontal_scrollbar.post_message(event)
         if self._vertical_scrollbar is not None:
             self._vertical_scrollbar.post_message(event)
 
     def widget_on_hide_patched(self: Widget, event: Any) -> None:
+        """Execute widget on hide patched."""
         if self._horizontal_scrollbar is not None:
             self._horizontal_scrollbar.post_message(event)
         if self._vertical_scrollbar is not None:
@@ -482,6 +514,7 @@ def _install_scrollbar_lifecycle_patch() -> None:
             self.blur()
 
     async def message_loop_exit_patched(self: Widget) -> None:
+        """Execute message loop exit patched."""
         try:
             await original_message_loop_exit(self)
         finally:
@@ -547,6 +580,7 @@ def _install_tooltip_markup_safety_patch() -> None:
     def from_markup_safe(
         cls: type[Content], markup: str | Content, **variables: object
     ) -> Content:
+        """Construct instance from markup safe."""
         try:
             return original_from_markup(markup, **variables)
         except MarkupError:
@@ -555,12 +589,14 @@ def _install_tooltip_markup_safety_patch() -> None:
     def tooltip_update_safe(
         self: Any, content: Any = "", *, layout: bool = True
     ) -> None:
+        """Execute tooltip update safe."""
         try:
             original_tooltip_update(self, content, layout=layout)
         except MarkupError:
             original_tooltip_update(self, Content(str(content)), layout=layout)
 
     def table_content_compose_safe(self: Any) -> Iterable[Any]:
+        """Execute table content compose safe."""
         for header in self.headers:
             yield MarkdownTableCellContents(header, classes="header").with_tooltip(
                 header

@@ -1,10 +1,24 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit and integration tests for non-blocking background command execution."""
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,8 +32,8 @@ from pydantic import BaseModel
 from talkops.commands._base import CommandContext
 from talkops.commands.power.tasks import TasksHandler
 from talkops.middleware.background_commands import (
-    AsyncExecuteSchema,
     BACKGROUND_TASK_NOTIFICATION_SOURCE,
+    AsyncExecuteSchema,
     BackgroundCommandMiddleware,
 )
 from talkops.server.webhooks_app import create_webhooks_app
@@ -275,10 +289,12 @@ def test_prepare_model_request_extends_execute_schema_and_system_prompt(
 
     class _FakeModelRequest:
         def __init__(self) -> None:
+            """Initialize _FakeModelRequest."""
             self.tools = [dummy_execute]
             self.system_message = SystemMessage(content="Base system prompt.")
 
         def override(self, **kwargs: Any) -> _FakeModelRequest:
+            """Provide override test helper or fixture."""
             captured.update(kwargs)
             return self
 

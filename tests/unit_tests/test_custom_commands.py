@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for zero-code custom commands and LangChain middleware."""
 
 from __future__ import annotations
@@ -6,8 +20,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-from langchain_core.messages import SystemMessage
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from talkops.commands._base import CommandContext
 from talkops.commands._router import CommandRouter
@@ -47,11 +61,11 @@ from talkops.prompts.custom_commands import (
 )
 from talkops.ui.command_registry import build_custom_commands
 
-
 # ── 1. Frontmatter, Brace Expansion & Fallback Description ───────────────
 
 
 def test_expand_braces() -> None:
+    """Verify expand braces."""
     expanded = expand_braces("Bash(git {status,diff,log}:*)")
     assert expanded == [
         "Bash(git status:*)",
@@ -61,6 +75,7 @@ def test_expand_braces() -> None:
 
 
 def test_parse_custom_command_frontmatter_full_schema(tmp_path: Path) -> None:
+    """Verify parse custom command frontmatter full schema."""
     raw = """---
 name: deploy-service
 description: Deploy a microservice safely: with dry-run
@@ -118,6 +133,7 @@ Deploy $service to $env environment.
 
 
 def test_frontmatter_markdown_heading_fallback() -> None:
+    """Verify frontmatter markdown heading fallback."""
     raw = """# Automated PR Security Audit
 
 Check the diff for secrets and IAM wildcards.
@@ -133,6 +149,7 @@ Check the diff for secrets and IAM wildcards.
 
 
 def test_sanitize_command_arguments_prevents_shell_injection() -> None:
+    """Verify sanitize command arguments prevents shell injection."""
     malicious = "foo !`rm -rf /` `!whoami` !ls"
     sanitized = sanitize_command_arguments(malicious)
     assert "!`" not in sanitized
@@ -142,6 +159,7 @@ def test_sanitize_command_arguments_prevents_shell_injection() -> None:
 
 def test_substitute_arguments_named_positional_and_auto_append() -> None:
     # Named and indexed positional replacement with escaped \$
+    """Verify substitute arguments named positional and auto append."""
     template = r"Service=$service ($0 / $ARGUMENTS[1]), cost=\$100, all=$ARGUMENTS"
     res = substitute_arguments(
         template,
@@ -157,6 +175,7 @@ def test_substitute_arguments_named_positional_and_auto_append() -> None:
 
 
 def test_execute_inline_shell_commands_skips_regular_code_blocks(tmp_path: Path) -> None:
+    """Verify execute inline shell commands skips regular code blocks."""
     template = """Current branch: !`printf "main-branch"`
 
 ```!
@@ -177,6 +196,7 @@ And inline code ``!`printf "nope"` `` is untouched.
 
 
 def test_full_expand_custom_command_prompt(tmp_path: Path) -> None:
+    """Verify full expand custom command prompt."""
     cmd_dir = tmp_path / ".talkops" / "commands"
     cmd_dir.mkdir(parents=True)
     cmd_file = cmd_dir / "check.md"
@@ -219,6 +239,7 @@ See @src/talkops/agent/factory.py for details.
 
 
 def test_subdirectory_colon_namespacing_and_skill_md_priority(tmp_path: Path) -> None:
+    """Verify subdirectory colon namespacing and skill md priority."""
     clear_custom_command_cache(reset_conditional=True)
     cmd_root = tmp_path / ".claude" / "commands"
     (cmd_root / "frontend").mkdir(parents=True)
@@ -247,6 +268,7 @@ def test_subdirectory_colon_namespacing_and_skill_md_priority(tmp_path: Path) ->
 
 
 def test_conditional_paths_activation_and_watcher(tmp_path: Path) -> None:
+    """Verify conditional paths activation and watcher."""
     clear_custom_command_cache(reset_conditional=True)
     cmd_root = tmp_path / ".talkops" / "commands"
     cmd_root.mkdir(parents=True)
@@ -300,6 +322,7 @@ def test_conditional_paths_activation_and_watcher(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_router_space_to_colon_and_stacked_commands(tmp_path: Path) -> None:
+    """Verify router space to colon and stacked commands."""
     clear_custom_command_cache(reset_conditional=True)
     cmd_root = tmp_path / ".talkops" / "commands"
     (cmd_root / "frontend").mkdir(parents=True)
@@ -351,6 +374,7 @@ async def test_router_space_to_colon_and_stacked_commands(tmp_path: Path) -> Non
 
 
 def test_middleware_permissions_model_override_and_turn_reset(tmp_path: Path) -> None:
+    """Verify middleware permissions model override and turn reset."""
     clear_custom_command_cache(reset_conditional=True)
     cmd_root = tmp_path / ".talkops" / "commands"
     cmd_root.mkdir(parents=True)
@@ -453,6 +477,7 @@ def test_middleware_permissions_model_override_and_turn_reset(tmp_path: Path) ->
 
 
 def test_skill_tool_and_usage_priority_budgeting(tmp_path: Path) -> None:
+    """Verify skill tool and usage priority budgeting."""
     clear_custom_command_cache(reset_conditional=True)
     cmd_root = tmp_path / ".talkops" / "commands"
     cmd_root.mkdir(parents=True)
@@ -486,9 +511,11 @@ def test_skill_tool_and_usage_priority_budgeting(tmp_path: Path) -> None:
 
 
 def test_forked_command_isolates_messages_and_expands_anthropic_cache_control(tmp_path: Path) -> None:
+    """Verify forked command isolates messages and expands anthropic cache control."""
     from langchain_anthropic import ChatAnthropic
-    from langchain_anthropic.middleware.prompt_caching import AnthropicPromptCachingMiddleware
-    from langchain_core.messages import AIMessage, HumanMessage
+    from langchain_anthropic.middleware.prompt_caching import (
+        AnthropicPromptCachingMiddleware,
+    )
 
     from talkops.model.factory import _ensure_anthropic_block_level_cache_control
 

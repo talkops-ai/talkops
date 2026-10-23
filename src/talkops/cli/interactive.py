@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive TUI runner for TalkOps."""
 
 from __future__ import annotations
@@ -5,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 from talkops.approval_mode import ApprovalMode
@@ -52,7 +67,10 @@ def run_interactive(
             logger.warning("Startup command failed: %s", e)
 
     # 2. AWS Profile & Region sync
-    from talkops.config.cloud_profiles import get_active_aws_profile, get_active_aws_region
+    from talkops.config.cloud_profiles import (
+        get_active_aws_profile,
+        get_active_aws_region,
+    )
 
     if not aws_profile:
         aws_profile = get_active_aws_profile()
@@ -67,7 +85,6 @@ def run_interactive(
     if aws_profile or aws_region:
         sync_aws_env_aliases()
 
-    from pathlib import Path
     from talkops.project_utils import ProjectContext
 
     project_context = (

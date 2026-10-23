@@ -1,7 +1,21 @@
-"""Ordered skill sources resolver conforming to LangChain dcode architecture.
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Ordered skill sources resolver for the TalkOps framework.
 
 This module provides the canonical source-of-truth skill discovery function,
-mirroring `deepagents_code.agent.get_skill_sources` from official LangChain dcode.
+standardizing skill source precedence across the TalkOps runtime.
 It standardizes skill source resolution across coordinator agents, dynamic subagents,
 SkillRegistry, and CLI tools without ad-hoc path slicing or scattered configuration.
 """
@@ -22,6 +36,7 @@ from talkops.plugins.adapters.skills import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
     from talkops.project_utils import ProjectContext
     from talkops.subagents.types import SubagentMetadata
 
@@ -39,7 +54,7 @@ def get_skill_sources(
 ) -> list[CodeSkillSource]:
     """Return ordered skill sources for PluginSkillsMiddleware and audit tooling.
 
-    Follows the official dcode architecture and precedence order (lowest to highest):
+    Follows the TalkOps skill precedence order (lowest to highest):
     0. Built-in skills (<package>/built_in_skills/)
     1. Plugin skills:
        - When ``include_subagent_skills`` is False (default for coordinator agent):

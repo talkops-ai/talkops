@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Scrollable message transcript viewport (`MessageList`) and wheel-scroll acceleration.
 
 Extracted from `talkops.ui.widgets.messages` (Phase 5 UI modularization).
@@ -7,6 +21,7 @@ from __future__ import annotations
 
 import math
 import time
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual import events
@@ -25,8 +40,8 @@ from talkops.ui.widgets.status_messages import (
     SystemMessage,
 )
 from talkops.ui.widgets.tool_call_message import (
-    ToolCallMessage,
     _TOOL_GROUP_EXCLUSIONS,
+    ToolCallMessage,
 )
 from talkops.ui.widgets.tool_group import ToolGroupSummary
 from talkops.utils.logger import get_logger
@@ -73,6 +88,7 @@ class MessageList(VerticalScroll):
     """Distance from max_scroll_y within which downward scroll re-locks auto-scroll."""
 
     def __init__(self, **kwargs: Any) -> None:
+        """Initialize MessageList."""
         super().__init__(**kwargs)
         self._current_assistant: AssistantMessage | None = None
         self._current_thinking: ThinkingMessage | None = None
@@ -447,6 +463,7 @@ class MessageList(VerticalScroll):
         folded_runs_count = 0
 
         async def flush() -> None:
+            """Execute flush."""
             nonlocal run_tools, run_collapsible, run_anchor, folded_runs_count
             if (
                 run_tools
@@ -469,7 +486,6 @@ class MessageList(VerticalScroll):
             run_collapsible = []
             run_anchor = None
 
-        from contextlib import nullcontext
 
         batch_ctx = (
             self.app.batch_update()
@@ -568,7 +584,6 @@ class MessageList(VerticalScroll):
         if live:
             msg.set_running()
         self._tool_calls[call_id] = msg
-        from contextlib import nullcontext
 
         batch_ctx = (
             self.app.batch_update()
@@ -612,7 +627,6 @@ class MessageList(VerticalScroll):
             self._tool_call_total += 1
             if call_id:
                 self._tool_calls[call_id] = msg
-            from contextlib import nullcontext
 
             batch_ctx = (
                 self.app.batch_update()
@@ -662,12 +676,18 @@ class MessageList(VerticalScroll):
         self._scroll_to_end()
 
     def clear(self) -> None:
-        """Clear all child widgets."""
+        """Clear all conversation message widgets while keeping the welcome banner."""
+        from talkops.ui.widgets.welcome import WelcomeBanner
+
         self._stop_scroll_timers()
         self._pending_scroll_delta = 0
         self._scroll_end_pending = False
         self._auto_scroll_locked = True
-        self.remove_children()
+        to_remove = [
+            child for child in self.children if not isinstance(child, WelcomeBanner)
+        ]
+        if to_remove:
+            self.remove_children(to_remove)
         self._current_assistant = None
         self._current_thinking = None
         self._tool_calls.clear()

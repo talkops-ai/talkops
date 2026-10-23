@@ -1,14 +1,28 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Utilities for project root detection and project-specific configuration."""
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from talkops.server import SERVER_ENV_PREFIX
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -24,6 +38,7 @@ class ProjectContext:
     project_root: Path | None = None
 
     def __post_init__(self) -> None:
+        """Validate and normalize fields after dataclass initialization."""
         if not self.user_cwd.is_absolute():
             msg = f"user_cwd must be absolute, got {self.user_cwd!r}"
             raise ValueError(msg)
@@ -33,6 +48,7 @@ class ProjectContext:
 
     @classmethod
     def from_user_cwd(cls, user_cwd: str | Path) -> ProjectContext:
+        """Construct instance from user cwd."""
         resolved_cwd = Path(user_cwd).expanduser().resolve()
         return cls(
             user_cwd=resolved_cwd,
@@ -40,32 +56,38 @@ class ProjectContext:
         )
 
     def resolve_user_path(self, path: str | Path) -> Path:
+        """Resolve user path."""
         candidate = Path(path).expanduser()
         if candidate.is_absolute():
             return candidate.resolve()
         return (self.user_cwd / candidate).resolve()
 
     def project_agent_md_paths(self) -> list[Path]:
+        """Execute project agent md paths on ProjectContext."""
         if self.project_root is None:
             return []
         return find_project_agent_md(self.project_root)
 
     def project_skills_dir(self) -> Path | None:
+        """Execute project skills dir on ProjectContext."""
         if self.project_root is None:
             return None
         return self.project_root / ".talkops" / "skills"
 
     def project_agents_dir(self) -> Path | None:
+        """Execute project agents dir on ProjectContext."""
         if self.project_root is None:
             return None
         return self.project_root / ".talkops" / "agents"
 
     def project_agent_skills_dir(self) -> Path | None:
+        """Execute project agent skills dir on ProjectContext."""
         if self.project_root is None:
             return None
         return self.project_root / ".agents" / "skills"
 
     def project_claude_skills_dir(self) -> Path | None:
+        """Execute project claude skills dir on ProjectContext."""
         if self.project_root is None:
             return None
         return self.project_root / ".claude" / "skills"

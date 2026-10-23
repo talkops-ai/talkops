@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Auth management CLI command suite (`talkops auth`).
 
 Supports:
@@ -33,6 +47,7 @@ from talkops.config.aws import get_aws_context
 from talkops.model.config import (
     PROVIDER_API_KEY_ENV,
     PROVIDER_DISPLAY_NAMES,
+    canonicalize_provider,
     get_provider_auth_status,
 )
 from talkops.output import OutputFormat, write_json
@@ -58,6 +73,7 @@ def setup_auth_parser(
     add_output_args(auth_parser)
     auth_parser.add_argument(
         "--aws-profile",
+        "--profile",
         dest="aws_profile",
         type=str,
         default=argparse.SUPPRESS,
@@ -65,6 +81,7 @@ def setup_auth_parser(
     )
     auth_parser.add_argument(
         "--aws-region",
+        "--region",
         dest="aws_region",
         type=str,
         default=argparse.SUPPRESS,
@@ -79,8 +96,8 @@ def setup_auth_parser(
         help="Show Control Plane session lease, model providers, and AWS STS status.",
     )
     add_output_args(status_p)
-    status_p.add_argument("--aws-profile", dest="aws_profile", type=str, default=argparse.SUPPRESS)
-    status_p.add_argument("--aws-region", dest="aws_region", type=str, default=argparse.SUPPRESS)
+    status_p.add_argument("--aws-profile", "--profile", dest="aws_profile", type=str, default=argparse.SUPPRESS)
+    status_p.add_argument("--aws-region", "--region", dest="aws_region", type=str, default=argparse.SUPPRESS)
 
     # talkops auth login
     login_p = auth_sub.add_parser(
@@ -250,8 +267,8 @@ def setup_auth_parser(
         help="Show AWS STS caller identity authentication status.",
     )
     add_output_args(aws_p)
-    aws_p.add_argument("--aws-profile", dest="aws_profile", type=str, default=argparse.SUPPRESS)
-    aws_p.add_argument("--aws-region", dest="aws_region", type=str, default=argparse.SUPPRESS)
+    aws_p.add_argument("--aws-profile", "--profile", dest="aws_profile", type=str, default=argparse.SUPPRESS)
+    aws_p.add_argument("--aws-region", "--region", dest="aws_region", type=str, default=argparse.SUPPRESS)
 
     return auth_parser
 
@@ -345,7 +362,8 @@ def _build_providers_list() -> list[dict[str, Any]]:
     storage = get_credential_storage()
     stored_map = storage.list_provider_keys()
     rows: list[dict[str, Any]] = []
-    for provider in sorted(PROVIDER_API_KEY_ENV.keys()):
+    all_providers = sorted(set(PROVIDER_API_KEY_ENV.keys()) | {"ollama"})
+    for provider in all_providers:
         st = get_provider_auth_status(provider)
         stored_entry = stored_map.get(provider, {})
         rows.append(
@@ -677,8 +695,9 @@ def run_auth_logout_command(
             cleared_session = storage.clear_session(clear_dotenv=True)
             clear_remote_client_context()
         else:
-            if storage.delete_provider_key(provider, sync_dotenv=True):
-                cleared_providers.append(provider.lower())
+            canonical_prov = canonicalize_provider(provider)
+            if storage.delete_provider_key(canonical_prov, sync_dotenv=True):
+                cleared_providers.append(canonical_prov)
     elif logout_all:
         cleared_session = storage.clear_session(clear_dotenv=True)
         clear_remote_client_context()
@@ -801,17 +820,22 @@ def run_auth_set_command(
     output_format: OutputFormat = "text",
 ) -> int:
     """Execute `talkops auth set <provider> [api_key]`."""
-    provider = str(getattr(args, "provider", "") or "").strip().lower()
+    raw_provider = str(getattr(args, "provider", "") or "").strip().lower()
+    provider = (
+        raw_provider
+        if raw_provider in {"talkops", "control_plane", "server"}
+        else canonicalize_provider(raw_provider)
+    )
     api_key = getattr(args, "api_key_value", None)
     base_url = getattr(args, "base_url", None)
 
-    if not api_key and sys.stdin.isatty() and output_format != "json":
+    if not api_key and not (provider == "ollama" and base_url) and sys.stdin.isatty() and output_format != "json":
         try:
             api_key = getpass.getpass(f"Enter API key for {provider}: ").strip()
         except (EOFError, KeyboardInterrupt):
             return 1
 
-    if not api_key:
+    if not api_key and not (provider == "ollama" and base_url):
         err = f"API key value is required for provider '{provider}'."
         if output_format == "json":
             write_json("auth set", {"saved": False, "provider": provider, "error": err})
@@ -830,22 +854,23 @@ def run_auth_set_command(
         return run_auth_login_command(login_ns, output_format=output_format)
 
     storage = get_credential_storage()
-    ok = storage.set_provider_key(provider, api_key, base_url=base_url, sync_dotenv=True)
+    ok = storage.set_provider_key(provider, api_key or "", base_url=base_url, sync_dotenv=True)
     if output_format == "json":
         write_json(
             "auth set",
             {
                 "saved": ok,
                 "provider": provider,
-                "key_prefix": mask_api_key(api_key),
+                "key_prefix": mask_api_key(api_key) if api_key else None,
                 "base_url": base_url,
             },
         )
         return 0 if ok else 1
 
     if ok:
+        suffix = f" ({mask_api_key(api_key)})" if api_key else ""
         Console().print(
-            f"[bold green]Saved credentials for {provider} ({mask_api_key(api_key)}).[/bold green]"
+            f"[bold green]Saved credentials for {provider}{suffix}.[/bold green]"
         )
         return 0
     print(f"Error: Failed to save credentials for {provider}.", file=sys.stderr)
@@ -857,7 +882,12 @@ def run_auth_remove_command(
     output_format: OutputFormat = "text",
 ) -> int:
     """Execute `talkops auth remove <provider>`."""
-    provider = str(getattr(args, "provider", "") or "").strip().lower()
+    raw_provider = str(getattr(args, "provider", "") or "").strip().lower()
+    provider = (
+        raw_provider
+        if raw_provider in {"talkops", "control_plane", "server", "all", "*"}
+        else canonicalize_provider(raw_provider)
+    )
     storage = get_credential_storage()
 
     if provider in {"talkops", "control_plane", "server"}:

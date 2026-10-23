@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """CommandHandler implementation for zero-code custom commands.
 
 Supports inline prompt injection, `context: fork` isolated subagent execution,
@@ -98,6 +112,7 @@ class CustomCommandHandler(BaseCommandHandler):
     """Slash-command handler backed by a user, project, or plugin `.md` / `SKILL.md` file."""
 
     def __init__(self, definition: CustomCommandDefinition) -> None:
+        """Initialize CustomCommandHandler."""
         self.definition = definition
         clean = definition.name.lstrip("/")
         self._name = f"/{clean}"
@@ -110,26 +125,32 @@ class CustomCommandHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return self._name
 
     @property
     def description(self) -> str:
+        """Return the human-readable command description."""
         return self._description
 
     @property
     def aliases(self) -> tuple[str, ...]:
+        """Return alternative slash command aliases."""
         return self._aliases
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.AUTOMATION
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.READ_ONLY
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     async def execute(

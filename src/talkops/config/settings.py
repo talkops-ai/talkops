@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Runtime settings state, environment detection, and bootstrap for TalkOps.
 
 The ``Settings`` dataclass holds all runtime configuration.
@@ -10,15 +24,15 @@ It can be hydrated from:
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
 import contextlib
-from dataclasses import dataclass, field
-from enum import StrEnum
-from talkops.utils.logger import get_logger
+import dataclasses
 import os
-from pathlib import Path
 import sys
 import threading
+from collections.abc import MutableMapping
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from talkops.config import paths
@@ -38,6 +52,7 @@ from talkops.config.paths import (
     RELOADABLE_FIELDS,
     find_project_root,
 )
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -221,8 +236,9 @@ def resolve_read_project_dotenv() -> bool:
 
 
 def _load_dotenv(*, start_path: Path | None = None, refresh_loaded: bool = False) -> None:
-    """Load .env files with documented precedence:
-    Shell exports > project .talkops/.env > ~/.talkops/.env > project .env.
+    """Load .env files with documented precedence.
+
+    Order: Shell exports > project .talkops/.env > ~/.talkops/.env > project .env.
     """
     try:
         from dotenv import dotenv_values
@@ -449,6 +465,7 @@ class Settings:
     webhook_callback_url: str | None = None
 
     def __post_init__(self) -> None:
+        """Validate and normalize fields after dataclass initialization."""
         if self.cwd is None or self.project_root is None:
             try:
                 from talkops.project_utils import get_server_project_context
@@ -478,6 +495,7 @@ class Settings:
 
     @model.setter
     def model(self, value: str | None) -> None:
+        """Set the model property."""
         self.model_name = value
 
     @property
@@ -487,22 +505,27 @@ class Settings:
 
     @property
     def user_talkops_dir(self) -> Path:
+        """Return the user talkops dir property."""
         return paths.DATA_DIR
 
     @property
     def has_openai(self) -> bool:
+        """Return the has openai property."""
         return self.openai_api_key is not None
 
     @property
     def has_anthropic(self) -> bool:
+        """Return the has anthropic property."""
         return self.anthropic_api_key is not None
 
     @property
     def has_tavily(self) -> bool:
+        """Return the has tavily property."""
         return bool(self.tavily_api_key or os.environ.get("TAVILY_API_KEY"))
 
     @property
     def effective_cwd(self) -> Path:
+        """Return the effective cwd property."""
         try:
             from talkops.project_utils import get_server_project_context
 
@@ -517,6 +540,7 @@ class Settings:
 
     @property
     def effective_project_root(self) -> Path | None:
+        """Return the effective project root property."""
         if self.project_root is not None:
             return self.project_root
         try:
@@ -533,8 +557,6 @@ class Settings:
 
     def to_display_dict(self) -> dict[str, str]:
         """Return all non-None fields as a display-friendly dict."""
-        import dataclasses
-
         result = {}
         for f in dataclasses.fields(self):
             value = getattr(self, f.name)
@@ -544,7 +566,6 @@ class Settings:
 
     def set_field(self, key: str, value: str) -> tuple[bool, str]:
         """Set a settings field by name with type coercion, persisting to config.toml."""
-        import dataclasses
         from talkops.config.manifest import get_option, get_option_by_settings_field
         from talkops.config.toml_config import save_toml_field
 
@@ -600,7 +621,6 @@ class Settings:
 
     def reset_field(self, key: str) -> tuple[bool, str]:
         """Reset a settings field to its default value, clearing it in config.toml."""
-        import dataclasses
         from talkops.config.manifest import get_option, get_option_by_settings_field
         from talkops.config.toml_config import delete_toml_field
 
@@ -656,6 +676,7 @@ class Settings:
             return
         try:
             import copy
+
             from talkops.config.cli_settings import (
                 default_cli_settings,
                 get_cli_settings_manager,
@@ -734,35 +755,43 @@ class Settings:
     # ── Path & Agent Helpers ──────────────────────────────
 
     def ensure_agent_dir(self, assistant_id: str | None = None) -> Path:
+        """Ensure agent dir."""
         target_id = assistant_id or self.assistant_id or DEFAULT_AGENT_NAME
         return paths.ensure_agent_dir(target_id)
 
     def get_user_agents_dir(self, assistant_id: str | None = None) -> Path:
+        """Retrieve user agents dir."""
         target_id = assistant_id or self.assistant_id or DEFAULT_AGENT_NAME
         return paths.user_agents_dir(target_id)
 
     def get_project_agents_dir(self) -> Path | None:
+        """Retrieve project agents dir."""
         root = self.effective_project_root
         return paths.project_agents_dir(root) if root else None
 
     def get_user_agent_md_path(self, assistant_id: str | None = None) -> Path:
+        """Retrieve user agent md path."""
         target_id = assistant_id or self.assistant_id or DEFAULT_AGENT_NAME
         return paths.user_agent_md(target_id)
 
     def get_user_skills_dir(self, assistant_id: str | None = None) -> Path:
+        """Retrieve user skills dir."""
         target_id = assistant_id or self.assistant_id or DEFAULT_AGENT_NAME
         return paths.user_skills_dir(target_id)
 
     def ensure_user_skills_dir(self, assistant_id: str | None = None) -> Path:
+        """Ensure user skills dir."""
         d = self.get_user_skills_dir(assistant_id)
         d.mkdir(parents=True, exist_ok=True)
         return d
 
     def get_project_skills_dir(self) -> Path | None:
+        """Retrieve project skills dir."""
         root = self.effective_project_root
         return paths.project_skills_dir(root) if root else None
 
     def ensure_project_skills_dir(self) -> Path | None:
+        """Ensure project skills dir."""
         root = self.effective_project_root
         if not root:
             return None
@@ -772,6 +801,7 @@ class Settings:
         return d
 
     def get_extra_skills_dirs(self) -> list[Path]:
+        """Retrieve extra skills dirs."""
         if isinstance(self.extra_skills_dirs, list):
             return [Path(p).expanduser().resolve() for p in self.extra_skills_dirs]
         if isinstance(self.extra_skills_dirs, str):
@@ -944,7 +974,9 @@ def reset_settings_for_testing() -> None:
         _glyphs_cache = None
         _charset_mode_cache = None
         with contextlib.suppress(Exception):
-            from talkops.config.cli_settings import reset_cli_settings_manager_for_testing
+            from talkops.config.cli_settings import (
+                reset_cli_settings_manager_for_testing,
+            )
 
             reset_cli_settings_manager_for_testing()
 
@@ -979,6 +1011,7 @@ settings: Settings = get_settings()
 
 @dataclass(frozen=True)
 class Glyphs:
+    """Represent glyphs."""
     tool_prefix: str = "⏺"
     ellipsis: str = "…"
     checkmark: str = "✓"
@@ -1118,6 +1151,7 @@ _charset_mode_cache: CharsetMode | None = None
 
 
 class CharsetMode(StrEnum):
+    """Represent charset mode."""
     UNICODE = "unicode"
     ASCII = "ascii"
     AUTO = "auto"
@@ -1147,6 +1181,7 @@ def _detect_charset_mode() -> CharsetMode:
 
 
 def get_glyphs() -> Glyphs:
+    """Retrieve glyphs."""
     global _glyphs_cache
     if _glyphs_cache is not None:
         return _glyphs_cache
@@ -1156,6 +1191,7 @@ def get_glyphs() -> Glyphs:
 
 
 def is_ascii_mode() -> bool:
+    """Return whether ascii mode."""
     return _detect_charset_mode() == CharsetMode.ASCII
 
 

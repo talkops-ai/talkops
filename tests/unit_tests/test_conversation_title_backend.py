@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit and integration tests for Phase 1 backend conversation title generation and SQLite persistence."""
 
 from __future__ import annotations
@@ -7,9 +21,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
-import pytest
 
 from talkops.middleware.resume_state import ResumeStateMiddleware
 from talkops.state.conversation_title import (
@@ -37,14 +51,14 @@ from talkops.state.session import (
 )
 
 
-def test_exact_agy_system_prompt_byte_length() -> None:
-    """Verify the system prompt matches the exact 522-byte (0x20a) string from agy @ 0x10331d50e."""
+def test_conversation_title_system_prompt_byte_length() -> None:
+    """Verify the conversation title system prompt matches the expected 522-byte string."""
     assert len(CONVERSATION_TITLE_SYSTEM_PROMPT.encode("utf-8")) == 522
     assert "Respond with ONLY a short conversation title (3-5 words, title-cased, no prefix)" in CONVERSATION_TITLE_SYSTEM_PROMPT
 
 
 def test_truncate_summary_preview_and_postprocess_title() -> None:
-    """Verify TruncateSummaryPreview and postprocessConversationTitle match agy semantics."""
+    """Verify truncate_summary_preview and postprocess_conversation_title normalization semantics."""
     assert truncate_summary_preview(None) == ""
     assert truncate_summary_preview("   \n  ") == ""
     assert truncate_summary_preview("  First line summary \nSecond line ignored  ") == "First line summary"
@@ -79,7 +93,7 @@ def test_clean_prompt_for_title_strips_command_tags() -> None:
 
 
 def test_get_thread_display_label_fallback_order() -> None:
-    """Verify Title -> Initial Prompt -> Fallback/Thread ID priority matching getDisplayLabel (0x1027b8d80)."""
+    """Verify Title -> Initial Prompt -> Fallback/Thread ID priority in get_thread_display_label."""
     # 1. Uses title when present
     t1 = {
         "thread_id": "thread-1",
@@ -115,7 +129,9 @@ async def test_generate_conversation_title_retries_and_isolates_callbacks() -> N
     calls: list[dict[str, Any]] = []
 
     class FlakyTitleModel(FakeListChatModel):
+        """Test suite or helper class for flaky title model."""
         async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> AIMessage:
+            """Provide ainvoke test helper or fixture."""
             calls.append({"input": input, "config": config})
             if len(calls) < 2:
                 raise RuntimeError("Transient rate limit")
@@ -239,6 +255,7 @@ async def test_resume_state_middleware_schedules_title_only_on_first_root_turn(
         model_spec: str | None = None,
         provider: str | None = None,
     ) -> None:
+        """Provide fake schedule test helper or fixture."""
         scheduled_calls.append((thread_id, prompt, model_spec))
         return None
 
@@ -315,15 +332,16 @@ async def test_resume_state_middleware_schedules_title_only_on_first_root_turn(
 
 
 @pytest.mark.asyncio
-async def test_agy_style_summary_store_write_through_fast_path_and_reconcile(
+async def test_summary_store_write_through_fast_path_and_reconcile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify agy-style thread_summaries write-through on aput, zero-blob-decode fast path, and startup reconcile."""
+    """Verify thread_summaries write-through on aput, zero-blob-decode fast path, and startup reconcile."""
     import aiosqlite
+
     import talkops.state.session as session_mod
 
-    db_file = tmp_path / "test_agy_summarystore.db"
+    db_file = tmp_path / "test_talkops_summary_index.db"
     set_db_path(db_file)
 
     # 1. Simulate a pre-existing legacy 5-column thread_summaries table + orphan row
@@ -398,6 +416,7 @@ async def test_agy_style_summary_store_write_through_fast_path_and_reconcile(
     orig_loader = session_mod._load_latest_checkpoint_summaries_batch
 
     async def spy_loader(conn: Any, thread_ids: list[str], serde: Any) -> Any:
+        """Provide spy loader test helper or fixture."""
         blob_decode_calls.append(list(thread_ids))
         return await orig_loader(conn, thread_ids, serde)
 

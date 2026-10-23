@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive multi-cloud context & profile selector screen for `/cloud` command.
 
 Fetches and displays cloud contexts directly from local CLI configurations
@@ -47,6 +61,8 @@ from talkops.config.toml_config import (
 from talkops.ui.widgets.modal_base import (
     OpsModalScreen,
     PillTabs,
+)
+from talkops.ui.widgets.modal_base import (
     escape_markup as escape,
 )
 from talkops.utils.logger import get_logger
@@ -102,6 +118,7 @@ class CloudProfileOption(Static):
         is_default: bool = False,
         classes: str = "",
     ) -> None:
+        """Initialize CloudProfileOption."""
         super().__init__(label, classes=classes, markup=True)
         self.profile_info = profile_info
         self.profile_name = profile_info.name
@@ -116,11 +133,13 @@ class CloudProfileOption(Static):
         """Posted when a cloud profile row is clicked."""
 
         def __init__(self, profile_name: str, index: int) -> None:
+            """Initialize Clicked."""
             super().__init__()
             self.profile_name = profile_name
             self.index = index
 
     def on_click(self, event: Click) -> None:
+        """Handle mouse click events."""
         event.stop()
         if event.chain > 1:
             return
@@ -132,6 +151,7 @@ class CloudProfileOption(Static):
         self.post_message(self.Clicked(self.profile_name, self.index))
 
     def render_label_text(self) -> str:
+        """Render label text."""
         cursor = "› " if self.is_selected else "  "
         is_ambient = bool(getattr(self.profile_info, "is_ambient", False))
         display_title = getattr(self.profile_info, "display_name", self.profile_name) or self.profile_name
@@ -187,6 +207,7 @@ class CloudProfileOption(Static):
         return text
 
     def set_selected(self, selected: bool) -> None:
+        """Set selected."""
         if self.is_selected == selected:
             return
         self.is_selected = selected
@@ -246,7 +267,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
         height: auto;
         min-height: 3;
         max-height: 24;
-        background: $background;
+        background: transparent;
         scrollbar-gutter: stable;
     }
 
@@ -296,7 +317,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
         padding: 0 1;
         margin-top: 1;
         border-top: solid $primary 20%;
-        background: $background;
+        background: transparent;
     }
 
     CloudProfileSelectorScreen .cloud-selector-help {
@@ -310,6 +331,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
         current_provider: CloudProviderType | None = None,
         initial_tab: str | None = None,
     ) -> None:
+        """Initialize CloudProfileSelectorScreen."""
         super().__init__()
         active_prov, active_target, _ = get_active_cloud_target()
         self._current_provider: CloudProviderType = current_provider or active_prov
@@ -362,6 +384,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
     # ── Compose ──────────────────────────────────────────
 
     def compose_modal(self):
+        """Execute compose modal on CloudProfileSelectorScreen."""
         title = f"Select Cloud Profile (current: {self._current_profile})"
         yield Static(title, classes="cloud-selector-title")
 
@@ -394,6 +417,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
         )
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         self._update_modal_chrome()
         try:
@@ -457,6 +481,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
         ])
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         self.call_after_refresh(self._fit_cloud_list)
 
     def _fit_cloud_list(self) -> None:
@@ -543,6 +568,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
     # ── Tab Navigation ───────────────────────────────────
 
     def on_pill_tabs_tab_changed(self, event: PillTabs.TabChanged) -> None:
+        """Handle pill tabs tab changed events."""
         tab_id = event.tab_id
         if tab_id in _TAB_ORDER and tab_id != self._active_tab:
             self._switch_to_tab(tab_id)  # type: ignore[arg-type]
@@ -642,6 +668,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
             self._selected_index = max(0, len(self._filtered_profiles) - 1)
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changed events."""
         if event.input.id == "cloud-filter":
             self._filter_text = event.value
             self._selected_index = 0
@@ -652,6 +679,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
             self._schedule_rebuild()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle input submitted events."""
         self.action_select()
 
     def _schedule_rebuild(self) -> None:
@@ -1080,9 +1108,11 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
     # ── Actions ──────────────────────────────────────────
 
     def action_move_up(self) -> None:
+        """Execute the move up action."""
         self._move_selection(-1)
 
     def action_move_down(self) -> None:
+        """Execute the move down action."""
         self._move_selection(1)
 
     def _visible_page_size(self) -> int:
@@ -1103,6 +1133,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
         return max(1, int(height * total_options / total_rows))
 
     def action_page_up(self) -> None:
+        """Execute the page up action."""
         if not self._option_widgets:
             return
         page = self._visible_page_size()
@@ -1112,6 +1143,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
             self._move_selection(delta)
 
     def action_page_down(self) -> None:
+        """Execute the page down action."""
         if not self._option_widgets:
             return
         count = len(self._option_widgets)
@@ -1140,6 +1172,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
             self._update_detail_footer(self._flat_profiles[self._selected_index])
 
     def action_select(self) -> None:
+        """Execute the select action."""
         if getattr(self, "_dismissed", False):
             return
         if not self._option_widgets:
@@ -1194,11 +1227,13 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
             return None
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         if getattr(self, "_dismissed", False):
             return
         self.dismiss(None)
 
     def action_tab_complete(self) -> None:
+        """Execute the tab complete action."""
         if not self._option_widgets:
             return
         opt = self._option_widgets[self._selected_index]
@@ -1210,6 +1245,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
             pass
 
     def action_set_default(self) -> None:
+        """Execute the set default action."""
         if not self._option_widgets:
             return
         opt = self._option_widgets[self._selected_index]
@@ -1231,6 +1267,7 @@ class CloudProfileSelectorScreen(OpsModalScreen[tuple[str, str | None] | None]):
             w.update(w.render_label_text())
 
     def on_cloud_profile_option_clicked(self, event: CloudProfileOption.Clicked) -> None:
+        """Handle cloud profile option clicked events."""
         if getattr(self, "_dismissed", False):
             return
         opt = self._option_widgets[event.index] if 0 <= event.index < len(self._option_widgets) else None

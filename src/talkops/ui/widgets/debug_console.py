@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 r"""Read-only in-app Debug Console modal.
 
 Toggled with `Ctrl+\` (or the hidden `/debug` command), this overlay shows a
@@ -21,11 +35,10 @@ from textual.binding import Binding, BindingType
 from textual.cache import LRUCache
 from textual.containers import Horizontal, Vertical
 from textual.content import Content
+from textual.css.query import NoMatches
 from textual.geometry import Offset, Size
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
-from talkops.config.settings import get_glyphs
-from talkops.ui.widgets.modal_base import OpsModalScreen
 from textual.style import Style as TStyle
 from textual.widgets import Checkbox, Select, Static
 from textual.widgets._select import (  # noqa: PLC2701  # needed to keep Tab navigation inside the open Select overlay
@@ -33,7 +46,6 @@ from textual.widgets._select import (  # noqa: PLC2701  # needed to keep Tab nav
     SelectOverlay,
 )
 
-from talkops.ui import theme
 from talkops._debug import LOG_LEVELS
 from talkops._debug_buffer import (
     DEFAULT_CAPACITY,
@@ -41,10 +53,13 @@ from talkops._debug_buffer import (
     get_log_buffer,
     retention_bucket_for_level,
 )
+from talkops.config.settings import get_glyphs
+from talkops.security.unicode_security import sanitize_control_chars
+from talkops.ui import theme
 from talkops.ui.clipboard import copy_text_to_clipboard
 from talkops.ui.widgets._copy_spans import copy_span_style, copy_span_target
 from talkops.ui.widgets._links import open_style_link
-from talkops.security.unicode_security import sanitize_control_chars
+from talkops.ui.widgets.modal_base import OpsModalScreen
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -256,6 +271,7 @@ class _DebugLogView(ScrollView, can_focus=True):
         classes: str | None = None,
         click_to_copy: bool = _CLICK_TO_COPY_DEFAULT,
     ) -> None:
+        """Initialize _DebugLogView."""
         super().__init__(id=widget_id, classes=classes)
         self._on_copy_record = on_copy_record
         self.click_to_copy = click_to_copy
@@ -442,6 +458,7 @@ class _DebugLogView(ScrollView, can_focus=True):
         self._on_copy_record(record)
 
     def render_line(self, y: int) -> Strip:
+        """Render a single line of the widget at the given vertical y-coordinate."""
         _scroll_x, scroll_y = self.scroll_offset
         abs_y = scroll_y + y
         width = self.size.width
@@ -946,8 +963,6 @@ class DebugConsoleScreen(OpsModalScreen[None]):
 
     def _refresh_snapshot(self) -> None:
         """Re-render the snapshot header in place (e.g. after a link resolves)."""
-        from textual.css.query import NoMatches
-
         try:
             self.query_one(".debug-console-snapshot", _SnapshotView).update(
                 self._render_snapshot()
@@ -1089,8 +1104,6 @@ class DebugConsoleScreen(OpsModalScreen[None]):
         degrades the tail to a notice rather than crashing the app it exists to
         inspect.
         """
-        from textual.css.query import NoMatches
-
         try:
             self._poll_logs_once()
         except NoMatches:

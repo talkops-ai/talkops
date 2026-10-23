@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive plugin manager modal screen for /plugins.
 
 Full-screen modal for browsing, installing, enabling/disabling, and managing
@@ -7,10 +21,10 @@ plugins and marketplaces in TalkOps.
 from __future__ import annotations
 
 import asyncio
-from talkops.utils.logger import get_logger
+from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Awaitable, Callable, Sequence, Set as AbstractSet
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 from textual.binding import Binding, BindingType
@@ -22,13 +36,6 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Rule, Static
 from textual.widgets.option_list import Option
-
-from talkops.ui.widgets.modal_base import (
-    ModalSearchInput,
-    OpsModalScreen,
-    PillTabs,
-    format_modal_option_row,
-)
 
 from talkops.config.settings import get_glyphs, is_ascii_mode
 from talkops.plugins import (
@@ -56,9 +63,17 @@ from talkops.plugins.store import (
     load_installed_plugins,
     load_marketplace_records,
 )
+from talkops.ui.widgets.modal_base import (
+    ModalSearchInput,
+    OpsModalScreen,
+    PillTabs,
+    format_modal_option_row,
+)
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
+
     from talkops.mcp.mcp_info import MCPServerInfo
 
 logger = get_logger(__name__)
@@ -106,6 +121,7 @@ class _PluginRow:
 
     @property
     def load_state(self) -> PluginLoadState:
+        """Return the load state property."""
         if self.load_error:
             return "error"
         if self.enabled != self.session_loaded:
@@ -116,6 +132,7 @@ class _PluginRow:
 
     @property
     def label(self) -> str:
+        """Return the label property."""
         if self.display_name:
             return self.display_name
         return self.plugin_id.partition("@")[0]
@@ -131,6 +148,7 @@ class _MarketplaceRow:
 
     @property
     def has_error(self) -> bool:
+        """Return the has error property."""
         return self.error is not None
 
 
@@ -618,6 +636,7 @@ class PluginTabSelected(Message):
     """Message sent when a plugin tab label is clicked."""
 
     def __init__(self, tab: PluginTab) -> None:
+        """Initialize PluginTabSelected."""
         super().__init__()
         self.tab: PluginTab = tab
 
@@ -626,11 +645,13 @@ class PluginTabLabel(Static):
     """Clickable tab label header widget."""
 
     def __init__(self, tab: PluginTab, label: str) -> None:
+        """Initialize PluginTabLabel."""
         self.tab: PluginTab = tab
         self._label = label
         super().__init__(f"  {label}  ", id=f"plugin-tab-{tab}", classes="plugin-tab-label")
 
     def set_active(self, active: bool) -> None:
+        """Set active."""
         self.update(f"> {self._label} <" if active else f"  {self._label}  ")
         if active:
             self.add_class("plugin-tab-active")
@@ -638,6 +659,7 @@ class PluginTabLabel(Static):
             self.remove_class("plugin-tab-active")
 
     def on_click(self) -> None:
+        """Handle mouse click events."""
         self.post_message(PluginTabSelected(self.tab))
 
 
@@ -682,7 +704,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
     PluginManagerScreen #plugin-manager-options {
         height: 1fr;
         min-height: 5;
-        background: $background;
+        background: transparent;
     }
     """
 
@@ -704,6 +726,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         project_root: Path | None = None,
         check_reload_required: Callable[[], Awaitable[bool | None]] | None = None,
     ) -> None:
+        """Initialize PluginManagerScreen."""
         super().__init__()
         self._tab: PluginTab = "discover"
         self._mode: PluginManagerView = "list"
@@ -723,6 +746,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         self._is_refreshing_marketplaces: bool = False
 
     def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on PluginManagerScreen."""
         yield PillTabs(
             [
                 ("discover", "Discover"),
@@ -744,6 +768,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         yield Input(placeholder="", id="plugin-marketplace-source")
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         self._status = "Loading plugins..."
         self._refresh_view()
@@ -783,10 +808,12 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
                 pass
 
     def on_pill_tabs_tab_changed(self, event: PillTabs.TabChanged) -> None:
+        """Handle pill tabs tab changed events."""
         if event.tab_id in self._tabs and event.tab_id != self._tab:
             self._select_tab(event.tab_id)  # type: ignore[arg-type]
 
     def on_plugin_tab_selected(self, event: PluginTabSelected) -> None:
+        """Handle plugin tab selected events."""
         self._select_tab(event.tab)
 
     def _select_tab(self, tab: PluginTab) -> None:
@@ -955,6 +982,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         return None
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        """Handle option list option highlighted events."""
         if event.option_list.id != "plugin-manager-options":
             return
         idx = event.option_index
@@ -1327,6 +1355,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
             self.dismiss(None)
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         if self._close_phase == "checking":
             return
         if self._close_phase == "reload_prompt":
@@ -1373,10 +1402,12 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         )
 
     def action_focus_search(self) -> None:
+        """Execute the focus search action."""
         if self._search_available():
             self.query_one("#plugin-manager-search", Input).focus()
 
     def action_next_tab(self) -> None:
+        """Execute the next tab action."""
         if self._details_mode_active():
             return
         index = self._tabs.index(self._tab)
@@ -1384,6 +1415,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         self._select_tab(next_tab)
 
     def action_previous_tab(self) -> None:
+        """Execute the previous tab action."""
         if self._details_mode_active():
             return
         index = self._tabs.index(self._tab)
@@ -1391,15 +1423,19 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         self._select_tab(prev_tab)
 
     def action_arrow_next_tab(self) -> None:
+        """Execute the arrow next tab action."""
         self.action_next_tab()
 
     def action_arrow_previous_tab(self) -> None:
+        """Execute the arrow previous tab action."""
         self.action_previous_tab()
 
     def action_cursor_down(self) -> None:
+        """Execute the cursor down action."""
         self.query_one("#plugin-manager-options", OptionList).action_cursor_down()
 
     def action_cursor_up(self) -> None:
+        """Execute the cursor up action."""
         self.query_one("#plugin-manager-options", OptionList).action_cursor_up()
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -1410,6 +1446,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         self._refresh_view()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle input submitted events."""
         if event.input.id == "plugin-manager-search":
             event.stop()
             options = self.query_one("#plugin-manager-options", OptionList)
@@ -1441,6 +1478,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
                 self._refresh_view()
 
     async def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Handle option list option selected events."""
         option_id = event.option.id
         if option_id is None or option_id == "empty":
             return
@@ -1518,10 +1556,21 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
             return
         if option_id == "action:toggle-enabled":
             if self._selected_plugin:
-                new_state = not self._selected_plugin.enabled
+                plugin = self._selected_plugin
+                new_state = not plugin.enabled
+                target_scope: InstallScope = plugin.scope or "user"
+                target_root = (
+                    Path(plugin.project_path)
+                    if plugin.project_path
+                    else self._project_root
+                )
                 try:
                     await asyncio.to_thread(
-                        set_installed_plugin_enabled, self._selected_plugin.plugin_id, enabled=new_state
+                        set_installed_plugin_enabled,
+                        plugin.plugin_id,
+                        enabled=new_state,
+                        scope=target_scope,
+                        project_root=target_root,
                     )
                     self._mutated = True
                     await self._refresh_state()

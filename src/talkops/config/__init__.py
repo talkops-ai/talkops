@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Configuration management and options registry for TalkOps."""
 
 from talkops.config.aws import (
@@ -28,13 +42,22 @@ from talkops.config.paths import (
     DEFAULT_AGENT_NAME,
     ENV_PREFIX,
     GLOBAL_ENV_PATH,
-    TALKOPS_HOME,
     PLUGINS_CACHE_DIR,
     SERVER_RUNTIME_DIR,
     SESSIONS_DB_PATH,
     STATE_DIR,
+    TALKOPS_HOME,
     USER_HOME,
     find_project_root,
+)
+from talkops.config.plugins import (
+    DEFAULT_MARKETPLACE_CONFIGS,
+    DefaultMarketplaceConfig,
+    fetch_marketplace_manifest,
+    get_default_marketplace_config,
+    get_default_marketplace_names,
+    get_primary_default_marketplace_name,
+    is_default_marketplace,
 )
 from talkops.config.settings import (
     Settings,
@@ -45,15 +68,6 @@ from talkops.config.settings import (
     resolve_env_var,
     settings,
     sync_aws_env_aliases,
-)
-from talkops.config.plugins import (
-    DEFAULT_MARKETPLACE_CONFIGS,
-    DefaultMarketplaceConfig,
-    fetch_marketplace_manifest,
-    get_default_marketplace_config,
-    get_default_marketplace_names,
-    get_primary_default_marketplace_name,
-    is_default_marketplace,
 )
 from talkops.config.store import ConfigCategory, ConfigEntry, ConfigStore, ConfigValue
 from talkops.config.store_factory import create_config_store, create_config_store_sync

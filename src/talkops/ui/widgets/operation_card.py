@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """OperationCard widget for tracking long-running DevOps background operations.
 
 Displays operation status, elapsed timer, live log stream, and cancellation controls.
@@ -43,10 +57,12 @@ class OperationCard(Widget):
         """Fired when user clicks cancel button."""
 
         def __init__(self, operation_id: str) -> None:
+            """Initialize CancelRequested."""
             super().__init__()
             self.operation_id = operation_id
 
     def __init__(self, operation_id: str, name: str, env: str = "non-prod", **kwargs: Any) -> None:
+        """Initialize OperationCard."""
         super().__init__(**kwargs)
         self.operation_id = operation_id
         self.op_name = name
@@ -56,6 +72,7 @@ class OperationCard(Widget):
         self._logs: list[str] = []
 
     def compose(self):
+        """Compose and yield child widgets for this component."""
         title = Text(f"Operation: {self.op_name} [{self.env}]", style="bold amber")
         yield Static(title, classes="header", id=f"hdr-{self.operation_id}")
 

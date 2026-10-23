@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Transactional Non-Regression (TNR) Safety & Mandatory Undo Middleware.
 
 Implements the STRATUS (NeurIPS) Transactional Non-Regression specification:
@@ -12,16 +26,16 @@ Implements the STRATUS (NeurIPS) Transactional Non-Regression specification:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
 import os
-from pathlib import Path
 import re
 import shlex
 import shutil
 import subprocess
 import threading
 import time
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
@@ -95,12 +109,14 @@ class ALockManager:
     """Resource-scoped readers-writer / writer-exclusivity lock manager (A-Lock)."""
 
     def __init__(self) -> None:
+        """Initialize ALockManager."""
         self._guard = threading.Lock()
         self._sync_locks: dict[str, threading.RLock] = {}
         self._async_locks: dict[str, asyncio.Lock] = {}
         self._active_holders: dict[str, int] = {}
 
     def acquire_sync(self, resource_key: str) -> None:
+        """Execute acquire sync on ALockManager."""
         with self._guard:
             lock = self._sync_locks.setdefault(resource_key, threading.RLock())
         lock.acquire()
@@ -108,6 +124,7 @@ class ALockManager:
             self._active_holders[resource_key] = self._active_holders.get(resource_key, 0) + 1
 
     def release_sync(self, resource_key: str) -> None:
+        """Execute release sync on ALockManager."""
         with self._guard:
             lock = self._sync_locks.get(resource_key)
             if resource_key in self._active_holders:
@@ -119,6 +136,7 @@ class ALockManager:
                 pass
 
     async def acquire_async(self, resource_key: str) -> None:
+        """Execute acquire async on ALockManager."""
         with self._guard:
             lock = self._async_locks.setdefault(resource_key, asyncio.Lock())
         await lock.acquire()
@@ -126,6 +144,7 @@ class ALockManager:
             self._active_holders[resource_key] = self._active_holders.get(resource_key, 0) + 1
 
     def release_async(self, resource_key: str) -> None:
+        """Execute release async on ALockManager."""
         with self._guard:
             lock = self._async_locks.get(resource_key)
             if resource_key in self._active_holders:
@@ -134,6 +153,7 @@ class ALockManager:
             lock.release()
 
     def active_lock_count(self) -> int:
+        """Execute active lock count on ALockManager."""
         with self._guard:
             return sum(v for v in self._active_holders.values() if v > 0)
 
@@ -323,6 +343,7 @@ class TransactionalNonRegressionMiddleware(AgentMiddleware[Any, Any, Any]):
         severity_evaluator: Callable[[ToolCallRequest, ToolMessage | Command[Any]], float] | None = None,
         initial_severity: float = 0.5,
     ) -> None:
+        """Initialize TransactionalNonRegressionMiddleware."""
         super().__init__()
         self.working_dir = Path(working_dir).resolve() if working_dir else Path.cwd().resolve()
         self.enabled_by_default = enabled_by_default
@@ -465,6 +486,7 @@ class TransactionalNonRegressionMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
+        """Intercept and wrap synchronous tool execution."""
         runtime = getattr(request, "runtime", None)
         if not _is_tnr_enabled(runtime, self.enabled_by_default):
             return handler(request)
@@ -529,6 +551,7 @@ class TransactionalNonRegressionMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
+        """Intercept and wrap asynchronous tool execution."""
         runtime = getattr(request, "runtime", None)
         if not _is_tnr_enabled(runtime, self.enabled_by_default):
             return await handler(request)

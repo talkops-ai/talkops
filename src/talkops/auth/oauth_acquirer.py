@@ -1,6 +1,20 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Browser-Loopback + Paste PKCE OAuth 2.0 / SSO Token Acquirer for TalkOps CLI.
 
-Modeled after Antigravity CLI's `BrowserAndPasteTokenAcquirer`:
+Implements dual-channel PKCE authentication for local and headless environments:
 1. Generates an RFC 7636 PKCE (`S256`) `code_verifier` and `code_challenge`.
 2. Starts an ephemeral local HTTP listener on `127.0.0.1:0/auth/callback`.
 3. Opens the user's browser to `{control_plane_url}/api/v1/auth/authorize?...` AND
@@ -15,17 +29,18 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from collections.abc import Callable
-from dataclasses import dataclass
 import hashlib
 import html
 import os
 import secrets
+import select
 import sys
 import time
+import webbrowser
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
-import webbrowser
 
 import httpx
 
@@ -87,7 +102,7 @@ def extract_code_from_paste(raw_input: str, *, expected_state: str | None = None
 def _render_loopback_html(*, success: bool, detail: str) -> str:
     """Render the HTML response served by the local loopback listener at `127.0.0.1:<port>/auth/callback`."""
     badge = "TalkOps CLI Authenticated" if success else "Authentication Error"
-    badge_color = "#34d399" if success else "#f87171"
+    badge_color = "#34d399" if success else "#fb7185"
     heading = "SSO Login Complete" if success else "SSO Login Failed"
     safe_detail = html.escape(detail)
     return f"""<!DOCTYPE html>
@@ -103,19 +118,19 @@ def _render_loopback_html(*, success: bool, detail: str) -> str:
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #060913;
-      color: #f8fafc;
+      background: #07090e;
+      color: #f1f5f9;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }}
     .card {{
       max-width: 460px;
       width: 90%;
-      background: #0f172a;
-      border: 1px solid rgba(56, 189, 248, 0.25);
+      background: #0e131f;
+      border: 1px solid #1b2436;
       border-radius: 16px;
       padding: 32px;
       text-align: center;
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65);
     }}
     .badge {{
       display: inline-block;
@@ -155,6 +170,7 @@ class LoopbackCallbackServer:
     """Ephemeral `127.0.0.1:0` HTTP server that captures `/auth/callback?code=...&state=...`."""
 
     def __init__(self, *, expected_state: str, host: str = "127.0.0.1", port: int = 0) -> None:
+        """Initialize LoopbackCallbackServer."""
         self.expected_state = expected_state
         self.host = host
         self.port = port
@@ -438,6 +454,7 @@ class BrowserAndPasteTokenAcquirer:
         http_client: httpx.AsyncClient | None = None,
         output_fn: Callable[[str], None] | None = None,
     ) -> None:
+        """Initialize BrowserAndPasteTokenAcquirer."""
         self.control_plane_url = control_plane_url.rstrip("/")
         self.server_url = server_url
         self.sso_provider = sso_provider
@@ -610,7 +627,6 @@ class BrowserAndPasteTokenAcquirer:
             raw = await loop.run_in_executor(None, self.paste_reader)
             return extract_code_from_paste(raw, expected_state=expected_state)
 
-        import select
 
         sys.stdout.write("  Paste authorization code (or press Ctrl+C to cancel): ")
         sys.stdout.flush()

@@ -1,8 +1,24 @@
-"""Unit tests for ReliableRubricMiddleware, transport retry, and stream events."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for ReliableRubricMiddleware, transport retry, and stream events."""
+from typing import Any
 from unittest.mock import MagicMock
+
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
 from talkops.middleware.goal_state_notice import build_goal_state_notice
 from talkops.middleware.reliable_rubric import (
     ReliableRubricMiddleware,
@@ -13,12 +29,14 @@ from talkops.rubrics.evaluator import _validate_rubric_grader_read_path
 
 
 def test_validate_rubric_grader_read_path():
+    """Verify validate rubric grader read path."""
     assert _validate_rubric_grader_read_path("../traversal.txt") is not None
     assert _validate_rubric_grader_read_path("/large_tool_results/result1.txt") is None
     assert _validate_rubric_grader_read_path("valid/path.tf", repository_root=".") is None
 
 
 def test_is_transient_grader_transport_error():
+    """Verify is transient grader transport error."""
     assert _is_transient_grader_transport_error(ConnectionResetError("peer closed")) is True
     assert _is_transient_grader_transport_error(TimeoutError("request timed out")) is True
     assert _is_transient_grader_transport_error(Exception("429 Too Many Requests")) is True
@@ -28,6 +46,7 @@ def test_is_transient_grader_transport_error():
 
 
 def test_without_internal_control_messages():
+    """Verify without internal control messages."""
     control_msg = build_goal_state_notice({
         "goal": "Verify IAM policies",
         "rubric_criteria": "- Ensure least privilege",
@@ -36,7 +55,6 @@ def test_without_internal_control_messages():
     ai_msg = AIMessage(content="Checking configuration now...")
     tool_msg = ToolMessage(content="aws sts get-caller-identity returned ok", tool_call_id="call_1")
 
-    from typing import Any
 
     state: Any = {
         "messages": [human_msg, control_msg, ai_msg, tool_msg],
@@ -54,6 +72,7 @@ def test_without_internal_control_messages():
 
 
 def test_reliable_rubric_stream_event_emission():
+    """Verify reliable rubric stream event emission."""
     middleware = ReliableRubricMiddleware(
         model="anthropic:claude-3-5-haiku-20241022",
         max_iterations=2,
@@ -70,8 +89,7 @@ def test_reliable_rubric_stream_event_emission():
 
 
 def test_reliable_rubric_grader_input_signature_and_correction():
-    from typing import Any
-
+    """Verify reliable rubric grader input signature and correction."""
     middleware = ReliableRubricMiddleware(
         model="anthropic:claude-3-5-haiku-20241022",
         max_iterations=2,

@@ -1,16 +1,31 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Command router / dispatcher — central command execution hub."""
 
 from __future__ import annotations
 
 import importlib
 import inspect
-from talkops.utils.logger import get_logger
 import pkgutil
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from talkops.commands._base import BaseCommandHandler, CommandResult
 from talkops.commands._guards import require_confirmation
 from talkops.commands._types import SafetyLevel
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from talkops.commands._base import CommandContext
@@ -22,6 +37,7 @@ class CommandRouter:
     """Central dispatcher mapping slash command strings to handler instances."""
 
     def __init__(self) -> None:
+        """Initialize CommandRouter."""
         self._handlers: dict[str, BaseCommandHandler] = {}
         self._discovered: bool = False
 
@@ -169,8 +185,6 @@ class CommandRouter:
           3. Apply safety gate for high-risk commands.
           4. Validate and execute.
         """
-        from dataclasses import replace
-
         clean = command.strip()
         if not clean:
             return CommandResult(success=False, message="Empty command.")

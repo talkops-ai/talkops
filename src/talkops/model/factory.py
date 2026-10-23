@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """LLM Model construction factory and provider detection.
 
 Builds dynamic chat model instances for LangChain agents based on the
@@ -7,22 +21,74 @@ active model spec (``provider:model``) and reasoning effort configuration.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Mapping
-from dataclasses import dataclass
 import importlib
 import importlib.util
 import json
 import os
 import re
 import threading
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 
 # Avoid duplicate protobuf descriptor registration between google-genai, google-cloud-aiplatform, and fireworks-ai
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
-try:
-    import google.longrunning.operations_proto_pb2  # noqa: F401
-except ImportError:
-    pass
+
+
+class _SafeDescriptorPoolProxy:
+    """DescriptorPool wrapper that tolerates duplicate .proto file registrations.
+
+    ``fireworks-ai`` bundles generated protobuf descriptors for ``google/rpc/status.proto``,
+    ``google/type/date.proto``, and ``google/longrunning/operations.proto`` which collide with
+    ``googleapis-common-protos`` used by ``langchain-google-vertexai`` and ``langchain-google-genai``.
+    """
+
+    _talkops_safe_proxy = True
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    def AddSerializedFile(self, serialized_file_desc_proto: bytes) -> Any:  # noqa: N802
+        try:
+            return self._pool.AddSerializedFile(serialized_file_desc_proto)
+        except TypeError as exc:
+            msg = str(exc)
+            if "duplicate file name" in msg:
+                dup_name = msg.split("duplicate file name", 1)[1].strip().rstrip(".")
+                with contextlib.suppress(Exception):
+                    return self._pool.FindFileByName(dup_name)
+            raise
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pool, name)
+
+
+def _ensure_protobuf_descriptor_pool_guard() -> None:
+    """Install a safe descriptor pool proxy and pre-load canonical googleapis protos."""
+    with contextlib.suppress(Exception):
+        import google.protobuf.descriptor_pool as _dp
+
+        orig_default = _dp.Default
+        if not getattr(orig_default, "_talkops_patched", False):
+            _pool_proxy = _SafeDescriptorPoolProxy(orig_default())
+
+            def _safe_default() -> Any:
+                return _pool_proxy
+
+            setattr(_safe_default, "_talkops_patched", True)
+            _dp.Default = _safe_default  # type: ignore[assignment]
+
+    for _proto_mod in (
+        "google.rpc.status_pb2",
+        "google.type.date_pb2",
+        "google.longrunning.operations_pb2",
+        "google.longrunning.operations_proto_pb2",
+    ):
+        with contextlib.suppress(Exception):
+            importlib.import_module(_proto_mod)
+
+
+_ensure_protobuf_descriptor_pool_guard()
 
 from langchain_core.language_models import BaseChatModel
 
@@ -35,14 +101,18 @@ from talkops.exceptions import (
 )
 from talkops.model.config import (
     IMPLICIT_AUTH_PROVIDERS,
+    PROVIDER_KEY_ALIASES,
+    PROVIDER_SETTINGS_FIELD_MAP,
     ModelConfig,
     ModelSpec,
     apply_stored_credentials,
+    canonicalize_provider,
     detect_provider,
     get_credential_env_var,
     get_model_profile,
     has_provider_credentials,
     normalize_model_spec,
+    provider_package_name,
 )
 from talkops.utils.logger import get_logger
 
@@ -94,7 +164,7 @@ def _get_default_model_spec() -> str:
         return config.recent_model
 
     # 3. Auto-detect from available credentials in environment
-    # Note: bedrock is intentionally excluded here (matching dcode) because
+    # Note: bedrock is intentionally excluded here because
     # ambient ~/.aws/credentials are commonly present for AWS CLI / DevOps use
     # rather than explicit LLM configuration. Bedrock is used when configured
     # in [models].default / [models].recent or passed via --model.
@@ -102,7 +172,7 @@ def _get_default_model_spec() -> str:
         ("anthropic", "anthropic:claude-sonnet-4-5"),
         ("openai", "openai:gpt-5.4"),
         ("openai_codex", "openai_codex:gpt-5.4"),
-        ("google_genai", "google_genai:gemini-2.5-flash"),
+        ("google_genai", "google_genai:gemini-3.7-flash"),
         ("groq", "groq:llama-3.3-70b-versatile"),
         ("deepseek", "deepseek:deepseek-v4-flash"),
         ("openrouter", "openrouter:anthropic/claude-sonnet-5"),
@@ -124,6 +194,8 @@ def _get_default_model_spec() -> str:
 def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dict[str, Any]:
     """Retrieve all configuration arguments for the provider/model."""
     config = ModelConfig.load()
+    if provider and provider not in config.providers:
+        provider = canonicalize_provider(provider)
     result = config.get_kwargs(provider, model_name=model_name)
 
     base_url = config.get_base_url(provider)
@@ -136,9 +208,22 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
                 or "2024-08-01-preview"
             )
             result.setdefault("api_version", api_version)
+        elif provider in ("bedrock", "bedrock_converse", "anthropic_bedrock"):
+            result["endpoint_url"] = base_url
+            result.pop("base_url", None)
+        elif provider == "ibm":
+            result["url"] = base_url
+            result.pop("base_url", None)
+        elif provider == "litellm":
+            result["api_base"] = base_url
+            result.pop("base_url", None)
         elif provider == "perplexity":
-            # ChatPerplexity does not accept base_url directly in kwargs
-            pass
+            # ChatPerplexity does not accept base_url directly in kwargs; it reads PERPLEXITY_BASE_URL
+            result.pop("base_url", None)
+            os.environ["PERPLEXITY_BASE_URL"] = base_url
+        elif provider in ("google_vertexai", "google_anthropic_vertex"):
+            result["api_endpoint"] = base_url
+            result.pop("base_url", None)
         elif provider == "anthropic":
             anthropic_base = base_url[:-3] if base_url.endswith("/v1") else base_url
             result["anthropic_api_url"] = anthropic_base
@@ -161,6 +246,19 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
     api_key = None
     if env_var:
         api_key = resolve_env_var(env_var)
+
+    if not api_key:
+        for alias_var in PROVIDER_KEY_ALIASES.get(provider, ()):
+            api_key = resolve_env_var(alias_var)
+            if api_key:
+                break
+
+    if not api_key:
+        for field in PROVIDER_SETTINGS_FIELD_MAP.get(provider, ()):
+            if hasattr(settings, field):
+                api_key = getattr(settings, field)
+                if api_key:
+                    break
 
     if not api_key:
         field_map = {
@@ -199,17 +297,28 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
             "bedrock",
             "bedrock_converse",
             "anthropic_bedrock",
+            "cohere",
+            "perplexity",
+            "ibm",
         ):
             result["api_key"] = api_key
         if provider in ("google_genai", "google"):
             result["google_api_key"] = api_key
         elif provider == "huggingface":
             result["huggingfacehub_api_token"] = api_key
+        elif provider == "cohere":
+            result["cohere_api_key"] = api_key
+            result.pop("api_key", None)
+        elif provider == "perplexity":
+            result["pplx_api_key"] = api_key
+            result.pop("api_key", None)
         elif provider == "ibm":
             result["apikey"] = api_key
+            result.pop("api_key", None)
         elif provider == "anthropic":
             result["anthropic_api_key"] = api_key
-            result.setdefault("default_headers", {})["Authorization"] = f"Bearer {api_key}"
+            if base_url and "api.anthropic.com" not in base_url:
+                result.setdefault("default_headers", {})["Authorization"] = f"Bearer {api_key}"
         if env_var:
             os.environ[env_var] = str(api_key)
 
@@ -223,6 +332,9 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
         aws_kwargs = get_aws_model_kwargs(settings)
         result.update(aws_kwargs)
         result.pop("api_key", None)
+        if base_url:
+            result.setdefault("endpoint_url", base_url)
+            result.pop("base_url", None)
 
     # IBM watsonx handling
     if provider == "ibm":
@@ -239,6 +351,7 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
         )
         if watsonx_url:
             result["url"] = watsonx_url
+        result.pop("base_url", None)
 
     # Vertex AI handling
     if provider in ("google_genai", "google"):
@@ -249,25 +362,47 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
         if is_vertex:
             result["vertexai"] = True
             os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
-        project_env = resolve_env_var("GOOGLE_CLOUD_PROJECT") or getattr(settings, "google_cloud_project", None)
+        project_env = (
+            resolve_env_var("GOOGLE_CLOUD_PROJECT")
+            or resolve_env_var("GCP_PROJECT_ID")
+            or resolve_env_var("VERTEXAI_PROJECT")
+            or getattr(settings, "google_cloud_project", None)
+        )
         if project_env:
             result["project"] = project_env
             os.environ["GOOGLE_CLOUD_PROJECT"] = str(project_env)
-        location_env = resolve_env_var("GOOGLE_CLOUD_LOCATION") or getattr(settings, "google_cloud_location", None)
+        location_env = (
+            resolve_env_var("GOOGLE_CLOUD_LOCATION")
+            or resolve_env_var("GCP_LOCATION")
+            or resolve_env_var("CLOUD_ML_REGION")
+            or resolve_env_var("VERTEXAI_LOCATION")
+            or getattr(settings, "google_cloud_location", None)
+        )
         if location_env:
             result["location"] = location_env
             os.environ["GOOGLE_CLOUD_LOCATION"] = str(location_env)
     elif provider in ("google_vertexai", "google_anthropic_vertex"):
-        project_env = resolve_env_var("GOOGLE_CLOUD_PROJECT") or getattr(settings, "google_cloud_project", None)
+        project_env = (
+            resolve_env_var("GOOGLE_CLOUD_PROJECT")
+            or resolve_env_var("GCP_PROJECT_ID")
+            or resolve_env_var("VERTEXAI_PROJECT")
+            or getattr(settings, "google_cloud_project", None)
+        )
         if project_env:
             result["project"] = project_env
             os.environ["GOOGLE_CLOUD_PROJECT"] = str(project_env)
-        location_env = resolve_env_var("GOOGLE_CLOUD_LOCATION") or getattr(settings, "google_cloud_location", None)
+        location_env = (
+            resolve_env_var("GOOGLE_CLOUD_LOCATION")
+            or resolve_env_var("GCP_LOCATION")
+            or resolve_env_var("CLOUD_ML_REGION")
+            or resolve_env_var("VERTEXAI_LOCATION")
+            or getattr(settings, "google_cloud_location", None)
+        )
         if location_env:
             result["location"] = location_env
             os.environ["GOOGLE_CLOUD_LOCATION"] = str(location_env)
 
-    # Ollama bearer token injection for remote / hosted Ollama instances (matches dcode)
+    # Ollama bearer token injection for remote / hosted Ollama instances
     if provider == "ollama":
         result.pop("api_key", None)
         ollama_key = resolve_env_var("OLLAMA_API_KEY")
@@ -283,7 +418,10 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
                     result["client_kwargs"] = client_kwargs
 
     # Reasoning effort injection
-    from talkops.model.reasoning import is_effort_supported_for_model, with_effort_model_params
+    from talkops.model.reasoning import (
+        is_effort_supported_for_model,
+        with_effort_model_params,
+    )
 
     effort = getattr(settings, "reasoning_effort", None)
     if effort:
@@ -303,7 +441,10 @@ def _ensure_talkops_provider_profiles() -> None:
     if _TALKOPS_PROFILES_REGISTERED:
         return
     try:
-        from deepagents.profiles.provider import ProviderProfile, register_provider_profile
+        from deepagents.profiles.provider import (
+            ProviderProfile,
+            register_provider_profile,
+        )
 
         register_provider_profile(
             "openai",
@@ -442,6 +583,7 @@ def _create_model_via_init(
     kwargs: dict[str, Any],
 ) -> BaseChatModel:
     """Delegate to langchain's dynamic init_chat_model function."""
+    _ensure_protobuf_descriptor_pool_guard()
     from langchain.chat_models import init_chat_model
 
     init_kwargs = dict(kwargs)
@@ -449,6 +591,13 @@ def _create_model_via_init(
     target_provider = provider
     if provider in ("openai_codex", "typesafe"):
         target_provider = "openai"
+    elif provider in ("cerebras", "sambanova"):
+        try:
+            has_dedicated_pkg = importlib.util.find_spec(f"langchain_{provider}") is not None
+        except (ImportError, ValueError):
+            has_dedicated_pkg = False
+        if not has_dedicated_pkg:
+            target_provider = "openai"
 
     if target_provider == "huggingface":
         try:
@@ -474,36 +623,7 @@ def _create_model_via_init(
             return init_chat_model(model_name, model_provider=target_provider, **init_kwargs)
         return init_chat_model(model_name, **init_kwargs)
     except ImportError as e:
-        package_map = {
-            "anthropic": "langchain-anthropic",
-            "openai": "langchain-openai",
-            "openai_codex": "langchain-openai",
-            "azure_openai": "langchain-openai",
-            "google_genai": "langchain-google-genai",
-            "google_vertexai": "langchain-google-vertexai",
-            "google_anthropic_vertex": "langchain-google-vertexai",
-            "bedrock": "langchain-aws",
-            "bedrock_converse": "langchain-aws",
-            "anthropic_bedrock": "langchain-aws",
-            "groq": "langchain-groq",
-            "deepseek": "langchain-deepseek",
-            "mistralai": "langchain-mistralai",
-            "cohere": "langchain-cohere",
-            "fireworks": "langchain-fireworks",
-            "together": "langchain-together",
-            "xai": "langchain-xai",
-            "ollama": "langchain-ollama",
-            "openrouter": "langchain-openrouter",
-            "perplexity": "langchain-perplexity",
-            "nvidia": "langchain-nvidia-ai-endpoints",
-            "huggingface": "langchain-huggingface",
-            "baseten": "langchain-baseten",
-            "ibm": "langchain-ibm",
-            "litellm": "langchain-litellm",
-            "meta": "langchain-meta",
-            "typesafe": "langchain-typesafe",
-        }
-        package = package_map.get(provider, f"langchain-{provider}")
+        package = provider_package_name(provider)
         module_name = package.replace("-", "_")
         try:
             spec_found = importlib.util.find_spec(module_name) is not None
@@ -525,6 +645,98 @@ def _create_model_via_init(
 _MODEL_CACHE: dict[str, ModelResult] = {}
 _MODEL_CACHE_LOCK = threading.Lock()
 _ANTHROPIC_CACHE_CONTROL_PATCHED = False
+_OLLAMA_MESSAGE_COMPAT_PATCHED = False
+
+
+def _sanitize_content_for_ollama(content: Any) -> Any:
+    """Normalize list-based message content so ChatOllama never raises on non-text/image blocks."""
+    if not isinstance(content, list):
+        return content
+
+    from langchain_core.messages import is_data_content_block
+
+    cleaned: list[Any] = []
+    for part in content:
+        if isinstance(part, str):
+            cleaned.append(part)
+        elif isinstance(part, dict):
+            ptype = part.get("type")
+            if ptype == "text":
+                cleaned.append({"type": "text", "text": str(part.get("text", ""))})
+            elif ptype in ("tool_use", "image_url"):
+                cleaned.append(part)
+            elif ptype == "non_standard":
+                val = part.get("value")
+                if val is not None:
+                    cleaned.append({"type": "text", "text": str(val)})
+            elif ptype in (
+                "thinking",
+                "redacted_thinking",
+                "reasoning",
+                "reasoning_content",
+                "thought",
+                "tool_call",
+                "tool_call_chunk",
+                "function_call",
+                "server_tool_use",
+                "web_search_tool_result",
+                "code_execution_tool_result",
+                "mcp_tool_use",
+                "mcp_tool_result",
+            ):
+                # Drop provider-specific reasoning/tool blocks; tool_calls are already on AIMessage.tool_calls
+                continue
+            elif is_data_content_block(part) and part.get("type") == "image":
+                cleaned.append(part)
+            elif "text" in part and isinstance(part.get("text"), str):
+                cleaned.append({"type": "text", "text": part["text"]})
+            # Drop any other unsupported block types rather than crashing ChatOllama
+    return cleaned
+
+
+def _ensure_ollama_message_compatibility(model: BaseChatModel | None = None) -> None:
+    """Ensure ChatOllama safely handles cross-provider message content blocks (thinking, reasoning, etc.)."""
+    global _OLLAMA_MESSAGE_COMPAT_PATCHED
+    if _OLLAMA_MESSAGE_COMPAT_PATCHED:
+        return
+    try:
+        import langchain_ollama.chat_models as _ollama_cm
+    except ImportError:
+        return
+
+    orig_convert = getattr(_ollama_cm.ChatOllama, "_convert_messages_to_ollama_messages", None)
+    if orig_convert is not None and not getattr(orig_convert, "_talkops_compat_patched", False):
+        def _patched_convert_messages_to_ollama_messages(
+            self: Any,
+            messages: list[Any],
+        ) -> Any:
+            sanitized: list[Any] = []
+            for msg in messages:
+                content = getattr(msg, "content", None)
+                add_kwargs = getattr(msg, "additional_kwargs", None)
+                updates: dict[str, Any] = {}
+                if isinstance(content, list):
+                    new_content = _sanitize_content_for_ollama(content)
+                    if new_content != content:
+                        updates["content"] = new_content
+                if isinstance(add_kwargs, dict) and "reasoning_content" in add_kwargs:
+                    rc = add_kwargs.get("reasoning_content")
+                    if rc is not None and not isinstance(rc, str):
+                        new_ak = dict(add_kwargs)
+                        new_ak.pop("reasoning_content", None)
+                        updates["additional_kwargs"] = new_ak
+                if updates and hasattr(msg, "model_copy"):
+                    sanitized.append(msg.model_copy(update=updates))
+                else:
+                    sanitized.append(msg)
+            return orig_convert(self, sanitized)
+
+        setattr(_patched_convert_messages_to_ollama_messages, "_talkops_compat_patched", True)
+        _ollama_cm.ChatOllama._convert_messages_to_ollama_messages = (  # type: ignore[method-assign]
+            _patched_convert_messages_to_ollama_messages
+        )
+
+    _OLLAMA_MESSAGE_COMPAT_PATCHED = True
 
 
 def _ensure_anthropic_block_level_cache_control(model: BaseChatModel | None = None) -> None:
@@ -615,13 +827,13 @@ def create_model(
         model_name = parsed.model
     elif inferred_provider == "bedrock":
         provider = inferred_provider
-        model_name = parsed.model if (parsed and parsed.provider == "bedrock") else model_spec
+        model_name = parsed.model if (parsed and canonicalize_provider(parsed.provider) == "bedrock") else model_spec
     elif parsed:
-        provider = parsed.provider
+        provider = canonicalize_provider(parsed.provider)
         model_name = parsed.model
     else:
         model_name = model_spec
-        provider = inferred_provider or ""
+        provider = canonicalize_provider(inferred_provider) if inferred_provider else ""
 
     if provider == "google_vertexai" and model_name and model_name.lower().startswith("claude-"):
         raise ModelConfigError(
@@ -668,7 +880,10 @@ def create_model(
         reasoning_override = extra_kwargs.pop("reasoning", None)
         eff = reasoning_effort_override
         if eff is not None:
-            from talkops.model.reasoning import is_effort_supported_for_model, with_effort_model_params
+            from talkops.model.reasoning import (
+                is_effort_supported_for_model,
+                with_effort_model_params,
+            )
 
             spec = f"{provider}:{model_name}" if model_name else (model_name or "")
             eff_str = str(eff)
@@ -738,11 +953,15 @@ def create_model(
         model = _create_model_via_init(model_name, provider, kwargs)
 
     _ensure_anthropic_block_level_cache_control(model)
+    _ensure_ollama_message_compatibility(model)
 
     # Resolve model profile & context limits
     spec_key = f"{provider}:{model_name}" if provider else model_name
     prof_entry = get_model_profile(spec_key)
     profile: dict[str, Any] = dict(prof_entry["profile"]) if prof_entry else {}
+    toml_profile_overrides = config.get_profile_overrides(provider, model_name=model_name)
+    if toml_profile_overrides:
+        profile.update(toml_profile_overrides)
     if profile_overrides:
         profile.update(cast(dict[str, Any], profile_overrides))
 

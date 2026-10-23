@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Lightweight types for the ask-user interrupt protocol.
 
 Re-exports canonical schemas from `talkops.schema.interrupts` so `textual_adapter`
@@ -7,6 +21,7 @@ and widgets can reference the types without pulling in the langchain middleware 
 from __future__ import annotations
 
 from typing import Literal
+
 from typing_extensions import TypedDict
 
 from talkops.schema.interrupts import (
@@ -15,16 +30,16 @@ from talkops.schema.interrupts import (
     ASK_USER_CANCELLED_SUMMARY,
     ASK_USER_ERROR_ANSWER_PREFIX,
     ASK_USER_FAILED_SUMMARY,
-    ASK_USER_NOTHING_SELECTED,
     ASK_USER_NO_ANSWER,
+    ASK_USER_NOTHING_SELECTED,
+    CHOICE_QUESTION_TYPES,
+    QUESTION_TYPES,
     AskUserAnswered,
     AskUserCancelled,
     AskUserRequest,
     AskUserResumePayload,
     AskUserWidgetResult,
-    CHOICE_QUESTION_TYPES,
     Choice,
-    QUESTION_TYPES,
     Question,
     QuestionType,
     ValidatedQuestion,

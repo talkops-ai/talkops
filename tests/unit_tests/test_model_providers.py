@@ -1,6 +1,26 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TalkOps 22-provider model catalog, spec resolution, and reasoning effort."""
+from unittest.mock import MagicMock
 
 import pytest
+from textual.events import Click
+from textual.message import Message
+from textual.widgets import Input
+
+from talkops.exceptions import ModelConfigError
 from talkops.model.config import (
     NO_AUTH_REQUIRED_PROVIDERS,
     PROVIDER_API_KEY_ENV,
@@ -9,7 +29,6 @@ from talkops.model.config import (
     get_provider_display_name,
     resolve_model_spec,
 )
-from talkops.exceptions import ModelConfigError
 from talkops.model.factory import clear_model_cache, create_model
 from talkops.model.reasoning import (
     default_effort_for_model,
@@ -44,6 +63,7 @@ ALL_22_PROVIDERS = [
 
 
 def test_22_provider_catalog_completeness():
+    """Verify 22 provider catalog completeness."""
     for provider in ALL_22_PROVIDERS:
         assert (
             provider in PROVIDER_API_KEY_ENV or provider in NO_AUTH_REQUIRED_PROVIDERS
@@ -53,6 +73,7 @@ def test_22_provider_catalog_completeness():
 
 
 def test_resolve_model_spec():
+    """Verify resolve model spec."""
     assert resolve_model_spec("anthropic:claude-3-5-sonnet") == ("anthropic", "claude-3-5-sonnet")
     assert resolve_model_spec("openai:gpt-4o") == ("openai", "gpt-4o")
     assert resolve_model_spec("bedrock:anthropic.claude-3-7-sonnet-20250219-v1:0") == (
@@ -76,6 +97,7 @@ def test_resolve_model_spec():
 
 
 def test_detect_provider():
+    """Verify detect provider."""
     assert detect_provider("gpt-4o") == "openai"
     assert detect_provider("claude-3-7-sonnet") == "anthropic"
     assert detect_provider("gemini-3.8-flash") == "google_genai"
@@ -88,6 +110,7 @@ def test_detect_provider():
 
 def test_reasoning_effort_support():
     # OpenAI reasoning models
+    """Verify reasoning effort support."""
     assert is_effort_supported_for_model("openai:o3-mini", "high") is True
     assert is_effort_supported_for_model("openai:o3-mini", "medium") is True
     assert is_effort_supported_for_model("openai:gpt-4o", "high") is False
@@ -100,6 +123,7 @@ def test_reasoning_effort_support():
 
 
 def test_format_token_counts():
+    """Verify format token counts."""
     assert format_token_count(1_000_000) == "1M"
     assert format_token_count(128_000) == "128k"
     assert format_token_count(8_192) == "8.2k"
@@ -107,6 +131,7 @@ def test_format_token_counts():
 
 
 def test_create_model_missing_credentials(monkeypatch, tmp_path):
+    """Verify create model missing credentials."""
     from talkops.config import paths
     from talkops.config.settings import reset_settings_for_testing
     from talkops.model.factory import clear_model_cache
@@ -123,9 +148,9 @@ def test_create_model_missing_credentials(monkeypatch, tmp_path):
 
 
 def test_create_model_ollama_local(monkeypatch):
+    """Verify create model ollama local."""
     from talkops.exceptions import MissingProviderPackageError
     from talkops.model.factory import clear_model_cache
-    from unittest.mock import MagicMock
 
     clear_model_cache()
     # When package is missing, it raises MissingProviderPackageError; when present, it instantiates
@@ -147,6 +172,7 @@ def test_create_model_ollama_local(monkeypatch):
 
 
 def test_bedrock_model_detection_and_resolution():
+    """Verify bedrock model detection and resolution."""
     from talkops.model.config import is_bedrock_model_id, normalize_model_spec
 
     # Bare Bedrock IDs with version colons
@@ -179,6 +205,7 @@ def test_bedrock_model_detection_and_resolution():
 
 
 def test_bedrock_auth_status_and_kwargs(monkeypatch):
+    """Verify bedrock auth status and kwargs."""
     from talkops.model.config import ProviderAuthState, get_provider_auth_status
     from talkops.model.factory import _get_provider_kwargs
 
@@ -243,6 +270,7 @@ def test_no_default_model_or_provider_without_user_selection(monkeypatch):
 
 
 def test_unified_model_config_consistency():
+    """Verify unified model config consistency."""
     from talkops.model.config import (
         AVAILABLE_MODELS,
         DEFAULT_PROVIDER_PRIORITY,
@@ -264,15 +292,16 @@ def test_unified_model_config_consistency():
 
     # 3. get_curated_models_for_provider returns all curated models
     genai_curated = get_curated_models_for_provider("google_genai")
-    assert len(genai_curated) >= 12
+    assert len(genai_curated) >= 10
     model_ids = [m[0] for m in genai_curated]
     assert "gemini-3.8-flash" in model_ids
     assert "gemini-3.7-flash" in model_ids
     assert "gemini-3.6-flash" in model_ids
     assert "gemini-3.5-flash" in model_ids
     assert "gemini-3.5-flash-lite" in model_ids
+    assert not any(m_id.startswith("gemini-2.5") for m_id in model_ids)
 
-    # 4. get_available_models_list has curated models at the beginning
+    # 4. get_available_models_list has curated models at the beginning and excludes deprecated 2.5 series
     avail = get_available_models_list()
     avail_specs = [m[0] for m in avail]
     assert "google_genai:gemini-3.8-flash" in avail_specs
@@ -281,9 +310,11 @@ def test_unified_model_config_consistency():
     assert "google_vertexai:gemini-3.8-flash" in avail_specs
     assert "openrouter:google/gemini-3.8-flash" in avail_specs
     assert "litellm:gemini/gemini-3.8-flash" in avail_specs
+    assert not any(":gemini-2.5" in spec for spec in avail_specs)
 
 
 def test_model_selector_prioritizes_active_and_shows_all_curated_models():
+    """Verify model selector prioritizes active and shows all curated models."""
     from talkops.ui.widgets.model_selector import ModelSelectorScreen
 
     screen = ModelSelectorScreen(
@@ -308,7 +339,10 @@ def test_model_selector_prioritizes_active_and_shows_all_curated_models():
         groups.setdefault(prov, []).append((spec, name, prov))
 
     def _sort_key(prov: str):
-        from talkops.model.config import DEFAULT_PROVIDER_PRIORITY, get_provider_auth_status
+        from talkops.model.config import (
+            DEFAULT_PROVIDER_PRIORITY,
+            get_provider_auth_status,
+        )
         if prov == "dynamic":
             return (0, 0, prov)
         if screen._current_provider and prov == screen._current_provider:
@@ -325,6 +359,7 @@ def test_model_selector_prioritizes_active_and_shows_all_curated_models():
 
 
 def test_pool_selector_and_model_selector_model_consistency():
+    """Verify pool selector and model selector model consistency."""
     from talkops.model.config import get_curated_models_for_provider
     from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
@@ -338,6 +373,7 @@ def test_pool_selector_and_model_selector_model_consistency():
 
 
 def test_model_option_hover_and_in_place_selection():
+    """Verify model option hover and in place selection."""
     from talkops.ui.widgets.model_selector import ModelOption
 
     opt = ModelOption(
@@ -365,6 +401,7 @@ def test_model_option_hover_and_in_place_selection():
 
 
 def test_model_selector_smooth_navigation_and_jev_system1():
+    """Verify model selector smooth navigation and jev system1."""
     from talkops.ui.widgets.model_selector import ModelOption, ModelSelectorScreen
 
     screen = ModelSelectorScreen(
@@ -449,8 +486,6 @@ async def test_model_selector_dismiss_idempotency_and_auth_check(monkeypatch: py
 def test_model_option_multi_click_suppression(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify ModelOption ignores rapid multi-clicks (chain > 1)."""
     from talkops.ui.widgets.model_selector import ModelOption
-    from textual.events import Click
-    from textual.message import Message
 
     opt = ModelOption(
         label="  Gemini 3.6 Flash",
@@ -462,6 +497,7 @@ def test_model_option_multi_click_suppression(monkeypatch: pytest.MonkeyPatch) -
     posted: list[Message] = []
 
     def fake_post_message(message: Message) -> bool:
+        """Provide fake post message test helper or fixture."""
         posted.append(message)
         return True
 
@@ -541,7 +577,6 @@ async def test_model_selector_batch_mount_navigation_and_fuzzy_search():
     """Verify batch mount, wrap-around keyboard navigation, fuzzy search, and page navigation."""
     from talkops.ui.app import TalkOpsApp
     from talkops.ui.widgets.model_selector import ModelSelectorScreen
-    from textual.widgets import Input
 
     app = TalkOpsApp()
     async with app.run_test(headless=True) as pilot:
@@ -589,5 +624,363 @@ async def test_model_selector_batch_mount_navigation_and_fuzzy_search():
 
         # Resize refit
         screen._fit_model_list()
+
+
+def test_provider_aliases_canonicalization_and_storage(monkeypatch, tmp_path):
+    """Verify provider aliases canonicalize across config, spec resolution, and storage."""
+    from talkops.auth.storage import CompositeCredentialStorage
+    from talkops.model.config import (
+        ProviderAuthState,
+        canonicalize_provider,
+        get_base_url_env_var,
+        get_credential_env_var,
+        get_provider_auth_status,
+        normalize_model_spec,
+        resolve_model_spec,
+    )
+
+    assert canonicalize_provider("google") == "google_genai"
+    assert canonicalize_provider("gemini") == "google_genai"
+    assert canonicalize_provider("vertexai") == "google_vertexai"
+    assert canonicalize_provider("vertex") == "google_vertexai"
+    assert canonicalize_provider("mistral") == "mistralai"
+    assert canonicalize_provider("azure") == "azure_openai"
+    assert canonicalize_provider("watsonx") == "ibm"
+
+    assert get_credential_env_var("google") == "GOOGLE_API_KEY"
+    assert get_credential_env_var("mistral") == "MISTRAL_API_KEY"
+    assert get_base_url_env_var("azure_openai") == "AZURE_OPENAI_ENDPOINT"
+    assert get_base_url_env_var("ibm") == "WATSONX_URL"
+    assert get_base_url_env_var("ollama") == "OLLAMA_HOST"
+
+    assert resolve_model_spec("vertexai:gemini-2.5-pro") == ("google_vertexai", "gemini-2.5-pro")
+    assert normalize_model_spec("mistral:mistral-large-latest") == "mistralai:mistral-large-latest"
+
+    storage = CompositeCredentialStorage(
+        auth_file_path=tmp_path / "auth.json",
+        env_file_path=tmp_path / ".env",
+    )
+    monkeypatch.setattr("talkops.auth.storage.get_credential_storage", lambda: storage)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_BASE_URL", raising=False)
+
+    assert storage.set_provider_key(
+        "google",
+        "AIza-test-123456",
+        base_url="https://custom.gemini.internal",
+        sync_dotenv=True,
+    )
+    assert storage.get_provider_key("google_genai") == "AIza-test-123456"
+    assert storage.get_provider_key("google") == "AIza-test-123456"
+    status = get_provider_auth_status("google_genai")
+    assert status.state == ProviderAuthState.CONFIGURED
+
+
+def test_custom_providers_from_config_toml(monkeypatch, tmp_path):
+    """Verify [models.providers.<name>] in config.toml loads custom class_path, kwargs, and profile."""
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    from talkops.config import paths
+    from talkops.model.config import (
+        ModelConfig,
+        ProviderAuthState,
+        get_base_url_env_vars,
+        get_credential_env_var,
+        get_provider_auth_status,
+    )
+    from talkops.model.factory import clear_model_cache, create_model
+
+    class DummyCustomChatModel(BaseChatModel):
+        model_name: str = ""
+        base_url: str | None = None
+        api_key: str | None = None
+        custom_param: str | None = None
+
+        def __init__(self, model: str = "", **kwargs):
+            super().__init__(
+                model_name=model,
+                base_url=kwargs.get("base_url"),
+                api_key=kwargs.get("api_key"),
+                custom_param=kwargs.get("custom_param"),
+            )
+
+        @property
+        def _llm_type(self) -> str:
+            return "dummy_custom"
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="ok"))])
+
+    import sys
+    monkeypatch.setitem(sys.modules, "dummy_custom_provider_mod", MagicMock(DummyCustomChatModel=DummyCustomChatModel))
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        """
+[models.providers.custom_vllm]
+class_path = "dummy_custom_provider_mod:DummyCustomChatModel"
+base_url_env = "CUSTOM_VLLM_URL"
+base_url = "http://vllm.internal:8000/v1"
+api_key_env = "CUSTOM_VLLM_KEY"
+models = ["qwen-coder"]
+profile = { max_input_tokens = 65536 }
+
+[models.providers.custom_vllm.params]
+custom_param = "global_val"
+
+[models.providers.custom_vllm.params."qwen-coder"]
+custom_param = "per_model_val"
+
+[models.providers.local_llama_cpp]
+class_path = "dummy_custom_provider_mod:DummyCustomChatModel"
+base_url = "http://127.0.0.1:8080/v1"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(paths, "CONFIG_PATH", cfg_file)
+    monkeypatch.setattr("talkops.config.toml_config.CONFIG_PATH", cfg_file)
+    clear_model_cache()
+
+    cfg = ModelConfig.load()
+    assert "custom_vllm" in cfg.providers
+    assert get_credential_env_var("custom_vllm") == "CUSTOM_VLLM_KEY"
+    assert "CUSTOM_VLLM_URL" in get_base_url_env_vars("custom_vllm")
+
+    # Local class_path provider without api_key_env does not require credentials
+    local_status = get_provider_auth_status("local_llama_cpp")
+    assert local_status.state == ProviderAuthState.NOT_REQUIRED
+
+    # custom_vllm requires CUSTOM_VLLM_KEY
+    monkeypatch.delenv("CUSTOM_VLLM_KEY", raising=False)
+    assert get_provider_auth_status("custom_vllm").state == ProviderAuthState.MISSING
+    monkeypatch.setenv("CUSTOM_VLLM_KEY", "vllm-secret-token")
+    assert get_provider_auth_status("custom_vllm").state == ProviderAuthState.CONFIGURED
+
+    res = create_model("custom_vllm:qwen-coder")
+    assert res.provider == "custom_vllm"
+    assert res.model_name == "qwen-coder"
+    assert res.context_limit == 65536
+    assert getattr(res.model, "base_url", None) == "http://vllm.internal:8000/v1"
+    assert getattr(res.model, "api_key", None) == "vllm-secret-token"
+    assert getattr(res.model, "custom_param", None) == "per_model_val"
+    clear_model_cache()
+
+
+def test_provider_specific_kwargs_and_base_url_mapping(monkeypatch, tmp_path):
+    """Verify Cohere, Perplexity, IBM watsonx, Bedrock, LiteLLM, Vertex AI, and Ollama kwargs."""
+    from talkops.auth.storage import CompositeCredentialStorage
+    from talkops.model.config import ModelConfig, normalize_ollama_endpoint
+    from talkops.model.factory import _get_provider_kwargs, clear_model_cache, create_model
+
+    storage = CompositeCredentialStorage(
+        auth_file_path=tmp_path / "auth.json",
+        env_file_path=tmp_path / ".env",
+    )
+    monkeypatch.setattr("talkops.auth.storage.get_credential_storage", lambda: storage)
+
+    # 1. Cohere: cohere_api_key without duplicate api_key
+    monkeypatch.setenv("COHERE_API_KEY", "cohere-test-key")
+    cohere_kwargs = _get_provider_kwargs("cohere", model_name="command-a-03-2025")
+    assert cohere_kwargs.get("cohere_api_key") == "cohere-test-key"
+    assert "api_key" not in cohere_kwargs
+    clear_model_cache()
+    cohere_res = create_model("cohere:command-a-03-2025")
+    assert cohere_res.provider == "cohere"
+
+    # 2. Perplexity: pplx_api_key + PERPLEXITY_BASE_URL without api_key or base_url in kwargs
+    monkeypatch.setenv("PPLX_API_KEY", "pplx-test-key")
+    monkeypatch.setenv("PERPLEXITY_BASE_URL", "https://pplx.proxy.internal")
+    pplx_kwargs = _get_provider_kwargs("perplexity", model_name="sonar-pro")
+    assert pplx_kwargs.get("pplx_api_key") == "pplx-test-key"
+    assert "api_key" not in pplx_kwargs
+    assert "base_url" not in pplx_kwargs
+    clear_model_cache()
+    pplx_res = create_model("perplexity:sonar-pro")
+    assert pplx_res.provider == "perplexity"
+
+    # 3. IBM watsonx: apikey + url + project_id without api_key or base_url
+    monkeypatch.setenv("WATSONX_APIKEY", "wx-test-key")
+    monkeypatch.setenv("WATSONX_URL", "https://eu-de.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "proj-123")
+    ibm_kwargs = _get_provider_kwargs("ibm", model_name="ibm/granite-3-8b-instruct")
+    assert ibm_kwargs.get("apikey") == "wx-test-key"
+    assert ibm_kwargs.get("url") == "https://eu-de.ml.cloud.ibm.com"
+    assert ibm_kwargs.get("project_id") == "proj-123"
+    assert "api_key" not in ibm_kwargs
+    assert "base_url" not in ibm_kwargs
+
+    # 4. Bedrock: endpoint_url without base_url
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA_TEST")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "SECRET_TEST")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "https://vpce-bedrock.us-east-1.vpce.amazonaws.com")
+    bedrock_kwargs = _get_provider_kwargs("bedrock", model_name="us.anthropic.claude-sonnet-4-6-v1:0")
+    assert bedrock_kwargs.get("endpoint_url") == "https://vpce-bedrock.us-east-1.vpce.amazonaws.com"
+    assert "base_url" not in bedrock_kwargs
+
+    # 5. LiteLLM: api_base without base_url
+    monkeypatch.setenv("LITELLM_API_KEY", "litellm-test-key")
+    monkeypatch.setenv("LITELLM_API_BASE", "http://litellm.internal:4000")
+    litellm_kwargs = _get_provider_kwargs("litellm", model_name="gpt-4o")
+    assert litellm_kwargs.get("api_base") == "http://litellm.internal:4000"
+    assert "base_url" not in litellm_kwargs
+
+    # 6. Vertex AI: api_endpoint + GCP_PROJECT_ID + GCP_LOCATION
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    monkeypatch.setenv("GCP_PROJECT_ID", "my-gcp-proj")
+    monkeypatch.setenv("GCP_LOCATION", "europe-west4")
+    monkeypatch.setenv("VERTEXAI_API_ENDPOINT", "europe-west4-aiplatform.googleapis.com")
+    vertex_kwargs = _get_provider_kwargs("vertexai", model_name="gemini-2.5-pro")
+    assert vertex_kwargs.get("project") == "my-gcp-proj"
+    assert vertex_kwargs.get("location") == "europe-west4"
+    assert vertex_kwargs.get("api_endpoint") == "europe-west4-aiplatform.googleapis.com"
+    assert "base_url" not in vertex_kwargs
+
+    # 7. Ollama: OLLAMA_HOST normalization
+    assert normalize_ollama_endpoint("127.0.0.1:11434") == "http://127.0.0.1:11434"
+    assert normalize_ollama_endpoint("0.0.0.0:11434") == "http://localhost:11434"
+    assert normalize_ollama_endpoint("https://ollama.internal:11434/") == "https://ollama.internal:11434"
+    monkeypatch.setenv("OLLAMA_HOST", "0.0.0.0:11434")
+    assert ModelConfig.load().get_base_url("ollama") == "http://localhost:11434"
+
+
+def test_cerebras_and_sambanova_openai_compatible_routing(monkeypatch, tmp_path):
+    """Verify cerebras and sambanova resolve default base URLs and route through OpenAI-compatible init."""
+    from talkops.auth.storage import CompositeCredentialStorage
+    from talkops.model.factory import _get_provider_kwargs, clear_model_cache, create_model
+
+    storage = CompositeCredentialStorage(
+        auth_file_path=tmp_path / "auth.json",
+        env_file_path=tmp_path / ".env",
+    )
+    monkeypatch.setattr("talkops.auth.storage.get_credential_storage", lambda: storage)
+
+    monkeypatch.setenv("CEREBRAS_API_KEY", "csk-test-key")
+    monkeypatch.setenv("SAMBANOVA_API_KEY", "snova-test-key")
+
+    cb_kwargs = _get_provider_kwargs("cerebras", model_name="llama-3.3-70b")
+    assert cb_kwargs.get("base_url") == "https://api.cerebras.ai/v1"
+    assert cb_kwargs.get("api_key") == "csk-test-key"
+
+    sn_kwargs = _get_provider_kwargs("sambanova", model_name="Meta-Llama-3.3-70B-Instruct")
+    assert sn_kwargs.get("base_url") == "https://api.sambanova.ai/v1"
+    assert sn_kwargs.get("api_key") == "snova-test-key"
+
+    clear_model_cache()
+    cb_res = create_model("cerebras:llama-3.3-70b")
+    assert cb_res.provider == "cerebras"
+    sn_res = create_model("sambanova:Meta-Llama-3.3-70B-Instruct")
+    assert sn_res.provider == "sambanova"
+    clear_model_cache()
+
+
+def test_fireworks_and_vertexai_protobuf_coexistence():
+    """Verify langchain_fireworks and langchain_google_vertexai coexist without duplicate proto errors."""
+    import langchain_fireworks
+    from langchain_google_vertexai import ChatVertexAI
+    from langchain_google_vertexai.model_garden import ChatAnthropicVertex
+
+    assert langchain_fireworks is not None
+    assert ChatVertexAI is not None
+    assert ChatAnthropicVertex is not None
+
+
+def test_vertex_claude_models_under_google_anthropic_vertex_and_package_names():
+    """Verify Claude models are under google_anthropic_vertex and package names resolve accurately."""
+    from talkops.model.config import AVAILABLE_MODELS, provider_package_name
+
+    vertex_models = [m[0] for m in AVAILABLE_MODELS.get("google_vertexai", [])]
+    assert not any(m.startswith("claude-") for m in vertex_models)
+
+    anth_vertex_models = [m[0] for m in AVAILABLE_MODELS.get("google_anthropic_vertex", [])]
+    assert any(m.startswith("claude-") for m in anth_vertex_models)
+
+    assert provider_package_name("bedrock") == "langchain-aws"
+    assert provider_package_name("vertex") == "langchain-google-vertexai"
+    assert provider_package_name("google_vertexai") == "langchain-google-vertexai"
+    assert provider_package_name("nvidia") == "langchain-nvidia-ai-endpoints"
+    assert provider_package_name("cerebras") == "langchain-openai"
+    assert provider_package_name("sambanova") == "langchain-openai"
+
+
+def test_ollama_cross_provider_message_content_compatibility():
+    """Verify ChatOllama and sanitize_messages_for_model handle cross-provider thinking/reasoning blocks."""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    from talkops.middleware.unified_system_message import sanitize_messages_for_model
+    from talkops.model.factory import clear_model_cache, create_model
+
+    clear_model_cache()
+    ollama_res = create_model("ollama:qwen3.8:latest")
+    ollama_model = ollama_res.model
+
+    gemini_ai = AIMessage(
+        content=[
+            {"type": "thinking", "thinking": "Processing user greeting", "index": 0},
+            {"type": "text", "text": "Hello from Gemini", "index": 0, "extras": {"signature": "abc"}},
+        ],
+        response_metadata={"model_name": "gemini-3.5-flash", "model_provider": "google_genai"},
+    )
+    anthropic_ai = AIMessage(
+        content=[
+            {"type": "thinking", "thinking": "Claude thought", "signature": "sig123"},
+            {"type": "redacted_thinking", "data": "enc123"},
+            {"type": "text", "text": "Hello from Claude"},
+        ],
+        response_metadata={"model_name": "claude-sonnet-4-6", "model_provider": "anthropic"},
+    )
+    openai_ai = AIMessage(
+        content=[
+            {"type": "reasoning", "id": "rs_123", "summary": [{"type": "summary_text", "text": "OpenAI thought"}]},
+            {"type": "text", "text": "Hello from OpenAI", "annotations": []},
+        ],
+        response_metadata={"model_name": "gpt-5.4", "model_provider": "openai"},
+    )
+
+    msgs = [
+        SystemMessage(content=[{"type": "text", "text": "You are TalkOps."}]),
+        HumanMessage(content="who are you"),
+        gemini_ai,
+        HumanMessage(content="And Claude?"),
+        anthropic_ai,
+        HumanMessage(content="And OpenAI?"),
+        openai_ai,
+        HumanMessage(content="hi"),
+    ]
+
+    # 1. Direct ChatOllama._convert_messages_to_ollama_messages must not raise ValueError
+    ollama_msgs = ollama_model._convert_messages_to_ollama_messages(msgs)
+    assert len(ollama_msgs) == 8
+    assert "Hello from Gemini" in ollama_msgs[2]["content"]
+    assert "Hello from Claude" in ollama_msgs[4]["content"]
+    assert "Hello from OpenAI" in ollama_msgs[6]["content"]
+
+    # 2. Middleware sanitize_messages_for_model collapses cross-provider blocks cleanly
+    sanitized = sanitize_messages_for_model(msgs, ollama_model)
+    assert sanitized is not None
+    assert isinstance(sanitized[0].content, str)
+    assert sanitized[2].content == "Hello from Gemini"
+    assert sanitized[4].content == "Hello from Claude"
+    assert sanitized[6].content == "Hello from OpenAI"
+
+
+def test_ollama_available_models_list_only_shows_installed(monkeypatch):
+    """Verify get_available_models_list only shows installed Ollama models, not uninstalled static catalog entries."""
+    from talkops.model.config import get_available_models_list
+
+    monkeypatch.setattr(
+        "talkops.model.config._fetch_ollama_installed_models",
+        lambda _endpoint=None: ["llama3.2:latest", "qwen3.8:latest"],
+    )
+    avail = get_available_models_list()
+    ollama_entries = [m for m in avail if m[2] == "ollama"]
+    ollama_specs = [m[0] for m in ollama_entries]
+    assert ollama_specs == ["ollama:llama3.2:latest", "ollama:qwen3.8:latest"]
+    assert all("(installed)" in m[1] for m in ollama_entries)
+
+
 
 

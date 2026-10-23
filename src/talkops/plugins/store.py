@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """State storage for TalkOps plugin marketplaces, installs, and enablement."""
 
 from __future__ import annotations
@@ -7,19 +21,19 @@ import os
 import shutil
 import tempfile
 from contextlib import contextmanager, suppress
+from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Never, cast
 
-from talkops.utils.logger import get_logger
-
 from talkops.plugins.models import (
-    InstallScope,
     InstalledPluginEntry,
+    InstallScope,
     MarketplaceRecord,
     MarketplaceSourceType,
     split_plugin_id,
 )
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -272,7 +286,6 @@ def load_marketplace_records(
             cwd = Path.cwd()
             if (
                 (cwd / ".talkops").is_dir()
-                or (cwd / ".opscode").is_dir()
                 or (cwd / ".claude-plugin").is_dir()
                 or (cwd / "marketplace.json").is_file()
             ):
@@ -289,7 +302,6 @@ def load_marketplace_records(
 
             manifest_path = (
                 find_marketplace_manifest(target_root / ".talkops")
-                or find_marketplace_manifest(target_root / ".opscode")
                 or find_marketplace_manifest(target_root)
             )
             if manifest_path is not None:
@@ -412,29 +424,68 @@ def _load_settings_disabled_plugins(path: Path) -> frozenset[str]:
     return frozenset(k for k, v in m.items() if v is False)
 
 
-def load_all_disabled_plugin_ids(
+def _load_workspace_manifest_exclusions(project_root: Path) -> frozenset[str]:
+    """Read ``exclude`` entries from ``.talkops/plugins.json`` and ``.agents/plugins.json``."""
+    excluded: set[str] = set()
+    for dot_dir in (".talkops", ".agents"):
+        manifest_file = project_root / dot_dir / "plugins.json"
+        if not manifest_file.is_file():
+            continue
+        try:
+            data = json.loads(manifest_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        raw_exclude = data.get("exclude")
+        if isinstance(raw_exclude, list):
+            for item in raw_exclude:
+                if isinstance(item, str) and item.strip():
+                    excluded.add(item.strip())
+    return frozenset(excluded)
+
+
+def _load_merged_enabled_plugins_map(
     project_root: Path | None = None,
-) -> frozenset[str]:
-    """Merged union of user + project + local explicitly disabled plugin ids."""
+) -> dict[str, bool]:
+    """Return merged ``enabledPlugins`` map with scope precedence: user < project < local."""
     from talkops.config.settings import settings
 
     effective_root = (
         project_root if isinstance(project_root, Path) else settings.effective_project_root
     )
-    result = set(_load_settings_disabled_plugins(_user_settings_path()))
+    merged = dict(_load_settings_enabled_plugins_map(_user_settings_path()))
     if isinstance(effective_root, Path):
         from talkops.config.paths import (
             project_local_settings_path,
             project_settings_path,
         )
 
-        result |= set(
-            _load_settings_disabled_plugins(project_settings_path(effective_root))
+        merged.update(
+            _load_settings_enabled_plugins_map(project_settings_path(effective_root))
         )
-        result |= set(
-            _load_settings_disabled_plugins(project_local_settings_path(effective_root))
+        merged.update(
+            _load_settings_enabled_plugins_map(
+                project_local_settings_path(effective_root)
+            )
         )
-    return frozenset(result)
+        excluded = _load_workspace_manifest_exclusions(effective_root)
+        if excluded:
+            for key in list(merged):
+                bare = key.partition("@")[0]
+                if key in excluded or bare in excluded:
+                    merged[key] = False
+            for ex in excluded:
+                merged[ex] = False
+    return merged
+
+
+def load_all_disabled_plugin_ids(
+    project_root: Path | None = None,
+) -> frozenset[str]:
+    """Effective disabled plugin ids across user < project < local scopes and workspace exclusions."""
+    merged = _load_merged_enabled_plugins_map(project_root=project_root)
+    return frozenset(k for k, v in merged.items() if v is False)
 
 
 def _write_settings_enabled_plugins(path: Path, enabled_ids: set[str]) -> None:
@@ -516,17 +567,9 @@ def load_local_enabled_plugin_ids(project_root: Path) -> frozenset[str]:
 def load_all_enabled_plugin_ids(
     project_root: Path | None = None,
 ) -> frozenset[str]:
-    """Merged union of user + project + local enabled plugin ids."""
-    from talkops.config.settings import settings
-
-    effective_root = (
-        project_root if isinstance(project_root, Path) else settings.effective_project_root
-    )
-    result = set(load_user_enabled_plugin_ids())
-    if isinstance(effective_root, Path):
-        result |= load_project_enabled_plugin_ids(effective_root)
-        result |= load_local_enabled_plugin_ids(effective_root)
-    return frozenset(result)
+    """Effective enabled plugin ids with scope precedence: user < project < local."""
+    merged = _load_merged_enabled_plugins_map(project_root=project_root)
+    return frozenset(k for k, v in merged.items() if v is True)
 
 
 def load_enabled_plugin_ids(*, strict: bool = False) -> frozenset[str]:
@@ -696,33 +739,57 @@ def load_installed_plugins(
     *,
     strict: bool = False,
     project_root: Path | None = None,
+    include_foreign_projects: bool = True,
 ) -> dict[str, InstalledPluginEntry]:
-    """Load installed plugin records (first entry per plugin, backward-compat).
+    """Load installed plugin records (first matching entry per plugin, backward-compat).
 
     If project_root is provided, entries matching that workspace or user scope are prioritized.
+    When include_foreign_projects is False, project/local entries belonging to other
+    workspaces are excluded.
     """
+    from talkops.config.settings import settings
+
+    effective_root = (
+        project_root
+        if isinstance(project_root, Path)
+        else (
+            settings.effective_project_root
+            if not include_foreign_projects and isinstance(settings.effective_project_root, Path)
+            else None
+        )
+    )
     all_entries = load_installed_plugin_entries(strict=strict)
     result: dict[str, InstalledPluginEntry] = {}
     for plugin_id, entries in all_entries.items():
         if not entries:
             continue
         primary: InstalledPluginEntry | None = None
-        if project_root is not None:
+        if effective_root is not None:
             for e in entries:
-                if e.project_path and (
-                    e.project_path == str(project_root)
-                    or Path(e.project_path).resolve() == project_root.resolve()
-                ):
-                    primary = e
-                    break
+                if e.project_path:
+                    try:
+                        if (
+                            e.project_path == str(effective_root)
+                            or Path(e.project_path).resolve() == effective_root.resolve()
+                        ):
+                            primary = e
+                            break
+                    except (OSError, RuntimeError):
+                        pass
             if primary is None:
                 for e in entries:
                     if e.scope in {"user", "global"}:
                         primary = e
                         break
-        if primary is None:
+        elif not include_foreign_projects:
+            for e in entries:
+                if e.scope in {"user", "global"}:
+                    primary = e
+                    break
+        if primary is None and include_foreign_projects:
             primary = entries[0]
-        result[plugin_id] = primary
+        if primary is not None:
+            result[plugin_id] = primary
     return result
 
 
@@ -772,8 +839,6 @@ def _write_installed_plugins(
 
 def _now_iso() -> str:
     """Return current UTC timestamp in ISO 8601 format."""
-    from datetime import datetime, timezone
-
     return (
         datetime.now(timezone.utc)
         .isoformat(timespec="milliseconds")
@@ -885,7 +950,7 @@ def remove_installed_plugin(
                     break
 
         # Fallback 2: if there's only one entry or scope was generic, remove it rather than no-op
-        if removed is None and remaining:
+        if removed is None and len(remaining) == 1:
             removed = remaining.pop(0)
 
         if remaining:
@@ -1001,6 +1066,18 @@ def uninstall_plugin(
 
     if removed is None:
         scope_detail = f" (scope={scope!r})" if scope else ""
+        bare_name = plugin_id.partition("@")[0]
+        if isinstance(effective_root, Path):
+            for rel_dir in (
+                effective_root / ".talkops" / "plugins" / bare_name,
+                effective_root / ".agents" / "plugins" / bare_name,
+                effective_root / "plugins" / bare_name,
+            ):
+                if rel_dir.is_dir():
+                    raise PluginNotFoundError(
+                        f"Plugin {plugin_id!r} is not installed{scope_detail}; "
+                        f"it is registered at {rel_dir}, so remove or disable it there instead"
+                    )
         raise PluginNotFoundError(f"Plugin {plugin_id!r} is not installed{scope_detail}")
 
     entry_scope = removed.scope
@@ -1071,6 +1148,12 @@ def uninstall_plugin(
         path = Path(removed.install_path)
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
+
+    if not has_remaining_installs:
+        with suppress(OSError):
+            data_path = plugin_data_dir(target_id)
+            if data_path.is_dir():
+                shutil.rmtree(data_path, ignore_errors=True)
 
     with suppress(Exception):
         SkillRegistry.get_instance().discover_skills(force=True)

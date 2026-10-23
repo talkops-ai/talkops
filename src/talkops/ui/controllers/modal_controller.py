@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Modal screens, selector workflows, approval-mode switching, and skill/agent session controller."""
 
 from __future__ import annotations
@@ -44,6 +58,7 @@ class ModalController:
     """Manages modal selectors, model/cloud/theme/effort switching, and skill/agent persona sessions."""
 
     def __init__(self, app: TalkOpsApp) -> None:
+        """Initialize ModalController."""
         self._app = app
 
     # ── Approval Mode & Model Restoration ────────────────
@@ -87,6 +102,7 @@ class ModalController:
             return False
 
     async def set_approval_mode(self, target: ApprovalMode) -> bool:
+        """Set approval mode."""
         app = self._app
         agent_obj = getattr(app, "_client", None) or getattr(app, "_agent", None)
         should_persist = (
@@ -117,7 +133,16 @@ class ModalController:
             app.notify("Switched to Auto mode (Classic LLM).", severity="information", timeout=3)
             app._notify_auto_mode_enabled_once()
         elif target is ApprovalMode.SMART:
-            app.notify("Switched to Smart mode (Jev System 1 Protected).", severity="information", timeout=3)
+            from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
+
+            if JevDynamicModelRouterMiddleware().is_available():
+                app.notify("Switched to Smart mode (Jev System 1 Protected).", severity="information", timeout=3)
+            else:
+                app.notify(
+                    "Switched to Smart mode, but TYPESAFE_API_KEY is not configured — dynamic pool routing is disabled (use /auth to set TypeSafe AI key).",
+                    severity="warning",
+                    timeout=6,
+                )
         elif target is ApprovalMode.MANUAL:
             app.notify("Switched to Manual approval mode.", severity="information", timeout=3)
         return True
@@ -164,7 +189,10 @@ class ModalController:
         """Restore active model and status bar to default model when exiting smart mode."""
         from talkops.config.settings import get_settings
         from talkops.config.toml_config import load_effort_for_model
-        from talkops.model.config import apply_stored_credentials, resolve_model_context_limit
+        from talkops.model.config import (
+            apply_stored_credentials,
+            resolve_model_context_limit,
+        )
         from talkops.model.reasoning import default_effort_for_model
         from talkops.ui.app import _split_model_spec
 
@@ -180,8 +208,6 @@ class ModalController:
 
         os.environ["TALKOPS_SERVER_MODEL"] = default_spec
         os.environ["TALKOPS_MODEL_NAME"] = default_spec
-        os.environ["OPSCODE_SERVER_MODEL"] = default_spec
-        os.environ["OPSCODE_MODEL_NAME"] = default_spec
 
         app._model = default_spec
         app._manual_model = default_spec
@@ -204,10 +230,8 @@ class ModalController:
 
         if eff_val:
             os.environ["TALKOPS_REASONING_EFFORT"] = eff_val
-            os.environ["OPSCODE_REASONING_EFFORT"] = eff_val
         else:
             os.environ.pop("TALKOPS_REASONING_EFFORT", None)
-            os.environ.pop("OPSCODE_REASONING_EFFORT", None)
 
         ctx_limit = resolve_model_context_limit(default_spec)
         if ctx_limit and settings_obj is not None:
@@ -234,6 +258,7 @@ class ModalController:
         return True
 
     def notify_auto_mode_enabled_once(self) -> None:
+        """Execute notify auto mode enabled once on ModalController."""
         from talkops.approval_mode import has_auto_mode_notice, save_auto_mode_notice
         from talkops.ui.widgets.auto_mode_notice import AutoModeNoticeScreen
 
@@ -242,6 +267,7 @@ class ModalController:
             return
 
         def handle_result(accepted: bool | None) -> None:
+            """Handle result."""
             app._auto_mode_notice_pending = False
             if accepted is True:
                 save_auto_mode_notice()
@@ -371,10 +397,12 @@ class ModalController:
         app = self._app
 
         def handle_result(_: None) -> None:
+            """Handle result."""
             if app._chat_input:
                 app._chat_input.focus_input()
 
         def persist_clear(cursor: int) -> None:
+            """Execute persist clear."""
             app._debug_console_cleared_upto = cursor
 
         app.push_screen(
@@ -390,6 +418,7 @@ class ModalController:
         )
 
     def persist_debug_console_click_to_copy(self, enabled: bool) -> None:
+        """Execute persist debug console click to copy on ModalController."""
         self._app._debug_console_click_to_copy = enabled
 
     def build_debug_snapshot(self) -> list[Any]:
@@ -423,7 +452,10 @@ class ModalController:
             if path:
                 return str(path)
             try:
-                from talkops.utils.logger import get_active_log_file, resolve_log_to_file
+                from talkops.utils.logger import (
+                    get_active_log_file,
+                    resolve_log_to_file,
+                )
 
                 if resolve_log_to_file():
                     active_file = get_active_log_file()
@@ -450,6 +482,7 @@ class ModalController:
         app = self._app
 
         def handle_result(result: str | None) -> None:
+            """Handle result."""
             if result is not None and result in get_registry():
                 app.theme = result
                 save_theme_preference(result)
@@ -595,7 +628,10 @@ class ModalController:
 
     async def switch_cloud_profile(self, profile: str, region: str | None = None) -> None:
         """Switch the active AWS profile and persist across sessions."""
-        from talkops.config.cloud_profiles import get_active_aws_region, set_active_aws_profile
+        from talkops.config.cloud_profiles import (
+            get_active_aws_region,
+            set_active_aws_profile,
+        )
 
         app = self._app
         set_active_aws_profile(profile, region=region, persist=True)
@@ -697,12 +733,14 @@ class ModalController:
 
     async def install_extra_then_switch(self, extra: str, spec: str, effort: str | None = None) -> None:
         """Install provider package extra, then check auth and switch model."""
+        from talkops.model.config import provider_package_name
+
         app = self._app
         await app._mount_message(
             SystemMessage(f"Installing '{extra}' integration package...")
         )
 
-        pkg_name = f"langchain-{extra}"
+        pkg_name = provider_package_name(extra)
         install_ok = False
         try:
             def _run_install() -> subprocess.CompletedProcess[str]:
@@ -759,13 +797,19 @@ class ModalController:
     async def prompt_model_auth_if_needed(self, spec: str) -> bool:
         """Prompt for missing credentials before switching to a model."""
         from talkops.model.config import (
+            canonicalize_provider,
             get_credential_env_var,
             get_provider_auth_status,
+            resolve_model_spec,
         )
         from talkops.ui.widgets.auth import AuthPromptScreen, AuthResult
 
         app = self._app
-        provider = spec.split(":", 1)[0] if ":" in spec else "openai"
+        try:
+            resolved_prov, _ = resolve_model_spec(spec)
+            provider = resolved_prov or (canonicalize_provider(spec.split(":", 1)[0]) if ":" in spec else "openai")
+        except Exception:
+            provider = canonicalize_provider(spec.split(":", 1)[0]) if ":" in spec else "openai"
         status = get_provider_auth_status(provider)
         if status.as_legacy_bool():
             return True
@@ -804,19 +848,21 @@ class ModalController:
         if not auth_ok:
             return
 
-        await app._finalize_model_switch(spec)
+        await app._finalize_model_switch(spec, effort=effort)
 
     async def finalize_model_switch(self, spec: str, effort: str | None = None) -> None:
         """Perform the actual model switch and persist to recents."""
-        from talkops.model.config import apply_stored_credentials, resolve_model_context_limit, save_recent_model
+        from talkops.model.config import (
+            apply_stored_credentials,
+            resolve_model_context_limit,
+            save_recent_model,
+        )
         from talkops.ui.app import _split_model_spec
 
         app = self._app
         if spec in ("auto", "dynamic"):
             os.environ["TALKOPS_SERVER_MODEL"] = spec
             os.environ["TALKOPS_MODEL_NAME"] = spec
-            os.environ["OPSCODE_SERVER_MODEL"] = spec
-            os.environ["OPSCODE_MODEL_NAME"] = spec
             app._model = spec
             settings_obj = getattr(app, "settings", None)
             if settings_obj:
@@ -839,8 +885,6 @@ class ModalController:
 
         os.environ["TALKOPS_SERVER_MODEL"] = spec
         os.environ["TALKOPS_MODEL_NAME"] = spec
-        os.environ["OPSCODE_SERVER_MODEL"] = spec
-        os.environ["OPSCODE_MODEL_NAME"] = spec
         app._model = spec
         if getattr(app, "_approval_mode", ApprovalMode.MANUAL) is not ApprovalMode.SMART:
             app._manual_model = spec
@@ -854,7 +898,6 @@ class ModalController:
         if effort is not None:
             app._reasoning_effort = effort
             os.environ["TALKOPS_REASONING_EFFORT"] = effort
-            os.environ["OPSCODE_REASONING_EFFORT"] = effort
             if settings_obj:
                 settings_obj.reasoning_effort = effort
 
@@ -971,7 +1014,17 @@ class ModalController:
             for p in provs:
                 apply_stored_credentials(p)
 
-            app.notify("Agent model pool saved to config.toml", severity="information")
+            from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
+
+            jev_available = JevDynamicModelRouterMiddleware().is_available()
+            if jev_available:
+                app.notify("Agent model pool saved to config.toml", severity="information")
+            else:
+                app.notify(
+                    "Agent model pool saved, but TYPESAFE_API_KEY is not configured — configure it via /auth for Smart mode routing.",
+                    severity="warning",
+                    timeout=6,
+                )
             msg = (
                 f"**Agent Model Pool Saved (`config.toml [agent_pool]`):**\n"
                 f"• **Fast (Tier 0):** `{fast}`\n"
@@ -979,6 +1032,11 @@ class ModalController:
                 f"• **Powerful (Tier 2):** `{pow_m}`\n"
                 f"In smart mode, Jev dynamically routes requests across these pool models."
             )
+            if not jev_available:
+                msg += (
+                    "\n⚠ **Note:** `TYPESAFE_API_KEY` is not configured. "
+                    "Configure it via `/auth` (TypeSafe AI) or `export TYPESAFE_API_KEY=...` to activate Smart mode routing."
+                )
             app.run_worker(app._mount_message(SystemMessage(msg)))
             app._schedule_reload()
 
@@ -994,7 +1052,7 @@ class ModalController:
 
         if effort.lower() in {"clear", "reset"}:
             app._reasoning_effort = None
-            os.environ.pop("OPSCODE_REASONING_EFFORT", None)
+            os.environ.pop("TALKOPS_REASONING_EFFORT", None)
             settings_obj = getattr(app, "settings", None)
             if settings_obj:
                 settings_obj.reasoning_effort = None
@@ -1010,7 +1068,7 @@ class ModalController:
             return
 
         app._reasoning_effort = effort
-        os.environ["OPSCODE_REASONING_EFFORT"] = effort
+        os.environ["TALKOPS_REASONING_EFFORT"] = effort
         settings_obj = getattr(app, "settings", None)
         if settings_obj:
             settings_obj.reasoning_effort = effort
@@ -1049,7 +1107,10 @@ class ModalController:
         is_plugin_picker = bool(agent_names)
 
         if not agent_names:
-            from talkops.agent.config import get_available_agent_names, load_default_agent
+            from talkops.agent.config import (
+                get_available_agent_names,
+                load_default_agent,
+            )
             agent_names = get_available_agent_names()
             default_agent = load_default_agent()
         else:
@@ -1109,6 +1170,8 @@ class ModalController:
             messages.clear()
         except NoMatches:
             pass
+        if hasattr(app, "_ensure_welcome_banner"):
+            app._ensure_welcome_banner()
 
         app._agent_thread_id = str(uuid.uuid4())
         bind_logging_to_thread(app._agent_thread_id)
@@ -1182,12 +1245,14 @@ class ModalController:
             baseline = None
 
         async def check_changes() -> bool | None:
+            """Check changes."""
             if baseline is None:
                 return None
             baseline_enabled, baseline_meta = baseline
             return await app._check_plugin_manager_changes(baseline_enabled, baseline_meta)
 
         def on_close(result: PluginManagerResult) -> None:
+            """Handle close events."""
             if result in ("reload", "later"):
                 app._schedule_reload()
             elif result == "check_failed":

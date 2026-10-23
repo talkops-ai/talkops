@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive permissions manager modal screen for /permissions.
 
 Full-screen modal with a tabbed interface for permission management.
@@ -10,23 +24,22 @@ ConfigManagerScreen, ThreadSelectorScreen).
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 import time
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual import events
 from textual.binding import Binding, BindingType
-from textual.content import Content
 from textual.containers import Container, Horizontal, Vertical
+from textual.content import Content
 from textual.widgets import Button, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
 from talkops.config.settings import get_glyphs
 from talkops.ui.permission_store import (
     PERMISSION_MODES,
+    VALID_SCOPES,
     PermissionRule,
     PermissionStore,
-    VALID_SCOPES,
     save_permission_store,
 )
 from talkops.ui.widgets.modal_base import (
@@ -35,6 +48,7 @@ from talkops.ui.widgets.modal_base import (
     PillTabs,
     format_modal_option_row,
 )
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -115,7 +129,7 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
     PermissionsManagerScreen OptionList#perm-options {
         height: 1fr;
         min-height: 5;
-        background: $background;
+        background: transparent;
         border: solid $primary 20%;
     }
 
@@ -137,6 +151,7 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
     """
 
     def __init__(self, store: PermissionStore, **kwargs: Any) -> None:
+        """Initialize PermissionsManagerScreen."""
         super().__init__(**kwargs)
         self._store = store
         self._active_tab = "permissions"
@@ -145,6 +160,7 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
     # ── Compose ──────────────────────────────────────────
 
     def compose_modal(self):
+        """Execute compose modal on PermissionsManagerScreen."""
         yield Static("Permissions", classes="perm-title")
         yield PillTabs(
             tabs=[(tab_id, label) for label, tab_id in _TABS],
@@ -177,6 +193,7 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
         )
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         glyphs = get_glyphs()
         self.set_modal_title("Permissions Manager", counter=f"mode: {self._store.mode}")
@@ -197,6 +214,7 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
             pass
 
     def on_pill_tabs_tab_changed(self, event: PillTabs.TabChanged) -> None:
+        """Handle pill tabs tab changed events."""
         self._active_tab = event.tab_id
         self._render_tab_content()
 
@@ -245,11 +263,13 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
     # ── Tab navigation ───────────────────────────────────
 
     def action_prev_tab(self) -> None:
+        """Execute the prev tab action."""
         idx = next((i for i, (_, tid) in enumerate(_TABS) if tid == self._active_tab), 0)
         new_idx = (idx - 1) % len(_TABS)
         self._switch_tab(_TABS[new_idx][1])
 
     def action_next_tab(self) -> None:
+        """Execute the next tab action."""
         idx = next((i for i, (_, tid) in enumerate(_TABS) if tid == self._active_tab), 0)
         new_idx = (idx + 1) % len(_TABS)
         self._switch_tab(_TABS[new_idx][1])
@@ -267,6 +287,7 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
     # ── Search ───────────────────────────────────────────
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changed events."""
         if event.input.id == "perm-search-input":
             self._search_query = event.value.strip().lower()
             self._render_tab_content()
@@ -274,6 +295,7 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
     # ── Content rendering ────────────────────────────────
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         width = self._option_content_width("#perm-options", fallback=82)
         if width != getattr(self, "_last_row_width", None):
             self._last_row_width = width
@@ -447,12 +469,15 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
     # ── Actions ──────────────────────────────────────────
 
     def action_cursor_up(self) -> None:
+        """Execute the cursor up action."""
         self.query_one("#perm-options", OptionList).action_cursor_up()
 
     def action_cursor_down(self) -> None:
+        """Execute the cursor down action."""
         self.query_one("#perm-options", OptionList).action_cursor_down()
 
     def action_select_item(self) -> None:
+        """Execute the select item action."""
         option_list = self.query_one("#perm-options", OptionList)
         if option_list.highlighted is None:
             return
@@ -539,6 +564,7 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
         self.app.notify(f"Permission mode: {new_mode}", severity="information")
 
     def action_close(self) -> None:
+        """Execute the close action."""
         self._persist()
         self.dismiss(None)
 
@@ -637,10 +663,12 @@ class _AddRuleScreen(OpsModalScreen[tuple[str, str] | None]):
     """
 
     def __init__(self, category: str, **kwargs: Any) -> None:
+        """Initialize _AddRuleScreen."""
         super().__init__(**kwargs)
         self._category = category
 
     def compose_modal(self):
+        """Execute compose modal on _AddRuleScreen."""
         cat_display = self._category.title()
         yield Static(f"Add {cat_display} Rule", classes="add-rule-title")
         yield Static(
@@ -657,6 +685,7 @@ class _AddRuleScreen(OpsModalScreen[tuple[str, str] | None]):
             yield Button("Cancel", variant="default", id="btn-cancel-rule")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         cat_display = self._category.title()
         self.set_modal_title(f"Add {cat_display} Rule")
@@ -670,6 +699,7 @@ class _AddRuleScreen(OpsModalScreen[tuple[str, str] | None]):
             pass
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button pressed events."""
         if event.button.id == "btn-add-rule":
             pattern = self.query_one("#add-rule-input", Input).value.strip()
             if pattern:
@@ -680,12 +710,14 @@ class _AddRuleScreen(OpsModalScreen[tuple[str, str] | None]):
             self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle input submitted events."""
         if event.input.id == "add-rule-input":
             pattern = event.value.strip()
             if pattern:
                 self.dismiss((self._category, pattern))
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(None)
 
 

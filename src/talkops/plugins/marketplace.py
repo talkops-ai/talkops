@@ -1,22 +1,36 @@
-"""Marketplace parsing and materialization for K8s Autopilot."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Marketplace parsing and materialization for TalkOps."""
 
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable
 import hashlib
-from http.client import HTTPMessage
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
-from typing import IO, TYPE_CHECKING
 import urllib.error
-from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 import urllib.request
+from collections.abc import Callable
+from http.client import HTTPMessage
+from pathlib import Path
+from typing import IO, TYPE_CHECKING
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 if TYPE_CHECKING:
     from talkops.config.plugins import DefaultMarketplaceConfig
@@ -45,9 +59,9 @@ logger = get_logger(__name__)
 
 _MARKETPLACE_RELATIVE_PATHS = (
     Path(".claude-plugin") / "marketplace.json",
-    Path(".opscode-plugin") / "marketplace.json",
-    Path(".opscode") / ".opscode-plugin" / "marketplace.json",
-    Path(".opscode") / "plugins" / "marketplace.json",
+    Path(".talkops-plugin") / "marketplace.json",
+    Path(".talkops") / ".talkops-plugin" / "marketplace.json",
+    Path(".talkops") / "plugins" / "marketplace.json",
     Path(".agents") / "plugins" / "marketplace.json",
     Path("marketplace.json"),
 )

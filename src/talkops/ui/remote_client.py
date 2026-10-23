@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Remote agent client — wrapper around LangGraph's RemoteGraph.
 
 Delegates streaming, state management, and SSE handling to
@@ -8,15 +22,21 @@ LangChain message objects for TextualAdapter.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
 import os
+import uuid
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import httpx
+from langchain_core.messages import (
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
 
 from talkops.utils.logger import get_logger
-
-from dataclasses import dataclass, field
 
 logger = get_logger(__name__)
 
@@ -42,14 +62,11 @@ def normalize_thread_id(thread_id: str | None) -> str:
     a valid UUIDv5.
     """
     if not thread_id:
-        import uuid
         return str(uuid.uuid4())
     try:
-        import uuid
         uuid.UUID(thread_id)
         return thread_id
     except ValueError:
-        import uuid
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, thread_id))
 
 
@@ -62,6 +79,7 @@ def _require_thread_id(config: Mapping[str, Any] | None) -> str:
 
 
 def agent_error_type(exc: BaseException) -> str:
+    """Execute agent error type."""
     payload = exc.args[0] if exc.args else None
     if isinstance(payload, dict):
         err_type = payload.get("error")
@@ -71,6 +89,7 @@ def agent_error_type(exc: BaseException) -> str:
 
 
 def format_agent_exception(exc: BaseException) -> str:
+    """Format agent exception."""
     payload = exc.args[0] if exc.args else None
     if isinstance(payload, dict):
         err_type = agent_error_type(exc)
@@ -129,6 +148,7 @@ class RemoteAgent:
         user_id: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
+        """Initialize RemoteAgent."""
         from talkops.state.remote_session import build_remote_auth_headers
 
         self._url = url.rstrip("/")
@@ -188,8 +208,8 @@ class RemoteAgent:
 
     def _get_graph(self) -> Any:
         if self._graph is None:
-            from langgraph_sdk import get_client
             from langgraph.pregel.remote import RemoteGraph
+            from langgraph_sdk import get_client
 
             # Timeout tuple conforming to langgraph_sdk.client.TimeoutTypes:
             # (connect, read, write, pool) in seconds
@@ -216,8 +236,7 @@ class RemoteAgent:
         context: Any | None = None,
         durability: str | None = None,
     ) -> AsyncIterator[tuple[tuple[str, ...], str, Any]]:
-        from langchain_core.messages import BaseMessage
-
+        """Execute astream on RemoteAgent."""
         _require_thread_id(config)
         await self._ensure_auth_token()
 
@@ -332,6 +351,7 @@ class RemoteAgent:
             logger.warning("Dropped %d message(s) during stream due to conversion failures", dropped_count)
 
     async def aget_state(self, config: dict[str, Any]) -> Any:
+        """Execute aget state on RemoteAgent."""
         from langgraph_sdk.errors import NotFoundError
 
         thread_id = _require_thread_id(config)
@@ -539,7 +559,14 @@ class RemoteAgent:
                 graph_id=self._graph_name,
             )
             return str(thread_id)
-        except Exception:
+        except Exception as exc:
+            if (
+                getattr(exc, "status_code", None) == 409
+                or type(exc).__name__ == "ConflictError"
+                or "already exists" in str(exc).lower()
+            ):
+                logger.debug("Thread %s already exists on remote server", thread_id)
+                return str(thread_id)
             logger.warning(
                 "Failed to ensure thread %s exists on remote server",
                 thread_id,
@@ -645,7 +672,13 @@ class RemoteAgent:
         3. Always deletes the temporary thread in ``finally:`` via
            ``client.threads.delete(temp_thread_id)``.
         """
-        from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
+        from langchain_core.messages import (
+            AIMessage,
+            AIMessageChunk,
+            BaseMessage,
+            HumanMessage,
+        )
+
         from talkops.middleware.btw import format_btw_prompt
 
         graph = self._get_graph()
@@ -831,6 +864,7 @@ class InProcessAgent(RemoteAgent):
         graph_name: str = "agent",
         cwd: str | None = None,
     ) -> None:
+        """Initialize InProcessAgent."""
         super().__init__(url="inprocess://local", graph_name=graph_name)
         self._cwd = cwd
         self._graph = graph
@@ -872,7 +906,6 @@ class InProcessAgent(RemoteAgent):
         durability: str | None = None,
     ) -> AsyncIterator[tuple[tuple[str, ...], str, Any]]:
         """Stream directly from the in-process compiled LangGraph ``Pregel`` instance."""
-        from langchain_core.messages import BaseMessage
         from talkops.agent.config import CLIContextSchema
 
         prepared_config = _prepare_config(config)
@@ -966,6 +999,7 @@ class InProcessAgent(RemoteAgent):
                 logger.warning("Dropped %d message(s) during in-process stream", dropped_count)
 
     async def aget_state(self, config: dict[str, Any]) -> Any:
+        """Execute aget state on InProcessAgent."""
         _require_thread_id(config)
         try:
             return await self._graph.aget_state(_prepare_config(config))
@@ -982,6 +1016,7 @@ class InProcessAgent(RemoteAgent):
         *,
         as_node: str | None = None,
     ) -> Any:
+        """Execute aupdate state on InProcessAgent."""
         prepared = _prepare_config(config)
         kwargs: dict[str, Any] = {}
         if as_node is not None:
@@ -994,10 +1029,15 @@ class InProcessAgent(RemoteAgent):
             raise
 
     async def acancel_active_runs(self, config: dict[str, Any]) -> CancellationResult:
+        """Execute acancel active runs on InProcessAgent."""
         _require_thread_id(config)
         cancelled: list[str] = []
+        current = asyncio.current_task()
         for task in list(self._active_tasks):
-            if not task.done():
+            if task is not current and not task.done():
+                if hasattr(task, "cancelling") and task.cancelling() > 0:
+                    cancelled.append(self._active_run_id or "inprocess-run")
+                    continue
                 task.cancel()
                 cancelled.append(self._active_run_id or "inprocess-run")
         self._active_tasks.clear()
@@ -1015,6 +1055,7 @@ class InProcessAgent(RemoteAgent):
         key: str,
         value: dict[str, Any],
     ) -> None:
+        """Execute aput store item on InProcessAgent."""
         if self._store is not None and hasattr(self._store, "aput"):
             await self._store.aput(namespace, key, value)
         elif self._store is not None and hasattr(self._store, "put"):
@@ -1050,7 +1091,6 @@ def _convert_interrupts(raw: Any) -> list[Any]:
 
 
 def _convert_ai_message(data: dict[str, Any]) -> Any:
-    from langchain_core.messages import AIMessageChunk
 
     content = data.get("content", "")
     tool_call_chunks = data.get("tool_call_chunks", [])
@@ -1113,7 +1153,6 @@ def _convert_ai_message(data: dict[str, Any]) -> Any:
 
 
 def _convert_human_message(data: dict[str, Any]) -> Any:
-    from langchain_core.messages import HumanMessage
 
     content = data.get("content", "")
     additional_kwargs = dict(data.get("additional_kwargs") or {})
@@ -1127,7 +1166,6 @@ def _convert_human_message(data: dict[str, Any]) -> Any:
 
 
 def _convert_tool_message(data: dict[str, Any]) -> Any:
-    from langchain_core.messages import ToolMessage
 
     content = data.get("content", "")
     tool_call_id = data.get("tool_call_id", "")

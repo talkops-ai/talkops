@@ -1,9 +1,25 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Comprehensive unit tests for TalkOps Central Webhook Server across all providers and flows."""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import hmac
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -32,11 +48,11 @@ from talkops.webhooks import (
     verify_request_signature,
 )
 
-
 # ── 1. Security, Signatures, SSRF & Deduplication Tests ──────────────────────
 
 
 def test_verify_hmac_sha256_and_github_signature() -> None:
+    """Verify verify hmac sha256 and github signature."""
     body = b'{"action":"completed","workflow_run":{"id":123,"conclusion":"failure"}}'
     secret = "gh-super-secret"
     digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
@@ -52,6 +68,7 @@ def test_verify_hmac_sha256_and_github_signature() -> None:
 
 
 def test_verify_pagerduty_v3_signature() -> None:
+    """Verify verify pagerduty v3 signature."""
     body = b'{"event":{"id":"evt-1","event_type":"incident.triggered"}}'
     secret = "pd-webhook-secret"
     digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
@@ -63,6 +80,7 @@ def test_verify_pagerduty_v3_signature() -> None:
 
 
 def test_verify_bearer_and_custom_header_tokens() -> None:
+    """Verify verify bearer and custom header tokens."""
     secret = "jenkins-pipeline-token-99"
     assert verify_bearer_or_header_token({"Authorization": f"Bearer {secret}"}, secret) is True
     assert verify_bearer_or_header_token({"X-Jenkins-Token": secret}, secret) is True
@@ -70,6 +88,7 @@ def test_verify_bearer_and_custom_header_tokens() -> None:
 
 
 def test_sns_subscribe_url_ssrf_validation() -> None:
+    """Verify sns subscribe url ssrf validation."""
     assert is_valid_sns_subscribe_url("https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&Token=abc") is True
     assert is_valid_sns_subscribe_url("https://sns.cn-north-1.amazonaws.com.cn/?Action=ConfirmSubscription") is True
     # Reject non-HTTPS, localhost, metadata service, and arbitrary domains
@@ -80,6 +99,7 @@ def test_sns_subscribe_url_ssrf_validation() -> None:
 
 
 def test_deduplication_cache_ttl_and_eviction() -> None:
+    """Verify deduplication cache ttl and eviction."""
     cache = DeduplicationCache(ttl_seconds=30.0, max_entries=3)
     assert cache.check_and_record("k1", now=100.0) is False
     assert cache.check_and_record("k1", now=110.0) is True
@@ -97,6 +117,7 @@ def test_deduplication_cache_ttl_and_eviction() -> None:
 
 
 def test_sns_subscription_confirmation_and_cloudwatch_alarm_flows() -> None:
+    """Verify sns subscription confirmation and cloudwatch alarm flows."""
     registry = create_default_registry()
     sns = registry.get("sns")
     assert sns is not None
@@ -171,6 +192,7 @@ def test_sns_subscription_confirmation_and_cloudwatch_alarm_flows() -> None:
 
 
 def test_pagerduty_v3_incident_and_loop_prevention_flows() -> None:
+    """Verify pagerduty v3 incident and loop prevention flows."""
     registry = create_default_registry()
     pd = registry.get("pagerduty")
     assert pd is not None
@@ -239,6 +261,7 @@ def test_pagerduty_v3_incident_and_loop_prevention_flows() -> None:
 
 
 def test_alertmanager_and_grafana_cncf_flows() -> None:
+    """Verify alertmanager and grafana cncf flows."""
     registry = create_default_registry()
     am = registry.get("alertmanager")
     assert am is not None
@@ -281,6 +304,7 @@ def test_alertmanager_and_grafana_cncf_flows() -> None:
 
 
 def test_cloudevents_structured_and_binary_cncf_flows() -> None:
+    """Verify cloudevents structured and binary cncf flows."""
     registry = create_default_registry()
     ce = registry.get("cloudevents")
     assert ce is not None
@@ -326,6 +350,7 @@ def test_cloudevents_structured_and_binary_cncf_flows() -> None:
 
 
 def test_jenkins_build_failure_and_success_flows() -> None:
+    """Verify jenkins build failure and success flows."""
     registry = create_default_registry()
     jk = registry.get("jenkins")
     assert jk is not None
@@ -356,6 +381,7 @@ def test_jenkins_build_failure_and_success_flows() -> None:
 
 
 def test_github_workflow_and_comment_flows() -> None:
+    """Verify github workflow and comment flows."""
     registry = create_default_registry()
     gh = registry.get("github")
     assert gh is not None
@@ -403,6 +429,7 @@ def test_github_workflow_and_comment_flows() -> None:
 
 
 def test_datadog_servicenow_azure_monitor_and_generic_flows() -> None:
+    """Verify datadog servicenow azure monitor and generic flows."""
     registry = create_default_registry()
     cfg = WebhookConfig()
 
@@ -475,6 +502,7 @@ def test_datadog_servicenow_azure_monitor_and_generic_flows() -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_completion_sinks_all_targets() -> None:
+    """Verify dispatch completion sinks all targets."""
     recorded_requests: list[httpx.Request] = []
 
     async def _mock_handler(request: httpx.Request) -> httpx.Response:
@@ -519,6 +547,7 @@ async def test_dispatch_completion_sinks_all_targets() -> None:
 
 @pytest.mark.asyncio
 async def test_confirm_sns_subscription_ssrf_and_success() -> None:
+    """Verify confirm sns subscription ssrf and success."""
     visited: list[str] = []
 
     async def _handler(request: httpx.Request) -> httpx.Response:
@@ -547,6 +576,7 @@ async def test_confirm_sns_subscription_ssrf_and_success() -> None:
 
 @pytest.mark.asyncio
 async def test_webhooks_asgi_app_end_to_end_flows() -> None:
+    """Verify webhooks asgi app end to end flows."""
     executed_runs: list[tuple[NormalizedWebhookEvent, str]] = []
 
     async def _fake_executor(
@@ -646,6 +676,7 @@ async def test_webhooks_asgi_app_end_to_end_flows() -> None:
 
 
 def test_generate_langgraph_json_mounts_webhooks_app(tmp_path: Path) -> None:
+    """Verify generate langgraph json mounts webhooks app."""
     target = generate_langgraph_json(tmp_path)
     config = json.loads(target.read_text(encoding="utf-8"))
     assert config["http"]["app"] == "./webhooks_app.py:app"
@@ -654,6 +685,7 @@ def test_generate_langgraph_json_mounts_webhooks_app(tmp_path: Path) -> None:
 
 
 def test_cli_serve_list_json(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verify cli serve list json."""
     exit_code = cli_main(["serve", "list", "--output-format", "json"])
     assert exit_code == 0
     captured = capsys.readouterr().out
@@ -677,6 +709,7 @@ def test_cli_serve_list_json(capsys: pytest.CaptureFixture[str]) -> None:
 
 @pytest.mark.asyncio
 async def test_default_langgraph_run_executor() -> None:
+    """Verify default langgraph run executor."""
     from talkops.webhooks.dispatcher import default_langgraph_run_executor
 
     mock_client = MagicMock()
@@ -718,6 +751,7 @@ async def test_default_langgraph_run_executor() -> None:
 
 
 def test_cli_serve_flags_after_subcommand() -> None:
+    """Verify cli serve flags after subcommand."""
     from talkops.cli.main import build_parser
 
     parser = build_parser()
@@ -755,6 +789,7 @@ def test_cli_serve_flags_after_subcommand() -> None:
 
 
 def test_yolo_mode_scope_and_resolution(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    """Verify yolo mode scope and resolution."""
     from talkops.agent.factory import _should_interrupt_tool_call
     from talkops.approval_mode import (
         ALL_APPROVAL_MODES,
@@ -832,6 +867,7 @@ def test_yolo_mode_scope_and_resolution(capsys: pytest.CaptureFixture[str], tmp_
 
 
 def test_webhook_config_routed_via_canonical_settings_and_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify webhook config routed via canonical settings and manifest."""
     from talkops.config.manifest import get_option
     from talkops.config.settings import Settings
 
@@ -896,13 +932,12 @@ def test_webhook_config_routed_via_canonical_settings_and_manifest(monkeypatch: 
 
 @pytest.mark.asyncio
 async def test_webhook_logging_lifecycle_and_live_streaming(tmp_path: Path) -> None:
-    import io
+    """Verify webhook logging lifecycle and live streaming."""
     from talkops.cli.commands.serve import _drain_live_logs, _resolve_serve_log_level
     from talkops.utils.logger import configure_logging
     from talkops.webhooks.dispatcher import default_langgraph_run_executor
 
     # 1. Verify _resolve_serve_log_level defaults to INFO and respects --verbose / --log-level
-    import argparse
 
     assert _resolve_serve_log_level(argparse.Namespace()) == "INFO"
     assert _resolve_serve_log_level(argparse.Namespace(verbose=True)) == "DEBUG"
@@ -1007,3 +1042,97 @@ async def test_webhook_logging_lifecycle_and_live_streaming(tmp_path: Path) -> N
         assert "Webhook run finalized | provider=pagerduty incident_id=Q_LOG_INCIDENT_1" in log_contents
     finally:
         configure_logging()
+
+
+@pytest.mark.asyncio
+async def test_builtin_outbound_channels_slack_and_teams_one_way(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify built-in one-way outbound Slack and Teams thread notifications without `talkops-addons`."""
+    from talkops.webhooks.models import parse_outbound_channel_routes
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
+    posted_requests: list[tuple[str, str, dict[str, Any]]] = []
+
+    class _FakeResp:
+        def __init__(self, payload: dict[str, Any], status_code: int = 200) -> None:
+            self._payload = payload
+            self.status_code = status_code
+            self.content = json.dumps(payload).encode("utf-8")
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            return self._payload
+
+    async def _fake_post(self: Any, url: str, **kwargs: Any) -> _FakeResp:
+        body = kwargs.get("json") or {}
+        posted_requests.append(("POST", url, body))
+        if "chat.postMessage" in url and not body.get("thread_ts"):
+            return _FakeResp({"ok": True, "channel": "C_OPS", "ts": "1710000.0001"})
+        if "chat.postMessage" in url and body.get("thread_ts"):
+            return _FakeResp({"ok": True, "channel": "C_OPS", "ts": "1710000.0002"})
+        if "chat.update" in url:
+            return _FakeResp({"ok": True, "channel": "C_OPS", "ts": "1710000.0001"})
+        return _FakeResp({"ok": True, "id": "teams-msg-1"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+
+    async def _fake_executor(
+        event: NormalizedWebhookEvent,
+        thread_id: str,
+        delivery_id: str,
+        config: WebhookConfig,
+    ) -> WebhookRunResult:
+        return WebhookRunResult(
+            run_id=delivery_id,
+            thread_id=thread_id,
+            status="success",
+            analysis_text=(
+                "### Executive Summary\n"
+                "Pod `checkout-worker-7c9d8f5b4-x2k9p` was OOMKilled (exit code 137) after exceeding 512Mi.\n\n"
+                "### Remediation\n"
+                "Increase memory limit to `1Gi`."
+            ),
+        )
+
+    routes = parse_outbound_channel_routes("slack:C_OPS,teams:https://teams.example.com/webhook/ops")
+    dispatcher = WebhookDispatcher(
+        config=WebhookConfig(outbound_channels=routes),
+        run_executor=_fake_executor,
+    )
+
+    am_payload = {
+        "status": "firing",
+        "groupKey": "g-oom-1",
+        "commonLabels": {"alertname": "KubePodCrashLooping", "severity": "critical", "service": "checkout-worker"},
+        "commonAnnotations": {"summary": "Pod checkout-worker-7c9d8f5b4-x2k9p is CrashLoopBackOff"},
+        "alerts": [{"status": "firing"}],
+    }
+    status_code, _ = await dispatcher.handle_webhook(
+        provider="alertmanager",
+        headers={"content-type": "application/json"},
+        raw_body=json.dumps(am_payload).encode("utf-8"),
+    )
+    assert status_code == 202
+    await dispatcher.drain_background_tasks()
+
+    # 1. Slack parent incident card posted on `received` (`ts=1710000.0001`)
+    slack_posts = [b for _, u, b in posted_requests if "chat.postMessage" in u]
+    assert len(slack_posts) == 2
+    assert "thread_ts" not in slack_posts[0]
+    assert slack_posts[1]["thread_ts"] == "1710000.0001"
+
+    # 2. Slack parent incident card updated in-place via `chat.update` with Root Cause Takeaway
+    slack_updates = [b for _, u, b in posted_requests if "chat.update" in u]
+    assert len(slack_updates) == 1
+    assert slack_updates[0]["ts"] == "1710000.0001"
+    assert any(
+        "Root Cause Takeaway" in blk.get("text", {}).get("text", "")
+        for blk in slack_updates[0]["blocks"]
+    )
+
+    # 3. Teams Adaptive Cards posted for both `received` and `completed`
+    teams_posts = [b for _, u, b in posted_requests if "teams.example.com" in u]
+    assert len(teams_posts) == 2
+    assert teams_posts[0]["attachments"][0]["contentType"] == "application/vnd.microsoft.card.adaptive"
+    assert teams_posts[1]["attachments"][0]["contentType"] == "application/vnd.microsoft.card.adaptive"

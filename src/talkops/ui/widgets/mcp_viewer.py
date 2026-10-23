@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive MCP server & tool viewer modal screen for TalkOps.
 
 Two-pane layout: left pane lists MCP servers and their tools with ↑/↓ navigation
@@ -20,11 +34,13 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
 from talkops.config.settings import get_glyphs
-from talkops.ui.widgets.modal_base import OpsModalScreen, escape_markup as escape
+from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.ui.widgets.modal_base import escape_markup as escape
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
     from textual.app import ComposeResult
 
     from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
@@ -141,7 +157,7 @@ class MCPToolDetailScreen(OpsModalScreen[None]):
         height: 1fr;
         min-height: 5;
         scrollbar-gutter: stable;
-        background: $background;
+        background: transparent;
         padding: 1 2;
     }
 
@@ -156,18 +172,21 @@ class MCPToolDetailScreen(OpsModalScreen[None]):
     """
 
     def __init__(self, tool_info: MCPToolInfo, server_name: str = "") -> None:
+        """Initialize MCPToolDetailScreen."""
         self.tool_info = tool_info
         self.server_name = server_name
         self.display_name = clean_tool_name(tool_info.name, tool_info.original_name)
         super().__init__()
 
     def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on MCPToolDetailScreen."""
         yield Static(f"MCP Tool: {self.display_name}", classes="mcp-tool-detail-title")
         with VerticalScroll(classes="mcp-tool-detail-body"):
             yield Vertical(id="mcp-tool-detail-content")
         yield Static("Esc or 'q' to close", classes="mcp-tool-detail-help")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         self.set_modal_title("MCP Tool", counter=self.display_name)
         self.set_modal_subtitle([("esc", "close")])
@@ -202,6 +221,7 @@ class MCPToolDetailScreen(OpsModalScreen[None]):
             content.mount(Static(Content.styled("No input parameters specified.", "dim"), classes="detail-value"))
 
     def action_close_dialog(self) -> None:
+        """Execute the close dialog action."""
         self.dismiss(None)
 
 
@@ -233,7 +253,7 @@ class MCPServerErrorScreen(OpsModalScreen[None]):
 
     MCPServerErrorScreen .mcp-error-body {
         height: 1fr;
-        background: $background;
+        background: transparent;
         scrollbar-gutter: stable;
         padding: 0 1;
     }
@@ -244,11 +264,13 @@ class MCPServerErrorScreen(OpsModalScreen[None]):
     """
 
     def __init__(self, server: MCPServerInfo) -> None:
+        """Initialize MCPServerErrorScreen."""
         self._server = server
         self._error = server.error or "No error details were reported."
         super().__init__()
 
     def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on MCPServerErrorScreen."""
         name = self._server.name
         yield Static(f"MCP Server Error: {name}", classes="mcp-error-title")
         with VerticalScroll(classes="mcp-error-body"):
@@ -256,11 +278,13 @@ class MCPServerErrorScreen(OpsModalScreen[None]):
         yield Static("Esc close", classes="mcp-error-help")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         self.set_modal_title(f"MCP Server Error: {self._server.name}")
         self.set_modal_subtitle([("esc", "close")])
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(None)
 
 
@@ -279,6 +303,7 @@ class MCPToolItem(Static):
         server_info: MCPServerInfo | None = None,
         classes: str = "",
     ) -> None:
+        """Initialize MCPToolItem."""
         self.tool_info = tool_info
         self.tool_name = tool_info.name
         self.tool_description = tool_info.description
@@ -360,6 +385,7 @@ class MCPToolItem(Static):
             self.update(self._format_collapsed())
 
     def set_selected(self, selected: bool) -> None:
+        """Set selected."""
         if self._selected == selected:
             return
         self._selected = selected
@@ -370,26 +396,32 @@ class MCPToolItem(Static):
         self._rerender()
 
     def toggle_expand(self) -> None:
+        """Toggle expand."""
         self.set_expanded(not self._expanded)
 
     def set_expanded(self, expanded: bool) -> None:
+        """Set expanded."""
         self._expanded = expanded
         self.styles.height = "auto" if expanded else 1
         self._rerender()
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         self.call_after_refresh(self._rerender)
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         if not self._expanded:
             self.update(self._format_collapsed())
 
     def on_enter(self, event: events.Enter) -> None:
+        """Handle enter events."""
         screen = self.screen
         if isinstance(screen, MCPViewerScreen):
             screen._move_to(self.index)
 
     def on_click(self, event: events.Click) -> None:
+        """Handle mouse click events."""
         event.stop()
         screen = self.screen
         if isinstance(screen, MCPViewerScreen):
@@ -410,6 +442,7 @@ class MCPServerHeaderItem(Static):
         *,
         classes: str = "",
     ) -> None:
+        """Initialize MCPServerHeaderItem."""
         self._server = server
         self._visible_tool_count = visible_tool_count
         self.index = index
@@ -420,6 +453,7 @@ class MCPServerHeaderItem(Static):
 
     @property
     def server(self) -> MCPServerInfo:
+        """Return the server property."""
         return self._server
 
     def _render_header(self) -> str:
@@ -466,6 +500,7 @@ class MCPServerHeaderItem(Static):
             return f"{cursor} {glyph} [bold]{safe_name}[/bold][$secondary]{scope_badge}[/$secondary]  [dim]{transport} · {status}{raw_dim}[/dim]"
 
     def set_selected(self, selected: bool) -> None:
+        """Set selected."""
         if self._selected == selected:
             return
         self._selected = selected
@@ -476,11 +511,13 @@ class MCPServerHeaderItem(Static):
         self.update(self._render_header())
 
     def on_enter(self, event: events.Enter) -> None:
+        """Handle enter events."""
         screen = self.screen
         if isinstance(screen, MCPViewerScreen):
             screen._move_to(self.index)
 
     def on_click(self, event: events.Click) -> None:
+        """Handle mouse click events."""
         event.stop()
         screen = self.screen
         if not isinstance(screen, MCPViewerScreen):
@@ -585,7 +622,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
         height: 1fr;
         min-height: 5;
         scrollbar-gutter: stable;
-        background: $background;
+        background: transparent;
     }
 
     /* ── Server headers ────────────────── */
@@ -671,7 +708,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
         height: 1fr;
         min-height: 1;
         scrollbar-gutter: stable;
-        background: $background;
+        background: transparent;
         padding: 1;
     }
 
@@ -706,6 +743,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
         pending_reconnect: bool = False,
         on_toggle_disable: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
+        """Initialize MCPViewerScreen."""
         super().__init__()
         self._server_info = server_info
         self._connecting = connecting
@@ -722,9 +760,11 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
     # ── Compose / Mount ──────────────────────────────────
 
     def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on MCPViewerScreen."""
         yield Vertical(id="mcp-container")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         is_narrow = self.app.size.width < 90
         self.set_class(is_narrow, "-narrow")
@@ -732,6 +772,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
         self._mount_body(container)
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         is_narrow = self.app.size.width < 90
         if is_narrow != self.has_class("-narrow"):
             self.set_class(is_narrow, "-narrow")
@@ -1083,6 +1124,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
     # ── Filter ───────────────────────────────────────────
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changed events."""
         if event.input.id != "mcp-filter":
             return
         self._query = event.value
@@ -1130,6 +1172,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
         widget.scroll_visible()
 
     def action_move_up(self) -> None:
+        """Execute the move up action."""
         if not self._row_widgets:
             return
         old = self._selected_index
@@ -1141,6 +1184,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
             self._reveal_selection(self._row_widgets[self._selected_index], direction=-1)
 
     def action_move_down(self) -> None:
+        """Execute the move down action."""
         if not self._row_widgets:
             return
         old = self._selected_index
@@ -1152,6 +1196,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
             self._reveal_selection(self._row_widgets[self._selected_index], direction=1)
 
     def action_jump_up(self) -> None:
+        """Execute the jump up action."""
         target = self._next_server_header(self._selected_index, -1)
         if target is None:
             target = self._next_server_header(len(self._row_widgets), -1)
@@ -1161,6 +1206,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
         self._reveal_selection(self._row_widgets[target], direction=-1)
 
     def action_jump_down(self) -> None:
+        """Execute the jump down action."""
         target = self._next_server_header(self._selected_index, +1)
         if target is None:
             target = self._next_server_header(-1, +1)
@@ -1170,12 +1216,14 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
         self._reveal_selection(self._row_widgets[target], direction=1)
 
     def action_page_up(self) -> None:
+        """Execute the page up action."""
         if not self._row_widgets:
             return
         scroll = self.query_one(".mcp-list", VerticalScroll)
         scroll.scroll_page_up()
 
     def action_page_down(self) -> None:
+        """Execute the page down action."""
         if not self._row_widgets:
             return
         scroll = self.query_one(".mcp-list", VerticalScroll)
@@ -1210,6 +1258,7 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
         self.action_select_item()
 
     def action_toggle_all(self) -> None:
+        """Execute the toggle all action."""
         tools = self._tool_widgets
         if not tools:
             return
@@ -1218,16 +1267,19 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
             widget.set_expanded(any_collapsed)
 
     def show_server_error(self, server: MCPServerInfo) -> None:
+        """Display server error."""
         self.app.push_screen(MCPServerErrorScreen(server))
 
     # ── Reconnect / Disable ──────────────────────────────
 
     def action_reconnect(self) -> None:
+        """Execute the reconnect action."""
         if not self._pending_reconnect:
             return
         self.dismiss(MCP_VIEWER_RECONNECT_REQUEST)
 
     def action_toggle_disable(self) -> None:
+        """Execute the toggle disable action."""
         if not self._row_widgets:
             return
         row = self._row_widgets[self._selected_index]
@@ -1242,12 +1294,14 @@ class MCPViewerScreen(OpsModalScreen[str | None]):
         self.app.call_later(self._on_toggle_disable, server_name)
 
     def action_focus_filter(self) -> None:
+        """Execute the focus filter action."""
         try:
             self.query_one("#mcp-filter", Input).focus()
         except Exception:
             pass
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(None)
 
     # ── Refresh API ──────────────────────────────────────

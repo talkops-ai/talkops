@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Pixel-perfect TalkOps icon for the welcome banner via terminal graphics.
 
 Character cells cannot reproduce the smooth TalkOps mark (see
@@ -114,11 +128,11 @@ def probe_graphics_protocol() -> GraphicsProtocol | None:
 
     try:
         import textual_image.renderable as ti_renderable
-        from textual_image.renderable.sixel import Image as SixelRenderable
-        from textual_image.renderable.tgp import Image as TGPRenderable
 
         # Prime the cell-size cache used for scaling (needs the TTY too).
         import textual_image.widget  # noqa: F401
+        from textual_image.renderable.sixel import Image as SixelRenderable
+        from textual_image.renderable.tgp import Image as TGPRenderable
     except Exception:
         logger.debug("textual-image unavailable; using block-art logo", exc_info=True)
         return None

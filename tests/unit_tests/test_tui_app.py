@@ -1,16 +1,39 @@
-"""Unit tests for TalkOpsApp instantiation and configuration."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from unittest.mock import MagicMock, patch
+"""Unit tests for TalkOpsApp instantiation and configuration."""
+import asyncio
+import re
+from collections import deque
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from rich.console import Group
+from textual import events
 from textual.binding import Binding
+from textual.css.query import NoMatches
+from textual.geometry import Size
+
 from talkops.approval_mode import ApprovalMode
 from talkops.ui.app import TalkOpsApp
 from talkops.ui.remote_client import RemoteAgent
 
 
 def test_talkops_app_init_defaults():
+    """Verify talkops app init defaults."""
     app = TalkOpsApp(defer_server_start=True)
     assert app._assistant_id == "talkops"
     assert app._client is None
@@ -20,6 +43,7 @@ def test_talkops_app_init_defaults():
 
 
 def test_talkops_app_init_with_server_url_and_thread():
+    """Verify talkops app init with server url and thread."""
     url = "http://127.0.0.1:9999"
     thread_id = "test-thread-1234"
     app = TalkOpsApp(
@@ -37,6 +61,7 @@ def test_talkops_app_init_with_server_url_and_thread():
 
 
 def test_talkops_app_init_smart_approval_mode():
+    """Verify talkops app init smart approval mode."""
     app = TalkOpsApp(
         approval_mode="smart",
         defer_server_start=True,
@@ -46,6 +71,7 @@ def test_talkops_app_init_smart_approval_mode():
 
 
 def test_talkops_app_init_with_server_process():
+    """Verify talkops app init with server process."""
     fake_proc = object()
     app = TalkOpsApp(
         server=fake_proc,
@@ -55,6 +81,7 @@ def test_talkops_app_init_with_server_process():
 
 
 def test_talkops_app_deferred_startup_when_no_model(monkeypatch):
+    """Verify talkops app deferred startup when no model."""
     from talkops.exceptions import NoCredentialsConfiguredError
     monkeypatch.setattr("talkops.model.factory._get_default_model_spec", lambda: (_ for _ in ()).throw(NoCredentialsConfiguredError("No model configured")))
     app = TalkOpsApp(model=None, defer_server_start=False, client=None)
@@ -87,6 +114,7 @@ def test_interactive_runner_never_starts_server_before_tui(tmp_path):
 
 
 def test_format_rubric_event_removes_hourglass_emoji():
+    """Verify format rubric event removes hourglass emoji."""
     from talkops.config.settings import get_glyphs
     from talkops.ui.textual_adapter import _format_rubric_event
 
@@ -111,7 +139,7 @@ def test_format_rubric_event_removes_hourglass_emoji():
 
 @pytest.mark.asyncio
 async def test_sync_goal_state_from_checkpoint_marks_goal_complete():
-    from unittest.mock import AsyncMock
+    """Verify sync goal state from checkpoint marks goal complete."""
     from talkops.commands.power.goal import GoalHandler, get_goal_state
 
     app = TalkOpsApp(defer_server_start=True)
@@ -154,7 +182,7 @@ async def test_sync_goal_state_from_checkpoint_marks_goal_complete():
 
 @pytest.mark.asyncio
 async def test_accept_goal_rubric_seeds_todos_and_persists_plan():
-    from unittest.mock import AsyncMock
+    """Verify accept goal rubric seeds todos and persists plan."""
     from talkops.commands.power.goal import get_goal_state
 
     app = TalkOpsApp(defer_server_start=True)
@@ -197,7 +225,8 @@ async def test_accept_goal_rubric_seeds_todos_and_persists_plan():
 
 
 def test_welcome_banner_ascii_logo():
-    from talkops.ui.widgets.welcome import WelcomeBanner, _LeftPanel, _build_logo_text
+    """Verify welcome banner ascii logo."""
+    from talkops.ui.widgets.welcome import WelcomeBanner, _build_logo_text, _LeftPanel
 
     banner = WelcomeBanner()
     # Heading was removed per user request
@@ -248,6 +277,7 @@ def test_welcome_banner_ascii_logo():
 
 
 def test_app_get_context_tokens_cumulative():
+    """Verify app get context tokens cumulative."""
     app = TalkOpsApp(defer_server_start=True)
     app._cumulative_session_tokens = 552400
     app._context_tokens = 552400
@@ -255,7 +285,9 @@ def test_app_get_context_tokens_cumulative():
 
 
 def test_textual_adapter_session_cost_event_updates_cumulative_tokens():
+    """Verify textual adapter session cost event updates cumulative tokens."""
     from unittest.mock import MagicMock
+
     from talkops.ui.textual_adapter import TextualAdapter
 
     app = TalkOpsApp(defer_server_start=True)
@@ -283,8 +315,8 @@ def test_textual_adapter_session_cost_event_updates_cumulative_tokens():
 
 @pytest.mark.asyncio
 async def test_load_thread_history_accumulates_cumulative_tokens():
+    """Verify load thread history accumulates cumulative tokens."""
     from unittest.mock import AsyncMock, MagicMock
-    from langchain_core.messages import AIMessage, HumanMessage
 
     app = TalkOpsApp(defer_server_start=True)
     app._agent_thread_id = "test-thread-cumulative"
@@ -316,9 +348,9 @@ async def test_load_thread_history_accumulates_cumulative_tokens():
     dummy_container.children = []
     dummy_container._tool_calls = {}
 
-    from textual.css.query import NoMatches
 
     def mock_query_one(selector, *args, **kwargs):
+        """Provide mock query one test helper or fixture."""
         if selector == "#messages":
             return dummy_container
         raise NoMatches(selector)
@@ -334,7 +366,9 @@ async def test_load_thread_history_accumulates_cumulative_tokens():
 
 
 def test_finalize_turn_success_does_not_double_count():
+    """Verify finalize turn success does not double count."""
     from unittest.mock import MagicMock
+
     from talkops.ui.textual_adapter import TextualAdapter, _TurnStreamState
 
     app = TalkOpsApp(defer_server_start=True)
@@ -371,7 +405,9 @@ def test_finalize_turn_success_does_not_double_count():
 
 
 def test_finalize_turn_success_fallback_without_session_cost():
+    """Verify finalize turn success fallback without session cost."""
     from unittest.mock import MagicMock
+
     from talkops.ui.textual_adapter import TextualAdapter, _TurnStreamState
 
     app = TalkOpsApp(defer_server_start=True)
@@ -398,7 +434,9 @@ def test_finalize_turn_success_fallback_without_session_cost():
 
 
 def test_status_bar_context_window_rendering():
+    """Verify status bar context window rendering."""
     from unittest.mock import MagicMock
+
     from talkops.ui.widgets.status import StatusBar
 
     bar = StatusBar()
@@ -421,8 +459,9 @@ def test_status_bar_context_window_rendering():
 
 @pytest.mark.asyncio
 async def test_deprecated_cost_and_tokens_command():
-    from talkops.commands.core.cost import CostHandler
+    """Verify deprecated cost and tokens command."""
     from talkops.commands._base import CommandContext
+    from talkops.commands.core.cost import CostHandler
 
     handler = CostHandler()
     ctx = CommandContext(app=None, raw_command="/cost", args="")
@@ -460,6 +499,7 @@ def test_user_message_set_cancelled_and_raw_text():
 def test_action_interrupt_cancels_agent_worker():
     """Verify action_interrupt cancels agent worker, adapter, and dims message."""
     from unittest.mock import MagicMock
+
     from talkops.ui.widgets.messages import UserMessage
 
     app = TalkOpsApp(defer_server_start=True)
@@ -497,6 +537,7 @@ def test_action_interrupt_cancels_agent_worker():
 def test_action_interrupt_preserves_prompt_if_output_appeared():
     """Verify prompt is NOT restored if visible model output already appeared."""
     from unittest.mock import MagicMock
+
     from talkops.ui.widgets.messages import UserMessage
 
     app = TalkOpsApp(defer_server_start=True)
@@ -544,8 +585,8 @@ def test_action_interrupt_rejects_pending_approval_first():
 
 def test_action_interrupt_pops_queued_message():
     """Verify queued message is popped instead of cancelling active agent worker."""
-    from collections import deque
     from unittest.mock import MagicMock
+
     from talkops.ui.app import QueuedMessage
 
     app = TalkOpsApp(defer_server_start=True)
@@ -590,7 +631,6 @@ def test_ascii_mode_glyphs_purity():
 
 def test_theme_parity_dark_and_light():
     """Verify that both talkops-dark and talkops-light define valid colors for all semantic tokens."""
-    import re
     from talkops.ui.theme import DARK_COLORS, LIGHT_COLORS
 
     hex_pattern = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -620,8 +660,6 @@ def test_theme_parity_dark_and_light():
 
 def test_status_bar_narrow_terminal_responsiveness():
     """Verify status bar drops cwd first (width < 70), then model (width < 60)."""
-    from textual.geometry import Size
-    from textual import events
     from talkops.ui.widgets.status import StatusBar
 
     status = StatusBar()
@@ -638,7 +676,6 @@ def test_status_bar_narrow_terminal_responsiveness():
 @pytest.mark.asyncio
 async def test_textual_adapter_drain_maintenance():
     """Verify drain_maintenance awaits and clears completed maintenance tasks (DV-02)."""
-    import asyncio
     from talkops.ui.textual_adapter import TextualAdapter
 
     adapter = TextualAdapter(client=MagicMock(), assistant_id="talkops")
@@ -662,7 +699,6 @@ async def test_textual_adapter_drain_maintenance():
 @pytest.mark.asyncio
 async def test_textual_adapter_drain_maintenance_cancels_on_timeout():
     """Verify drain_maintenance cancels slow tasks on timeout to prevent turn collision (DV-02)."""
-    import asyncio
     from talkops.ui.textual_adapter import TextualAdapter
 
     adapter = TextualAdapter(client=MagicMock(), assistant_id="talkops")
@@ -687,7 +723,6 @@ async def test_textual_adapter_drain_maintenance_cancels_on_timeout():
 @pytest.mark.asyncio
 async def test_textual_adapter_spinner_coalescing_and_deduplication():
     """Verify high-frequency spinner mutations are coalesced and duplicate states skipped (DV-07)."""
-    import asyncio
     from talkops.ui.textual_adapter import TextualAdapter
 
     calls: list[object] = []
@@ -724,7 +759,6 @@ async def test_textual_adapter_spinner_coalescing_and_deduplication():
 
 def test_extract_text_and_thinking_openai_responses_summary_and_content_blocks():
     """Verify _extract_text_and_thinking extracts OpenAI Responses summary_text and LangChain content_blocks."""
-    from types import SimpleNamespace
     from talkops.ui.textual_adapter import _extract_text_and_thinking
 
     # 1. OpenAI Responses API reasoning block with summary list
@@ -757,7 +791,6 @@ def test_extract_text_and_thinking_openai_responses_summary_and_content_blocks()
 @pytest.mark.asyncio
 async def test_textual_adapter_streams_subagent_thinking_and_intermediate_tools():
     """Verify delegated subagents stream thinking tokens and intermediate tool runs into MessageList."""
-    from langchain_core.messages import AIMessageChunk, ToolMessage
     from talkops.ui.textual_adapter import TextualAdapter, _TurnStreamState
 
     messages_mock = MagicMock()

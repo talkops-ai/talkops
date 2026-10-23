@@ -1,11 +1,25 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Skill registry to discover, validate, and index talkops skills."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import re
 import threading
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
@@ -38,7 +52,6 @@ SkillSourceTuple = tuple[str, str, str | None] | tuple[str, str] | tuple[str, ..
 
 @dataclass(frozen=True)
 class SkillSource:
-
     """A discovered skill."""
 
     name: str
@@ -86,6 +99,7 @@ class SkillRegistry:
     _lock = threading.Lock()
 
     def __init__(self, store: Any = None) -> None:
+        """Initialize SkillRegistry."""
         self._skills: dict[str, SkillMetadata] = {}
         self._sources: dict[str, SkillSource] = {}
         self._store = store

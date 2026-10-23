@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Stream bridge between LangGraph SDK client and Textual widgets.
 
 The ``TextualAdapter`` consumes streaming events from ``client.runs.stream()``
@@ -10,25 +24,25 @@ to avoid flooding the event queue.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import inspect
-from talkops.utils.logger import get_logger
 import math
-from pathlib import Path
 import time
-from typing import TYPE_CHECKING, Any, Callable
 import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
 
+from langchain_core.messages import HumanMessage
 from textual.message import Message
 
-from talkops.utils.session_stats import SessionStats
+from talkops.config.settings import get_glyphs
 from talkops.ui.widgets._tool_stream import (
     ToolCallBuffer,
     ToolCallBufferKey,
     tool_call_buffer_key,
 )
-
-from talkops.config.settings import get_glyphs
+from talkops.utils.logger import get_logger
+from talkops.utils.session_stats import SessionStats
 
 if TYPE_CHECKING:
     from talkops.ui.widgets.messages import MessageList
@@ -51,6 +65,7 @@ class _TurnStreamState:
     displayed_tool_ids: set[str] = field(default_factory=set)
     recorded_message_usage: dict[str, tuple[int, int]] = field(default_factory=dict)
     recorded_message_cache: dict[str, tuple[int, int]] = field(default_factory=dict)
+    agent_session_error: str | None = None
 
 
 def _read_mentioned_file(file_path: Path, max_embed_bytes: int = 256 * 1024) -> str:
@@ -364,6 +379,7 @@ class TextualAdapter:
     # directly from the stream loop to avoid flooding the event queue.
 
     class InterruptRaised(Message):
+        """Represent interrupt raised."""
         def __init__(
             self,
             tool_name: str,
@@ -371,6 +387,7 @@ class TextualAdapter:
             args: dict[str, Any],
             interrupt_type: str = "tool_approval",
         ) -> None:
+            """Initialize InterruptRaised."""
             super().__init__()
             self.tool_name = tool_name
             self.call_id = call_id
@@ -378,13 +395,17 @@ class TextualAdapter:
             self.interrupt_type = interrupt_type
 
     class SubagentSpawned(Message):
+        """Represent subagent spawned."""
         def __init__(self, agent_name: str, task: str) -> None:
+            """Initialize SubagentSpawned."""
             super().__init__()
             self.agent_name = agent_name
             self.task = task
 
     class SubagentUpdate(Message):
+        """Represent subagent update."""
         def __init__(self, agent_name: str, token: str, status: str = "") -> None:
+            """Initialize SubagentUpdate."""
             super().__init__()
             self.agent_name = agent_name
             self.token = token
@@ -393,12 +414,14 @@ class TextualAdapter:
     class TokenStreamed(Message):
         """Fired when a new content token is streamed from the model."""
         def __init__(self, token: str) -> None:
+            """Initialize TokenStreamed."""
             super().__init__()
             self.token = token
 
     class ToolCallStarted(Message):
         """Fired when a tool call begins execution."""
         def __init__(self, name: str, call_id: str = "") -> None:
+            """Initialize ToolCallStarted."""
             super().__init__()
             self.name = name
             self.call_id = call_id
@@ -406,18 +429,23 @@ class TextualAdapter:
     class ToolCallCompleted(Message):
         """Fired when a tool call finishes."""
         def __init__(self, name: str, call_id: str = "", result: str = "") -> None:
+            """Initialize ToolCallCompleted."""
             super().__init__()
             self.name = name
             self.call_id = call_id
             self.result = result
 
     class StreamFinished(Message):
+        """Represent stream finished."""
         def __init__(self, stats: SessionStats) -> None:
+            """Initialize StreamFinished."""
             super().__init__()
             self.stats = stats
 
     class StreamError(Message):
+        """Represent stream error."""
         def __init__(self, error: str) -> None:
+            """Initialize StreamError."""
             super().__init__()
             self.error = error
 
@@ -438,6 +466,7 @@ class TextualAdapter:
         on_user_visible_output_started: Callable[[], None] | None = None,
         image_tracker: Any = None,
     ) -> None:
+        """Initialize TextualAdapter."""
         self._client = client
         self._assistant_id = assistant_id
         self._messages: MessageList | None = messages_widget
@@ -536,6 +565,7 @@ class TextualAdapter:
 
     @property
     def stats(self) -> SessionStats:
+        """Return the stats property."""
         return self._stats
 
     @property
@@ -564,8 +594,6 @@ class TextualAdapter:
         Returns:
             tuple[input_payload_dict, turn_id]
         """
-        from langchain_core.messages import HumanMessage
-        from talkops.middleware.auto_mode import USER_PROMPT_METADATA_KEY, user_prompt_metadata
         from talkops.media_utils import (
             ImageData,
             VideoData,
@@ -573,6 +601,10 @@ class TextualAdapter:
             get_media_from_path,
             is_media_path,
             strip_media_placeholders,
+        )
+        from talkops.middleware.auto_mode import (
+            USER_PROMPT_METADATA_KEY,
+            user_prompt_metadata,
         )
 
         if graph_input is not None:
@@ -663,7 +695,7 @@ class TextualAdapter:
         }
 
         if self._app is not None:
-            from talkops.commands.power.goal import get_goal_state, GoalHandler
+            from talkops.commands.power.goal import GoalHandler, get_goal_state
 
             goal_state = get_goal_state(self._app)
             if goal_state.is_actionable and goal_state.objective:
@@ -692,7 +724,11 @@ class TextualAdapter:
         Returns:
             tuple[config_dict, enriched_context_dict]
         """
-        from talkops.approval_mode import ApprovalMode, awrite_approval_mode, coerce_approval_mode
+        from talkops.approval_mode import (
+            ApprovalMode,
+            awrite_approval_mode,
+            coerce_approval_mode,
+        )
         from talkops.config.metadata import build_stream_config
 
         raw_mode = (
@@ -722,7 +758,6 @@ class TextualAdapter:
                 getattr(self._app, "settings", None), "reasoning_effort", None
             )
 
-        from pathlib import Path
         app_cwd = getattr(self._app, "_cwd", None) if self._app else None
         target_cwd = app_cwd or str(Path.cwd().resolve())
 
@@ -903,6 +938,12 @@ class TextualAdapter:
                     self._pending_spinner_text = "Compacting conversation..."
             return
 
+        if isinstance(data, dict) and data.get("type") == "agent_session_error":
+            err_text = str(data.get("error") or "").strip()
+            if err_text and stream_state is not None:
+                stream_state.agent_session_error = err_text
+            return
+
         if isinstance(data, dict) and data.get("type") == "compaction_end":
             if not is_main_agent:
                 return
@@ -975,7 +1016,11 @@ class TextualAdapter:
                     if rubric_msg.get("type") == "rubric_evaluation_end"
                     else ""
                 )
-                from talkops.ui.widgets.messages import RubricResultMessage, SystemMessage, ErrorMessage
+                from talkops.ui.widgets.messages import (
+                    ErrorMessage,
+                    RubricResultMessage,
+                    SystemMessage,
+                )
 
                 if rubric_msg.get("type") == "rubric_evaluation_end":
                     if self._app is not None and hasattr(self._app, "_handle_rubric_evaluation_end"):
@@ -1002,10 +1047,16 @@ class TextualAdapter:
         self,
         data: Any,
         pending_interrupts: dict[str, Any],
+        *,
+        stream_state: _TurnStreamState | None = None,
     ) -> None:
         """Handle mode == 'updates' stream event payloads and record interrupts."""
         if not isinstance(data, dict):
             return
+        if stream_state is not None:
+            for node_update in data.values():
+                if isinstance(node_update, dict) and node_update.get("_agent_session_error"):
+                    stream_state.agent_session_error = str(node_update["_agent_session_error"])
         interrupts = data.get("__interrupt__")
         if not interrupts:
             return
@@ -1048,7 +1099,10 @@ class TextualAdapter:
             or (meta or {}).get("usage")
         )
         if isinstance(usage_meta, dict):
-            from talkops.middleware.cost_tracking import cache_token_counts, estimate_cost
+            from talkops.middleware.cost_tracking import (
+                cache_token_counts,
+                estimate_cost,
+            )
 
             inp_toks = int(usage_meta.get("input_tokens") or usage_meta.get("prompt_tokens") or 0)
             out_toks = int(usage_meta.get("output_tokens") or usage_meta.get("completion_tokens") or 0)
@@ -1514,10 +1568,18 @@ class TextualAdapter:
         # Safely trigger background pruning only on confirmed turn success (not on cancel or error)
         tid = getattr(self, "_current_thread_id", None) or (getattr(self._app, "_agent_thread_id", None) if self._app else None)
         if tid and tid != "local_session" and self.last_turn_ok and not self._cancel_event.is_set():
+            client_checkpointer = getattr(self._client, "_checkpointer", None)
+
             async def _safe_prune(target_tid: str) -> None:
                 try:
+                    await asyncio.sleep(0.05)
                     from talkops.state.session import SessionManager
-                    await SessionManager.prune_thread(target_tid, turn_completed=True)
+
+                    await SessionManager.prune_thread(
+                        target_tid,
+                        turn_completed=True,
+                        checkpointer=client_checkpointer,
+                    )
                 except Exception:
                     logger.debug("Failed to prune thread %s", target_tid, exc_info=True)
 
@@ -1534,9 +1596,10 @@ class TextualAdapter:
         logger.exception("TUI: stream_turn Exception: %s", error)
         if self._messages is not None:
             self._messages.finish_assistant_message()
-            from talkops.ui.widgets.messages import ErrorMessage
+            if self._app is None:
+                from talkops.ui.widgets.messages import ErrorMessage
 
-            self._messages.mount(ErrorMessage(f"Agent execution failed: {error}"))
+                self._messages.mount(ErrorMessage(f"Agent execution failed: {error}"))
         if self._app:
             self._app.post_message(self.StreamError(str(error)))
 
@@ -1639,7 +1702,7 @@ class TextualAdapter:
                     if current_stream_mode == "custom":
                         self._handle_custom_stream_event(data, is_main_agent, stream_state=stream_state)
                     elif current_stream_mode == "updates":
-                        self._handle_updates_stream_event(data, pending_interrupts)
+                        self._handle_updates_stream_event(data, pending_interrupts, stream_state=stream_state)
                     elif current_stream_mode == "messages":
                         await self._handle_messages_stream_event(
                             data, ns_key, is_main_agent, stream_state
@@ -1662,6 +1725,9 @@ class TextualAdapter:
                     continue
                 else:
                     break
+
+            if stream_state.agent_session_error:
+                raise RuntimeError(stream_state.agent_session_error)
 
             self._finalize_turn_success(
                 start_t,

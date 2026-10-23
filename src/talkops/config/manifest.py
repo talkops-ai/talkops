@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Configuration manifest and option resolution engine for TalkOps.
 
 Single source of truth for all configurable settings across TalkOps:
@@ -7,7 +21,6 @@ the options, their types, defaults, env-var names, DB keys, and TOML keys.
 from __future__ import annotations
 
 import json
-from talkops.utils.logger import get_logger
 import os
 from dataclasses import dataclass
 from enum import Enum
@@ -17,8 +30,11 @@ from typing import TYPE_CHECKING, Any
 
 from talkops.config.paths import (
     CONFIG_PATH as DEFAULT_CONFIG_PATH,
+)
+from talkops.config.paths import (
     ENV_PREFIX,
 )
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     pass
@@ -97,12 +113,14 @@ class ConfigOption:
     """Valid values when kind is CHOICE."""
 
     def __post_init__(self) -> None:
+        """Validate and normalize fields after dataclass initialization."""
         if not self.db_key:
             # Default db_key to env_var or key
             object.__setattr__(self, "db_key", self.env_var or self.key)
 
     @property
     def type_label(self) -> str:
+        """Return the type label property."""
         return _KIND_TYPE_LABEL[self.kind]
 
     @property
@@ -112,6 +130,7 @@ class ConfigOption:
 
     @property
     def toml_path(self) -> str | None:
+        """Return the toml path property."""
         if not self.toml_keys:
             return None
         *sections, leaf = self.toml_keys

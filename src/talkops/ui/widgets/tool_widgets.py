@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tool-specific approval widgets for HITL display."""
 
 from __future__ import annotations
@@ -9,8 +23,8 @@ from textual.containers import Vertical
 from textual.content import Content
 from textual.widgets import Markdown, Static
 
-from talkops.ui import theme
 from talkops.file_ops import is_sensitive_file_path
+from talkops.ui import theme
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -129,6 +143,7 @@ class WriteFileApprovalWidget(ToolApprovalWidget):
     """Approval widget for write_file / write_to_file - shows file content with diff and line highlights."""
 
     def __init__(self, data: dict[str, Any]) -> None:
+        """Initialize WriteFileApprovalWidget."""
         super().__init__(data)
         self._full_diff = False
         self._diff_body: Static | None = None
@@ -145,6 +160,7 @@ class WriteFileApprovalWidget(ToolApprovalWidget):
 
     @property
     def has_expandable_diff(self) -> bool:
+        """Return the has expandable diff property."""
         file_path = self.data.get("file_path", "")
         if is_sensitive_file_path(file_path):
             return False
@@ -213,6 +229,7 @@ class EditFileApprovalWidget(ToolApprovalWidget):
     """Approval widget for edit_file / replace_file_content - shows clean diff with colors and line numbers."""
 
     def __init__(self, data: dict[str, Any]) -> None:
+        """Initialize EditFileApprovalWidget."""
         super().__init__(data)
         self._full_diff = False
         self._diff_body: Static | None = None
@@ -231,6 +248,7 @@ class EditFileApprovalWidget(ToolApprovalWidget):
 
     @property
     def has_expandable_diff(self) -> bool:
+        """Return the has expandable diff property."""
         file_path = self.data.get("file_path", "")
         if is_sensitive_file_path(file_path):
             return False
@@ -355,6 +373,7 @@ class TaskApprovalWidget(ToolApprovalWidget):
     """Approval widget for task tool call (subagent dispatch)."""
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         subagent_type = (
             self.data.get("subagent_type")
             or self.data.get("agent_name")

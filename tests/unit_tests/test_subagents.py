@@ -1,11 +1,32 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for subagent discovery, loading, and middleware orchestration."""
+
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.runnables.config import var_child_runnable_config
 
 from talkops.middleware.subagents import SubagentsMiddleware
 
 
 def test_subagents_middleware():
+    """Verify subagents middleware."""
     metas = [
         {"name": "eks-specialist", "description": "Diagnoses EKS cluster and node issues"},
         {"name": "cost-optimizer", "description": "Analyzes AWS spend and right-sizing"},
@@ -32,7 +53,9 @@ def test_subagents_middleware():
     prompt_block_with_plugin = mw._build_prompt_block()
     assert "### 2. Plugin & Extension Subagents (Code Interpreter `js_eval`)" in prompt_block_with_plugin
     assert "`plugin-secops`" in prompt_block_with_plugin
-    assert "`cve-scan`" in prompt_block_with_plugin
+    assert "Security compliance scanner" in prompt_block_with_plugin
+    assert "`cve-scan`" not in prompt_block_with_plugin
+    assert "Source:" not in prompt_block_with_plugin
 
     # Test before_agent state injection
     empty_state: Any = {}
@@ -216,8 +239,8 @@ Authorization = "Bearer ${TALKOPS_AUTH_TOKEN}"
 
 def test_subagent_panel_header_meta_parts():
     """Verify SubagentPanel header rendering and separator glyph resolution."""
-    from talkops.ui.widgets.subagent_panel import SubagentPanel, _Phase
     from talkops.ui.theme import DARK_COLORS
+    from talkops.ui.widgets.subagent_panel import SubagentPanel, _Phase
 
     panel = SubagentPanel()
     panel._phase_order = ["eval-1", "eval-2"]
@@ -239,8 +262,8 @@ def test_subagent_panel_header_meta_parts():
 
 def test_subagent_panel_model_and_activity():
     """Verify SubagentPanel captures model name and live activity/action."""
-    from talkops.ui.widgets.subagent_panel import SubagentPanel
     from talkops.ui.theme import DARK_COLORS
+    from talkops.ui.widgets.subagent_panel import SubagentPanel
 
     panel = SubagentPanel()
     panel.prepare_turn(model_label="gemini-2.5-flash")
@@ -285,9 +308,9 @@ def test_subagent_panel_model_and_activity():
 
 def test_subagent_panel_semantic_colors_and_phase_nav():
     """Verify SubagentPanel uses primary for running, success for done, error for failed, and accent bar for phase."""
-    from talkops.ui.widgets.subagent_panel import SubagentPanel, _SubagentRecord, _Phase
-    from talkops.ui.theme import DARK_COLORS
     from talkops.config.settings import get_glyphs
+    from talkops.ui.theme import DARK_COLORS
+    from talkops.ui.widgets.subagent_panel import SubagentPanel, _Phase, _SubagentRecord
 
     glyphs = get_glyphs()
     panel = SubagentPanel()
@@ -326,7 +349,10 @@ def test_subagent_panel_semantic_colors_and_phase_nav():
 def test_subagent_cli_middleware_hitl():
     """Verify _subagent_cli_middleware attaches AutoModeHITLMiddleware when appropriate."""
     from talkops.agent.factory import _subagent_cli_middleware
-    from talkops.middleware.auto_mode_hitl import AutoModeHITLMiddleware, AsyncApprovalHITLMiddleware
+    from talkops.middleware.auto_mode_hitl import (
+        AsyncApprovalHITLMiddleware,
+        AutoModeHITLMiddleware,
+    )
 
     interrupt_on = {"execute": True}
 
@@ -359,9 +385,9 @@ def test_subagent_cli_middleware_hitl():
 
 def test_subagent_cost_transfers_empty_scope():
     """Verify CostTrackingMiddleware transfers costs from nested subagents without checkpoint_ns."""
-    from unittest.mock import MagicMock
-    from talkops.middleware.cost_tracking import CostTrackingMiddleware
     from langgraph.types import Overwrite
+
+    from talkops.middleware.cost_tracking import CostTrackingMiddleware
 
     nested_mw = CostTrackingMiddleware(nested=True)
     root_mw = CostTrackingMiddleware(nested=False)
@@ -406,6 +432,7 @@ def test_subagent_cost_transfers_empty_scope():
 
 
 def test_subagent_telemetry_format_tool_activity():
+    """Verify subagent telemetry format tool activity."""
     from talkops.middleware.subagent_telemetry import _format_tool_activity
 
     assert _format_tool_activity("bash", {"command": "aws eks list-clusters --region us-east-1"}) == "aws eks list-clusters --region us-east-1"
@@ -416,7 +443,7 @@ def test_subagent_telemetry_format_tool_activity():
 
 
 def test_subagent_telemetry_middleware_wrap_tool_call():
-    from unittest.mock import MagicMock
+    """Verify subagent telemetry middleware wrap tool call."""
     from talkops.middleware.subagent_telemetry import SubagentTelemetryMiddleware
 
     mw = SubagentTelemetryMiddleware(subagent_name="aws-finops-agent")
@@ -436,6 +463,7 @@ def test_subagent_telemetry_middleware_wrap_tool_call():
     called = False
 
     def dummy_handler(req: Any) -> Any:
+        """Provide dummy handler test helper or fixture."""
         nonlocal called
         called = True
         return "tool_result"
@@ -456,7 +484,7 @@ def test_subagent_telemetry_middleware_wrap_tool_call():
 
 
 def test_subagent_telemetry_middleware_wrap_model_call():
-    from unittest.mock import MagicMock
+    """Verify subagent telemetry middleware wrap model call."""
     from talkops.middleware.subagent_telemetry import SubagentTelemetryMiddleware
 
     mw = SubagentTelemetryMiddleware(subagent_name="aws-finops-agent")
@@ -472,6 +500,7 @@ def test_subagent_telemetry_middleware_wrap_model_call():
     called = False
 
     def dummy_handler(req: Any) -> Any:
+        """Provide dummy handler test helper or fixture."""
         nonlocal called
         called = True
         return "model_response"
@@ -488,10 +517,9 @@ def test_subagent_telemetry_middleware_wrap_model_call():
 
 
 def test_subagent_transcript_config_thread_id_binding():
-    from unittest.mock import MagicMock
-    from talkops.middleware.server_hooks import _subagent_transcript_config
+    """Verify subagent transcript config thread id binding."""
     from talkops.middleware.cost_tracking import ACTIVE_SESSION_THREAD_ID
-    from langchain_core.runnables.config import var_child_runnable_config
+    from talkops.middleware.server_hooks import _subagent_transcript_config
 
     call = MagicMock()
     call.name = "task"
@@ -518,6 +546,7 @@ def test_subagent_transcript_config_thread_id_binding():
 
 
 def test_subagent_panel_activity_matching_by_name():
+    """Verify subagent panel activity matching by name."""
     from talkops.ui.widgets.subagent_panel import SubagentPanel
 
     panel = SubagentPanel()
@@ -539,10 +568,8 @@ def test_subagent_panel_activity_matching_by_name():
 
 def test_subagent_transcript_config_js_eval():
     """Verify _subagent_transcript_config also binds thread and config for js_eval."""
-    from unittest.mock import MagicMock
-    from talkops.middleware.server_hooks import _subagent_transcript_config
     from talkops.middleware.cost_tracking import ACTIVE_SESSION_THREAD_ID
-    from langchain_core.runnables.config import var_child_runnable_config
+    from talkops.middleware.server_hooks import _subagent_transcript_config
 
     call = MagicMock()
     call.name = "js_eval"
@@ -583,9 +610,8 @@ def test_subagent_cli_middleware_includes_jev_router():
 
 def test_subagent_cli_middleware_includes_compaction_middleware():
     """Verify _subagent_cli_middleware attaches CLICompactionMiddleware when backend and model are provided."""
-    from unittest.mock import MagicMock
-    from langchain_core.language_models.chat_models import BaseChatModel
     from deepagents.backends.filesystem import FilesystemBackend
+
     from talkops.agent.factory import _subagent_cli_middleware
     from talkops.middleware.compaction import CLICompactionMiddleware
     from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
@@ -615,7 +641,10 @@ def test_subagent_cli_middleware_includes_compaction_middleware():
 
 def test_subagent_tool_filter_allows_system_compaction_tool():
     """Verify ToolFilterMiddleware does not block compact_conversation even with strict allowed_tools."""
-    from talkops.middleware.tool_filter import ToolFilterMiddleware, ALWAYS_ALLOWED_SYSTEM_TOOLS
+    from talkops.middleware.tool_filter import (
+        ALWAYS_ALLOWED_SYSTEM_TOOLS,
+        ToolFilterMiddleware,
+    )
 
     assert "compact_conversation" in ALWAYS_ALLOWED_SYSTEM_TOOLS
     assert "ask_user" in ALWAYS_ALLOWED_SYSTEM_TOOLS
@@ -633,11 +662,10 @@ def test_subagent_tool_filter_allows_system_compaction_tool():
 
 def test_pending_thread_transfers_bridge_to_charge():
     """Verify _PENDING_THREAD_TRANSFERS bridges dropped subagent transfers to parent _charge."""
-    from unittest.mock import MagicMock
     from talkops.middleware.cost_tracking import (
-        CostTrackingMiddleware,
         _PENDING_THREAD_TRANSFERS,
         _TRANSFERS_LOCK,
+        CostTrackingMiddleware,
         _CostTransfer,
     )
 
@@ -708,11 +736,14 @@ def test_subagent_panel_set_subagent_model():
 
 
 def test_subagent_panel_hitl_resume_deduplication():
-    """Verify that when a subagent is interrupted for HITL approval and resumed with a new UUID,
-    SubagentPanel does not create duplicate rows or inflate phase counts."""
-    from talkops.ui.widgets.subagent_panel import SubagentPanel
-    from talkops.ui.theme import DARK_COLORS
+    """Verify SubagentPanel deduplication across HITL interrupt and resume.
+
+    Ensures that when a subagent is interrupted for HITL approval and resumed with a new UUID,
+    SubagentPanel does not create duplicate rows or inflate phase counts.
+    """
     from talkops.config.settings import get_glyphs
+    from talkops.ui.theme import DARK_COLORS
+    from talkops.ui.widgets.subagent_panel import SubagentPanel
 
     panel = SubagentPanel()
     eval_id = "eval_call_101"
@@ -823,10 +854,56 @@ def test_subagent_telemetry_mcp_run_script_formatting():
 
     # Tool with command
     res4 = _format_tool_activity("aws___run_script", {
-        "command": "aws ce get-cost-and-usage --time-period Start=2026-05-01,End=2026-10-01",
+        "command": "aws ce get-cost-and-usage --time-period Start=2026-05-01,End=2026-01-01",
     })
     assert "aws ce get-cost-and-usage" in res4
     assert not res4.startswith("aws: aws")
+
+
+def test_subagent_mode_fork_and_harness_profile(tmp_path):
+    """Verify subagent mode ('fork' vs 'isolated'), Adversarial Propose-Probe rule, and HarnessProfile."""
+    from talkops.agent.profiles import (
+        SubagentDeliverable,
+        create_talkops_harness_profile,
+        get_talkops_harness_profile,
+        register_talkops_harness_profile,
+    )
+    from talkops.middleware.subagents import SubagentsMiddleware
+    from talkops.subagents.loader import parse_subagent_file
+
+    agent_md = tmp_path / "postmortem-writer.md"
+    agent_md.write_text(
+        "---\nname: postmortem-writer\ndescription: Writes incident RCA postmortems\nmode: fork\n---\nWrite RCA.",
+        encoding="utf-8",
+    )
+    parsed = parse_subagent_file(agent_md)
+    assert parsed is not None
+    assert parsed.get("mode") == "fork"
+
+    mw = SubagentsMiddleware(subagent_metas=[parsed])
+    prompt_block = mw._build_prompt_block()
+    assert "mode: `fork`" in prompt_block
+    assert "Adversarial Propose-Probe Verification" in prompt_block
+
+    state_update = mw.before_agent({}, None)  # type: ignore[arg-type]
+    assert state_update is not None
+    assert state_update["_subagent_registry"]["postmortem-writer"]["mode"] == "fork"
+
+    # Test SubagentDeliverable schema and HarnessProfile registration
+    deliverable = SubagentDeliverable(
+        status="completed",
+        executive_summary="IAM role lacks sts:AssumeRole permission.",
+        evidence_citations=["infra/iam.tf:42"],
+        recommended_actions=["aws iam update-assume-role-policy ..."],
+    )
+    assert deliverable.status == "completed"
+    assert "infra/iam.tf:42" in deliverable.evidence_citations
+
+    profile = create_talkops_harness_profile(system_prompt_suffix="Verify blast radius.")
+    registered = register_talkops_harness_profile("openai:test-ops-model", profile, register_in_sdk=False)
+    assert registered.system_prompt_suffix == "Verify blast radius."
+    assert get_talkops_harness_profile("openai:test-ops-model") is registered
+
 
 
 

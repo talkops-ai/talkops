@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Logging module for TalkOps Agent.
 
 Provides color-coded, multi-sink (file + optional console) logging with
@@ -20,17 +34,17 @@ Usage::
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import contextlib
-from datetime import UTC, datetime
-from enum import Enum
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 import os
-from pathlib import Path
 import sys
 import threading
+from collections.abc import Callable
+from datetime import UTC, datetime
+from enum import Enum
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
 
 from colorama import Fore, Style
@@ -99,10 +113,12 @@ class _ColorFormatter(logging.Formatter):
     """Applies per-level color to log records for console output."""
 
     def __init__(self) -> None:
+        """Initialize _ColorFormatter."""
         super().__init__()
         self._date_fmt: str = _cfg("LOG_DATE_FORMAT", "%Y-%m-%dT%H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
+        """Format color formatter."""
         level = record.levelname
         agent = getattr(record, "agent_name", "BASE")
 
@@ -134,10 +150,12 @@ class _PlainFormatter(logging.Formatter):
     """Emits human-readable text without ANSI color codes (for file logging)."""
 
     def __init__(self) -> None:
+        """Initialize _PlainFormatter."""
         super().__init__()
         self._date_fmt: str = _cfg("LOG_DATE_FORMAT", "%Y-%m-%dT%H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
+        """Format plain formatter."""
         level = record.levelname
         agent = getattr(record, "agent_name", "BASE")
         ts = datetime.now(UTC).strftime(self._date_fmt)
@@ -163,6 +181,7 @@ class _JsonFormatter(logging.Formatter):
     """Emits each log record as a single JSON line."""
 
     def format(self, record: logging.LogRecord) -> str:
+        """Format json formatter."""
         entry: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
@@ -346,6 +365,7 @@ class _GoogleGenAiAfcNoiseFilter(logging.Filter):
     """Suppress false-positive google-genai AFC messages when called via LangChain."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Filter google gen ai afc noise filter."""
         msg = record.getMessage()
         if "Direct use of automatic function calling (AFC)" in msg:
             return False
@@ -453,7 +473,15 @@ def configure_logging(
         else:
             logging.lastResort = logging.NullHandler()  # type: ignore[assignment]
 
-        for ext_name in ("py.warnings", "mcp", "httpx", "httpcore", "asyncio", "google_genai.models"):
+        for ext_name in (
+            "py.warnings",
+            "mcp",
+            "httpx",
+            "httpcore",
+            "asyncio",
+            "google_genai.models",
+            "google_genai._api_client",
+        ):
             _apply_handlers(logging.getLogger(ext_name))
 
         genai_logger = logging.getLogger("google_genai.models")
@@ -505,6 +533,7 @@ class AgentLogger:
     __slots__ = ("_logger", "_stream_fn", "agent_name")
 
     def __init__(self, agent_name: str = "BASE") -> None:
+        """Initialize AgentLogger."""
         self.agent_name = agent_name
         self._logger = logging.getLogger(f"talkops.{agent_name}")
         self._stream_fn: Callable[[dict[str, Any]], None] | None = None
@@ -558,21 +587,27 @@ class AgentLogger:
                 pass
 
     def debug(self, msg: str, *args: Any, extra: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        """Execute debug on AgentLogger."""
         self._log(logging.DEBUG, msg, *args, extra=extra, **kwargs)
 
     def info(self, msg: str, *args: Any, extra: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        """Execute info on AgentLogger."""
         self._log(logging.INFO, msg, *args, extra=extra, **kwargs)
 
     def warning(self, msg: str, *args: Any, extra: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        """Execute warning on AgentLogger."""
         self._log(logging.WARNING, msg, *args, extra=extra, **kwargs)
 
     def error(self, msg: str, *args: Any, extra: dict[str, Any] | None = None, exc_info: Any = None, **kwargs: Any) -> None:
+        """Execute error on AgentLogger."""
         self._log(logging.ERROR, msg, *args, extra=extra, exc_info=exc_info, **kwargs)
 
     def critical(self, msg: str, *args: Any, extra: dict[str, Any] | None = None, exc_info: Any = None, **kwargs: Any) -> None:
+        """Execute critical on AgentLogger."""
         self._log(logging.CRITICAL, msg, *args, extra=extra, exc_info=exc_info, **kwargs)
 
     def exception(self, msg: str, *args: Any, extra: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        """Execute exception on AgentLogger."""
         self._log(logging.ERROR, msg, *args, extra=extra, exc_info=True, **kwargs)
 
 

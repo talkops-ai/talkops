@@ -139,7 +139,7 @@ CommandOutputMessage {
     height: auto;
     padding: 1 2;
     margin: 1 0 1 0;
-    background: $surface 45%;
+    background: $surface 75%;
     border-left: wide $primary;
     color: $foreground;
     pointer: text;
@@ -236,7 +236,7 @@ SubagentPanel {
     margin-bottom: 0;
 }
 
-.inline-prompt .inline-prompt-input {
+.inline-prompt-input {
     & .text-area--cursor-line {
         background: transparent;
     }

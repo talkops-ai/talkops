@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Compaction TUI visibility, <slash_commands> prompt section, and TipsManager."""
 
 from __future__ import annotations
@@ -7,8 +21,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from talkops.commands.registry import CommandRegistry
 from talkops.middleware.compaction import (
@@ -33,11 +47,11 @@ from talkops.ui.tips import (
 )
 from talkops.ui.widgets.messages import CompactionMessage, TurnSummary
 
-
 # ── 1. CompactionMessage & TurnSummary Widget Tests ──────────────────────────
 
 
 def test_compaction_message_header_and_stats_formatting() -> None:
+    """Verify compaction message header and stats formatting."""
     widget = CompactionMessage(
         steps_summarized=18,
         pre_tokens=172_400,
@@ -62,6 +76,7 @@ def test_compaction_message_header_and_stats_formatting() -> None:
 
 
 def test_compaction_message_singular_step_and_empty_stats() -> None:
+    """Verify compaction message singular step and empty stats."""
     single = CompactionMessage(steps_summarized=1, summary_tokens=500)
     stats = single.stats_text()
     assert "1 step summarized" in stats
@@ -73,6 +88,7 @@ def test_compaction_message_singular_step_and_empty_stats() -> None:
 
 
 def test_turn_summary_with_and_without_tip() -> None:
+    """Verify turn summary with and without tip."""
     without_tip = TurnSummary(elapsed_seconds=2.5, tool_count=2, tokens=1500, cost_usd=0.01)
     assert without_tip.summary_text() == "Done in 2.5s · 2 tools · 1.5K tokens · $0.01"
     assert "Tip:" not in without_tip.render().plain
@@ -95,6 +111,7 @@ def test_turn_summary_with_and_without_tip() -> None:
 
 
 def test_summarization_chunk_is_filtered_from_transcript() -> None:
+    """Verify summarization chunk is filtered from transcript."""
     assert _is_auto_mode_classifier_chunk({"lc_source": "summarization"}) is True
     assert _is_auto_mode_classifier_chunk({"lc_source": "auto_mode_classifier"}) is True
     assert _is_auto_mode_classifier_chunk({"lc_source": "conversation_title_generator"}) is True
@@ -103,10 +120,13 @@ def test_summarization_chunk_is_filtered_from_transcript() -> None:
 
 
 def test_generate_llm_continuation_summary_passes_summarization_lc_source() -> None:
+    """Verify generate llm continuation summary passes summarization lc source."""
     captured_configs: list[Any] = []
 
     class DummyModel:
+        """Test suite or helper class for dummy model."""
         def invoke(self, messages: Any, config: Any = None) -> Any:
+            """Provide invoke test helper or fixture."""
             captured_configs.append(config)
             return AIMessage(content="<summary>Compact summary</summary>")
 
@@ -124,6 +144,7 @@ def test_generate_llm_continuation_summary_passes_summarization_lc_source() -> N
 
 
 def test_talkops_summarization_middleware_emits_compaction_events() -> None:
+    """Verify talkops summarization middleware emits compaction events."""
     emitted_events: list[dict[str, Any]] = []
     runtime = SimpleNamespace(
         context={},
@@ -131,20 +152,26 @@ def test_talkops_summarization_middleware_emits_compaction_events() -> None:
     )
 
     class FakeBackend:
+        """Test suite or helper class for fake backend."""
         def download_files(self, paths: list[str]) -> list[Any]:
+            """Provide download files test helper or fixture."""
             return [SimpleNamespace(content=None, error="file_not_found")]
 
         def write(self, path: str, content: str) -> Any:
+            """Provide write test helper or fixture."""
             return SimpleNamespace(error=None)
 
     class DummyModel:
+        """Test suite or helper class for dummy model."""
         _llm_type = "openai-chat"
         profile = {"max_input_tokens": 128_000}
 
         def with_retry(self, **kwargs: Any) -> Any:
+            """Provide with retry test helper or fixture."""
             return self
 
         def invoke(self, messages: Any, config: Any = None) -> Any:
+            """Provide invoke test helper or fixture."""
             return AIMessage(content="<summary>Summarized 3 steps</summary>")
 
     mw = TalkOpsSummarizationMiddleware(
@@ -201,6 +228,7 @@ def test_talkops_summarization_middleware_emits_compaction_events() -> None:
 
 
 def test_cli_compaction_middleware_emits_compaction_events() -> None:
+    """Verify cli compaction middleware emits compaction events."""
     emitted_events: list[dict[str, Any]] = []
     runtime = SimpleNamespace(
         context={},
@@ -208,20 +236,26 @@ def test_cli_compaction_middleware_emits_compaction_events() -> None:
     )
 
     class FakeBackend:
+        """Test suite or helper class for fake backend."""
         def download_files(self, paths: list[str]) -> list[Any]:
+            """Provide download files test helper or fixture."""
             return [SimpleNamespace(content=None, error="file_not_found")]
 
         def write(self, path: str, content: str) -> Any:
+            """Provide write test helper or fixture."""
             return SimpleNamespace(error=None)
 
     class DummyModel:
+        """Test suite or helper class for dummy model."""
         _llm_type = "openai-chat"
         profile = {"max_input_tokens": 128_000}
 
         def with_retry(self, **kwargs: Any) -> Any:
+            """Provide with retry test helper or fixture."""
             return self
 
         def invoke(self, messages: Any, config: Any = None) -> Any:
+            """Provide invoke test helper or fixture."""
             return AIMessage(content="<summary>CLI compacted</summary>")
 
     backend = FakeBackend()
@@ -241,6 +275,7 @@ def test_cli_compaction_middleware_emits_compaction_events() -> None:
     state: dict[str, Any] = {"messages": msgs}
 
     def handler(req: Any) -> Any:
+        """Provide handler test helper or fixture."""
         return SimpleNamespace(result=[AIMessage(content="ok")])
 
     base_req_fields = {
@@ -265,6 +300,7 @@ def test_cli_compaction_middleware_emits_compaction_events() -> None:
 
 
 def test_textual_adapter_handles_compaction_start_and_end() -> None:
+    """Verify textual adapter handles compaction start and end."""
     mounted_widgets: list[Any] = []
     spinner_states: list[str | None] = []
     status_bar = MagicMock()
@@ -276,6 +312,7 @@ def test_textual_adapter_handles_compaction_start_and_end() -> None:
     )
 
     async def fake_set_spinner(text: str | None) -> None:
+        """Provide fake set spinner test helper or fixture."""
         spinner_states.append(text)
 
     adapter = TextualAdapter(
@@ -332,6 +369,7 @@ def test_textual_adapter_handles_compaction_start_and_end() -> None:
 
 @pytest.mark.asyncio
 async def test_thread_controller_mounts_compaction_message_on_rehydrate() -> None:
+    """Verify thread controller mounts compaction message on rehydrate."""
     summary_msg = HumanMessage(
         content="<CONTEXT_SUMMARY>\n<summary>Prior work</summary>\n</CONTEXT_SUMMARY>",
         additional_kwargs={
@@ -389,6 +427,7 @@ async def test_thread_controller_mounts_compaction_message_on_rehydrate() -> Non
 
 
 def test_slash_commands_section_in_system_prompt() -> None:
+    """Verify slash commands section in system prompt."""
     CommandRegistry.reset()
     commands = CommandRegistry.get_instance().list_recommendable_commands()
     cmd_names = {name for name, _ in commands}
@@ -419,6 +458,7 @@ def test_slash_commands_section_in_system_prompt() -> None:
 
 
 def test_has_inline_slash_recommendation_detection() -> None:
+    """Verify has inline slash recommendation detection."""
     assert has_inline_slash_recommendation("You can use `/goal` to track this.") is True
     assert has_inline_slash_recommendation("Try /compact to free up space.") is True
     assert has_inline_slash_recommendation("Modified `/etc/hosts` and `/var/log/syslog`.") is False
@@ -427,6 +467,7 @@ def test_has_inline_slash_recommendation_detection() -> None:
 
 def test_tips_manager_contextual_selection_and_suppression() -> None:
     # Deterministic RNG that always rolls 0 (< len(eligible), so roll succeeds)
+    """Verify tips manager contextual selection and suppression."""
     always_Zero_rng = MagicMock(spec=random.Random)
     always_Zero_rng.randrange.return_value = 0
 

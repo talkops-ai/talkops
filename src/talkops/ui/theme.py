@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """TalkOps brand colors and semantic constants for the TUI.
 
 Single source of truth for color values used in Python code (Rich markup,
@@ -11,128 +25,135 @@ are backed by these constants.
 
 from __future__ import annotations
 
+import contextlib
 import functools
-from talkops.utils.logger import get_logger
 import os
 import re
+import tempfile
 import tomllib
 from dataclasses import dataclass, fields
-
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from textual.theme import Theme
+
+from talkops.utils.logger import get_logger
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
     from textual.app import App
 
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Brand palette — dark (Tokyo Night base + TalkOps teal identity)
+# Brand palette — dark (Nocturnal Obsidian + Signal Emerald & Telemetry Cyan)
+# Calibrated for terminal ergonomics (harmonious Obsidian steps, zero halation)
 # ---------------------------------------------------------------------------
-DC_DARK = "#11121D"
-"""Background — Tokyo Night base."""
+DC_DARK = "#0C1017"
+"""Background — Nocturnal Obsidian terminal base."""
 
-DC_CARD = "#1A1B2E"
-"""Surface / card — elevated above background."""
+DC_CARD = "#141B26"
+"""Surface / card — Smoked Obsidian elevated above background."""
 
-DC_BORDER_DK = "#25283B"
-"""Borders on dark backgrounds."""
+DC_BORDER_DK = "#1E2736"
+"""Borders on dark Obsidian backgrounds."""
 
-DC_BORDER_LT = "#3B3E52"
-"""Borders on lighter / hovered backgrounds."""
+DC_BORDER_LT = "#2D3B52"
+"""Borders on lighter / hovered Obsidian surfaces."""
 
-DC_BODY = "#C0CAF5"
-"""Body text — Tokyo Night foreground."""
+DC_BODY = "#D8E2EF"
+"""Body text — Soft cool slate primary foreground."""
 
-DC_TEAL = "#2dd4bf"
-"""Primary accent teal — TalkOps identity."""
+DC_TEAL = "#10B981"
+"""Primary accent — Signal Emerald (TalkOps brand identity)."""
 
-DC_CYAN = "#7AA2F7"
-"""Secondary accent — Tokyo Night blue."""
+DC_CYAN = "#38BDF8"
+"""Secondary accent — Telemetry Cyan."""
 
-DC_PURPLE = "#BB9AF7"
-"""Skills and knowledge packs — Tokyo Night purple."""
+DC_PURPLE = "#A78BFA"
+"""Skills, commands, and knowledge packs — Signal Violet."""
 
-DC_GREEN = "#9ECE6A"
-"""Success / positive — Tokyo Night green."""
+DC_GREEN = "#34D399"
+"""Success / positive — Bright Signal Emerald."""
 
-DC_AMBER = "#e2b340"
-"""Warning / tool operations indicator."""
+DC_AMBER = "#F59E0B"
+"""Warning / tool operations indicator — Signal Amber."""
 
-DC_RED = "#F7768E"
-"""Error / destructive — Tokyo Night red."""
+DC_RED = "#F87171"
+"""Error / destructive — Signal Rose."""
 
-DC_MUTED = "#545C7E"
-"""Muted / secondary text — Tokyo Night comment."""
+DC_MUTED = "#64748B"
+"""Muted / secondary text — Slate-500."""
 
-DC_GREEN_BG = "#1D2D20"
-"""Subtle green-tinted background for diff additions."""
+DC_GREEN_BG = "#08281E"
+"""Subtle Signal Emerald-tinted background for diff additions."""
 
-DC_RED_BG = "#2D2030"
-"""Subtle red-tinted background for diff removals / errors."""
+DC_RED_BG = "#2D1219"
+"""Subtle Rose-tinted background for diff removals / errors."""
 
-DC_PANEL = "#1E2030"
-"""Panel — section background."""
+DC_PANEL = "#1E2736"
+"""Panel — Elevated Obsidian section background."""
 
 DC_SKILL = DC_PURPLE
 """Skill invocation accent."""
 
-DC_SKILL_HOVER = "#c4b5fd"
+DC_SKILL_HOVER = "#C4B5FD"
 """Skill invocation hover."""
 
 DC_TOOL = DC_AMBER
 """Tool call accent."""
 
-DC_TOOL_HOVER = "#fbbf24"
+DC_TOOL_HOVER = "#FBBF24"
 """Tool call hover."""
 
-DC_INCOGNITO = "#545C7E"
-"""Incognito shell accent — muted to convey privacy."""
+DC_INCOGNITO = "#64748B"
+"""Incognito shell accent — muted slate to convey privacy."""
 
 # DevOps Specific Dark Tokens
-DC_PLAN_ADD = "#10b981"
-DC_PLAN_CHANGE = "#f59e0b"
-DC_PLAN_DESTROY = "#ef4444"
-DC_CTX_PROD = "#dc2626"
-DC_CTX_NONPROD = "#2563eb"
-DC_STATUS_OK = "#10b981"
-DC_STATUS_WARN = "#f59e0b"
-DC_STATUS_DANGER = "#ef4444"
+DC_PLAN_ADD = "#34D399"
+DC_PLAN_CHANGE = "#F59E0B"
+DC_PLAN_DESTROY = "#F87171"
+DC_CTX_PROD = "#F43F5E"
+DC_CTX_NONPROD = "#38BDF8"
+DC_STATUS_OK = "#34D399"
+DC_STATUS_WARN = "#F59E0B"
+DC_STATUS_DANGER = "#F87171"
 
 # ---------------------------------------------------------------------------
-# Brand palette — light
+# Brand palette — light (Soft Slate Paper + Deep Signal Emerald & Telemetry Blue)
+# Follows terminal light-mode luminance hierarchy (surface/panel darker than bg)
 # ---------------------------------------------------------------------------
-DC_LIGHT_BG = "#f6f8fa"
-DC_LIGHT_CARD = "#ffffff"
-DC_LIGHT_BORDER = "#d0d7de"
-DC_LIGHT_BORDER_HVR = "#afb8c1"
-DC_LIGHT_BODY = "#24292f"
-DC_LIGHT_TEAL = "#0d9488"
-DC_LIGHT_CYAN = "#0284c7"
-DC_LIGHT_PURPLE = "#7c3aed"
-DC_LIGHT_GREEN = "#059669"
-DC_LIGHT_AMBER = "#d97706"
-DC_LIGHT_RED = "#dc2626"
-DC_LIGHT_MUTED = "#57606a"
-DC_LIGHT_GREEN_BG = "#dafbe1"
-DC_LIGHT_RED_BG = "#ffebe9"
-DC_LIGHT_PANEL = "#f3f4f6"
+DC_LIGHT_BG = "#F3F5F8"
+DC_LIGHT_CARD = "#E7ECF2"
+DC_LIGHT_BORDER = "#CBD5E1"
+DC_LIGHT_BORDER_HVR = "#94A3B8"
+DC_LIGHT_BODY = "#1E293B"
+DC_LIGHT_TEAL = "#047857"
+DC_LIGHT_CYAN = "#0369A1"
+DC_LIGHT_PURPLE = "#6D28D9"
+DC_LIGHT_GREEN = "#047857"
+DC_LIGHT_AMBER = "#B45309"
+DC_LIGHT_RED = "#BE185D"
+DC_LIGHT_MUTED = "#5E6B7C"
+DC_LIGHT_GREEN_BG = "#D1FAE5"
+DC_LIGHT_RED_BG = "#FFE4E6"
+DC_LIGHT_PANEL = "#DCE3EC"
 DC_LIGHT_SKILL = DC_LIGHT_PURPLE
-DC_LIGHT_SKILL_HOVER = "#6d28d9"
+DC_LIGHT_SKILL_HOVER = "#5B21B6"
 DC_LIGHT_TOOL = DC_LIGHT_AMBER
-DC_LIGHT_TOOL_HOVER = "#b45309"
-DC_LIGHT_INCOGNITO = "#0f766e"
+DC_LIGHT_TOOL_HOVER = "#78350F"
+DC_LIGHT_INCOGNITO = "#0F766E"
 
-DC_LIGHT_PLAN_ADD = "#059669"
-DC_LIGHT_PLAN_CHANGE = "#d97706"
-DC_LIGHT_PLAN_DESTROY = "#dc2626"
-DC_LIGHT_CTX_PROD = "#b91c1c"
-DC_LIGHT_CTX_NONPROD = "#1d4ed8"
-DC_LIGHT_STATUS_OK = "#059669"
-DC_LIGHT_STATUS_WARN = "#d97706"
-DC_LIGHT_STATUS_DANGER = "#dc2626"
+DC_LIGHT_PLAN_ADD = "#047857"
+DC_LIGHT_PLAN_CHANGE = "#B45309"
+DC_LIGHT_PLAN_DESTROY = "#BE185D"
+DC_LIGHT_CTX_PROD = "#BE185D"
+DC_LIGHT_CTX_NONPROD = "#0369A1"
+DC_LIGHT_STATUS_OK = "#047857"
+DC_LIGHT_STATUS_WARN = "#B45309"
+DC_LIGHT_STATUS_DANGER = "#BE185D"
 
 _HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -453,8 +474,6 @@ def reload_registry() -> Mapping[str, ThemeEntry]:
 
 def register_app_themes(app: App[Any]) -> None:
     """Register custom TalkOps and user-defined themes with Textual."""
-    from textual.theme import Theme
-
     dark_theme = Theme(
         name="talkops-dark",
         primary=DARK_COLORS.primary,
@@ -536,8 +555,7 @@ def load_terminal_default() -> str | None:
 def load_theme_preference() -> str:
     """Resolve active theme preference from environment -> per-terminal default -> config -> settings.json -> default."""
     env_theme = (
-        os.environ.get("OPSCODE_THEME", "").strip()
-        or os.environ.get("TALKOPS_THEME", "").strip()
+        os.environ.get("TALKOPS_THEME", "").strip()
     )
     if env_theme and env_theme in get_registry():
         return env_theme
@@ -581,8 +599,6 @@ def _read_config_toml_data() -> dict[str, Any]:
 
 
 def _write_config_toml_data(data: dict[str, Any]) -> bool:
-    import contextlib
-    import tempfile
     import tomli_w
 
     try:
@@ -611,6 +627,7 @@ def save_theme_preference(name: str, config_path: Path | None = None) -> bool:
     if config_path is None:
         try:
             import copy
+
             from talkops.config.cli_settings import get_cli_settings_manager
 
             mgr = get_cli_settings_manager()

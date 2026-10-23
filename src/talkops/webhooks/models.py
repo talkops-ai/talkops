@@ -1,10 +1,24 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Data models and configuration for TalkOps central webhook ingestion and dispatch."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-import json
 from typing import TYPE_CHECKING, Any
 
 from talkops.integrations.base import IncomingMessage
@@ -209,6 +223,7 @@ class OutboundChannelRoute:
         return True
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert instance to dict."""
         return {
             "channel": self.channel,
             "conversation_id": self.conversation_id,
@@ -333,7 +348,8 @@ class WebhookConfig:
     def from_settings(cls, settings: Settings | None = None) -> WebhookConfig:
         """Hydrate WebhookConfig from TalkOps's canonical `Settings` object."""
         from talkops.config.env_vars import classify_env_bool
-        from talkops.config.settings import Settings as SettingsCls, resolve_env_var
+        from talkops.config.settings import Settings as SettingsCls
+        from talkops.config.settings import resolve_env_var
 
         cfg = settings if settings is not None else SettingsCls.from_env()
 

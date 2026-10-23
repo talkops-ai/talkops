@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Jev-powered dynamic model and reasoning router middleware.
 
 Operates strictly in Smart mode (Jev System One), dynamically classifying incoming
@@ -7,9 +21,10 @@ tasks using LangChain's official ModelRouterMiddleware and ModelChoice primitive
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+import concurrent.futures
 import os
 import threading
+from collections.abc import Mapping, Sequence
 from typing import Any, Awaitable, Callable, cast
 
 from langchain.agents.middleware.types import (
@@ -31,8 +46,8 @@ from talkops.config.settings import get_settings, resolve_env_var
 from talkops.middleware.registry import register_middleware
 from talkops.model.pool import (
     ORCHESTRATOR_ROUTE_CRITERIA,
-    ROUTER_INSTRUCTIONS,
     ROUTE_TO_TIER_MAP,
+    ROUTER_INSTRUCTIONS,
     SUBAGENT_ROUTE_CRITERIA,
     TIER_TO_ROUTE_MAP,
     DynamicModelPoolManager,
@@ -547,6 +562,7 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
         subagent_name: str | None = None,
         capabilities: Sequence[Any] | None = None,
     ) -> None:
+        """Initialize JevDynamicModelRouterMiddleware."""
         super().__init__()
         self.pool = pool_manager or get_model_pool_manager()
         self._api_key = api_key
@@ -562,13 +578,29 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
 
     def _resolved_api_key(self) -> str | None:
         """Resolve the TypeSafe key without constructing a classifier."""
-        if self._api_key:
+        if self._api_key and self._api_key != "placeholder":
             return self._api_key
         settings_key = getattr(get_settings(), "typesafe_api_key", None)
-        return settings_key or resolve_env_var(
+        if settings_key and settings_key != "placeholder":
+            return settings_key
+        key = resolve_env_var(
             "TYPESAFE_API_KEY",
             fallback_names=("JEV_API_KEY",),
         )
+        if key and key != "placeholder":
+            return key
+        try:
+            from talkops.state.remote_session import _can_use_disk_auth_session
+
+            if _can_use_disk_auth_session():
+                from talkops.auth.storage import get_credential_storage
+
+                stored = get_credential_storage().get_provider_key("typesafe")
+                if stored and stored != "placeholder":
+                    return stored
+        except Exception:
+            pass
+        return None
 
     def _ensure_router(
         self,
@@ -616,29 +648,27 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
 
     @property
     def config(self) -> Any:
+        """Return the config property."""
         return self._ensure_router().config
 
     @property
     def models(self) -> dict[str, Any]:
+        """Return the models property."""
         return self._ensure_router().models
 
     @property
     def classifier(self) -> TypeSafeClassifier:
+        """Return the classifier property."""
         return self._ensure_router().classifier
 
     @classifier.setter
     def classifier(self, value: TypeSafeClassifier) -> None:
+        """Set the classifier property."""
         self._ensure_router().classifier = value
 
     def is_available(self) -> bool:
         """Check whether TypeSafe API credentials are configured."""
-        if self._api_key and self._api_key != "placeholder":
-            return True
-        settings_key = getattr(get_settings(), "typesafe_api_key", None)
-        if settings_key and settings_key != "placeholder":
-            return True
-        key = resolve_env_var("TYPESAFE_API_KEY", fallback_names=("JEV_API_KEY",))
-        return bool(key and key != "placeholder")
+        return bool(self._resolved_api_key())
 
     def _is_smart_mode(self, context: Any) -> bool:
         """Check whether execution is running under Jev Smart mode (backward compatibility)."""
@@ -726,7 +756,9 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
             return None
 
         if not self.is_available():
-            logger.debug("Smart mode active but TypeSafe API key not configured; skipping dynamic model routing.")
+            logger.warning(
+                "Smart mode active but TypeSafe API key (TYPESAFE_API_KEY) not configured; skipping dynamic model routing."
+            )
             if isinstance(state, Mapping) and (state.get("model_route") is not None or state.get("_dynamic_model_route") is not None):
                 return {
                     "model_route": None,
@@ -890,9 +922,14 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
             }
 
         except Exception as exc:
+            reason = (
+                f"timeout after {self.timeout_seconds}s"
+                if isinstance(exc, TimeoutError) and not str(exc)
+                else (str(exc) or type(exc).__name__)
+            )
             logger.warning(
                 "Jev Dynamic Router: classification failed (%s); falling back to base model",
-                exc,
+                reason,
             )
             if isinstance(state, Mapping) and (state.get("model_route") is not None or state.get("_dynamic_model_route") is not None):
                 return {
@@ -921,7 +958,6 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
             loop = None
 
         if loop is not None and loop.is_running():
-            import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 return executor.submit(asyncio.run, self.abefore_agent(state, runtime)).result()

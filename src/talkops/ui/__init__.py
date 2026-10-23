@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """TalkOps TUI package.
 
 Exports core application and adapter classes, as well as re-exports of primary
@@ -5,8 +19,8 @@ UI widgets from ``talkops.ui.widgets``.
 """
 
 from talkops.ui.app import TalkOpsApp
-from talkops.ui.textual_adapter import TextualAdapter
 from talkops.ui.preferences import ThemeSelector
+from talkops.ui.textual_adapter import TextualAdapter
 from talkops.ui.ui_help import (
     show_agents_help,
     show_auth_help,

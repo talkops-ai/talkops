@@ -1,10 +1,24 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Subagent telemetry middleware for real-time progress and intermediate tool streaming."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
 import re
 import time
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from langchain.agents.middleware.types import (
@@ -118,6 +132,7 @@ class SubagentTelemetryMiddleware(AgentMiddleware[Any, Any, Any]):
     """Dispatches live progress and tool telemetry events during subagent execution."""
 
     def __init__(self, subagent_name: str = "subagent") -> None:
+        """Initialize SubagentTelemetryMiddleware."""
         super().__init__()
         self.subagent_name = subagent_name
 
@@ -214,9 +229,11 @@ class SubagentTelemetryMiddleware(AgentMiddleware[Any, Any, Any]):
             pass
 
     def before_agent(self, state: Any, runtime: Any) -> None:
+        """Execute synchronous pre-agent lifecycle hook."""
         self._emit_progress("Thinking...", tool_name=None, runtime=runtime)
 
     async def abefore_agent(self, state: Any, runtime: Any) -> None:
+        """Execute asynchronous pre-agent lifecycle hook."""
         await self._aemit_progress("Thinking...", tool_name=None, runtime=runtime)
 
     def wrap_tool_call(
@@ -224,6 +241,7 @@ class SubagentTelemetryMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
+        """Intercept and wrap synchronous tool execution."""
         tool_name = request.tool_call.get("name", "tool")
         tool_args = request.tool_call.get("args") or {}
         action = _format_tool_activity(tool_name, tool_args)
@@ -238,6 +256,7 @@ class SubagentTelemetryMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
+        """Intercept and wrap asynchronous tool execution."""
         tool_name = request.tool_call.get("name", "tool")
         tool_args = request.tool_call.get("args") or {}
         action = _format_tool_activity(tool_name, tool_args)
@@ -252,6 +271,7 @@ class SubagentTelemetryMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse | ExtendedModelResponse:
+        """Intercept and wrap synchronous model invocation."""
         self._emit_progress("Thinking...", tool_name=None, runtime=request.runtime)
         return handler(request)
 
@@ -260,6 +280,7 @@ class SubagentTelemetryMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse | ExtendedModelResponse:
+        """Intercept and wrap asynchronous model invocation."""
         await self._aemit_progress("Thinking...", tool_name=None, runtime=request.runtime)
         return await handler(request)
 

@@ -1,87 +1,110 @@
-# Remote sandboxes
+# Use remote sandboxes
 
-> Run OpsCloud in isolated cloud environments instead of on your local machine
+> Run TalkOps tool execution in Modal, Daytona, LangSmith, AgentCore, Runloop, Vercel, or Docker sandboxes
 
-Remote sandboxes allow OpsCloud to execute tools (shell commands, file operations, heavy compilation, and test suites) within an isolated, ephemeral cloud container instead of directly on your local workstation.
+TalkOps (`talkops`) uses the **sandbox as tool** pattern: the `talkops` orchestration process (LLM loop, Jev router, memory, and web search) runs on your local machine, while filesystem and shell tool calls (`execute`, `read_file`, `write_file`, `edit_file`, `glob`, `grep_search`) execute inside an isolated remote container.
 
-This provides:
-- **Blast radius elimination** — Safely run mutating infrastructure commands without risking local files or configuration.
-- **Zero local footprint** — Build large container images or compile heavy codebases without consuming workstation CPU or RAM.
-- **Credential safety** — Prevent access to local SSH private keys, personal files, or shell history.
-- **CI/CD reproducibility** — Guarantee clean, consistent container environments for pull request validation.
+Running in a sandbox isolates mutating infrastructure commands from your workstation, keeps local credentials and SSH keys out of the execution environment, and provides clean, reproducible containers for CI/CD validation.
+
+## Get started with a sandbox
+
+### 1. Set provider credentials
+
+Configure credentials for your chosen sandbox provider in your shell environment (or run local Docker with no cloud key):
+
+| Provider | `--sandbox` value | Required credentials / setup |
+| - | - | - |
+| **Modal** | `modal` | Run `modal setup` |
+| **Daytona** | `daytona` | `export DAYTONA_API_KEY="your-key"` |
+| **LangSmith** | `langsmith` | `export LANGSMITH_API_KEY="lsv2_..."` |
+| **AgentCore** | `agentcore` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` (or `AWS_PROFILE`) |
+| **Runloop** | `runloop` | `export RUNLOOP_API_KEY="your-key"` |
+| **Vercel** | `vercel` | `VERCEL_TOKEN`, `VERCEL_PROJECT_ID`, `VERCEL_TEAM_ID` (or Vercel OIDC) |
+| **Docker** | `docker` | Local Docker daemon running |
+
+### 2. Launch TalkOps with `--sandbox`
+
+Pass `--sandbox <provider>` at launch:
+
+```bash
+# Launch an interactive session backed by a Modal container
+talkops --sandbox modal
+
+# Launch with Daytona or local Docker
+talkops --sandbox daytona
+talkops --sandbox docker
+```
 
 ---
 
-## Launch a sandbox
+## Sandbox flags and examples
+
+| Flag | Description |
+| - | - |
+| `--sandbox [TYPE]` | Sandbox provider to use: `modal`, `daytona`, `langsmith`, `agentcore`, `runloop`, `vercel`, or `docker` (default: `none`). Pass `--sandbox` with no value to use the configured default |
+| `--sandbox-id ID` | Attach to an existing running sandbox instance instead of creating a new one (skips creation and cleanup) |
+| `--sandbox-snapshot-name NAME` | Launch from or create a pre-baked container snapshot or blueprint |
+| `--sandbox-setup PATH` | Path to a setup shell script executed inside the sandbox immediately after startup |
+
+Each provider uses a default working directory inside the container where setup scripts and `execute` commands run:
+
+| Provider | Default working directory |
+| - | - |
+| Modal | `/workspace` |
+| Docker | `/workspace` |
+| Daytona | `/home/daytona` |
+| Runloop | `/home/user` |
+| LangSmith | `/root` |
+| AgentCore | `/tmp` |
+| Vercel | `/vercel/sandbox` |
+
+Examples:
 
 ```bash
-# Launch with the default sandbox provider
-opscloud --sandbox
+# Create a new Modal sandbox
+talkops --sandbox modal
 
-# Launch with a specific provider
-opscloud --sandbox daytona
+# Attach to an existing running sandbox (skips creation and cleanup)
+talkops --sandbox runloop --sandbox-id sb-prod-cluster-98234
 
-# Attach to an existing running sandbox container
-opscloud --sandbox-id sb-prod-cluster-98234
-
-# Launch from a pre-baked snapshot with a setup script
-opscloud --sandbox modal \
+# Launch from a snapshot and run a setup script
+talkops --sandbox modal \
   --sandbox-snapshot-name terraform-k8s-base \
   --sandbox-setup ./scripts/sandbox-init.sh
 ```
 
-### CLI flags
-
-| Flag | Description |
-|---|---|
-| `--sandbox [TYPE]` | Enable a sandbox provider (`agentcore`, `daytona`, `langsmith`, `modal`, `runloop`, `vercel`; default: `none`) |
-| `--sandbox-id ID` | Attach to an already running sandbox instance |
-| `--sandbox-snapshot-name NAME` | Launch from a pre-baked container blueprint or snapshot |
-| `--sandbox-setup PATH` | Path to a shell script executed inside the sandbox immediately after startup |
+> [!NOTE]
+> Because `--sandbox` accepts an optional value, keep the bare `--sandbox` form **last** on the command line, or pass an explicit provider name so a following positional prompt is not consumed as the provider value.
 
 ---
 
-## Supported providers
+## Workspace synchronization and tool routing
 
-| Provider | Identifier | Default Workdir | Highlights |
-|---|---|---|---|
-| **AgentCore** | `agentcore` | `/tmp` | Managed AWS execution environment |
-| **Daytona** | `daytona` | `/home/daytona` | Self-hosted and cloud development environments |
-| **LangSmith** | `langsmith` | `/root` | Ephemeral evaluation sandboxes |
-| **Modal** | `modal` | `/workspace` | Serverless high-performance GPU/CPU containers |
-| **Runloop** | `runloop` | `/home/user` | Fast container boot with snapshot caching |
-| **Vercel** | `vercel` | `/vercel/sandbox` | Ephemeral code sandboxes |
-| **Docker** | `docker` | `/workspace` | Local daemon container isolation |
+When a sandbox session starts, TalkOps synchronizes your project workspace automatically:
 
----
-
-## Workspace sync semantics
-
-When a sandbox session starts, OpsCloud automatically synchronizes your local project workspace to the remote container:
-1. Detects project boundaries and Git status.
-2. Traverses the repository tree, automatically skipping ignored patterns (`.git/`, `node_modules/`, `.venv/`, `__pycache__/`, `.opscloud/.state/`).
-3. Executes tools, builds, and tests inside the remote container.
-4. Synchronizes modified files and generated artifacts back to your local workstation upon completion.
+1. **Upload**: Copies the active repository tree into the container's working directory while skipping heavy or sensitive local directories (`.git/`, `node_modules/`, `.venv/`, `.terraform/`, `__pycache__/`, `.talkops/.state/`).
+2. **Intelligent tool routing**:
+   * `execute`, `read_file`, `write_file`, `edit_file`, `glob`, and `grep_search` run inside the **remote sandbox**.
+   * `web_search` and `fetch_url` run on the **local host** to avoid remote proxy overhead.
+3. **Sync back and cleanup**: Modified files and generated artifacts sync back to your local workspace on completion, and ephemeral containers tear down automatically when the session exits (unless `--sandbox-id` was used).
 
 ---
 
 ## Setup scripts
 
-Execute initialization tasks inside the sandbox immediately upon boot:
+Use `--sandbox-setup` to install DevOps toolchains (`opentofu`, `terraform`, `kubectl`, `helm`, `awscli`) or seed environment state when the container boots:
 
 ```bash
-opscloud --sandbox modal --sandbox-setup ./scripts/ci-setup.sh
+talkops --sandbox modal --sandbox-setup ./scripts/ci-setup.sh
 ```
 
-**`./scripts/ci-setup.sh`:**
 ```bash
 #!/usr/bin/env bash
+# ./scripts/ci-setup.sh
 set -euo pipefail
 
-# Install required DevOps toolchains
 apt-get update && apt-get install -y opentofu kubectl helm awscli
 
-# Verify toolchain availability
 tofu version
 kubectl version --client=true
 helm version
@@ -89,26 +112,24 @@ helm version
 
 ---
 
-## Intelligent tool routing
+## Use sandboxes in CI/CD
 
-When a remote sandbox is active, OpsCloud routes tool calls intelligently:
-
-- **Shell commands, file reads/writes, grep, glob** ──> Routed to the **Remote Sandbox**
-- **Web search, URL fetching** ──> Handled on the **Local Host** (eliminating remote proxy overhead)
-
-Sandboxes terminate and clean up automatically when your session exits.
-
----
-
-## CI/CD zero-trust pipeline example
-
-Combine sandboxes with headless mode and rubric grading for zero-trust automated pull request validation:
+Combine `--sandbox` with non-interactive mode (`-n` / `-p`) and `--rubric` for zero-trust pull request verification:
 
 ```bash
-opscloud -n "Run OpenTofu plan and check for security violations" \
+talkops -n "Run OpenTofu plan and check for security group violations" \
   --sandbox runloop \
-  --sandbox-setup ./scripts/ci-init.sh \
-  --rubric "tofu plan succeeds with zero syntax errors and no open security group ingress" \
+  --sandbox-setup ./scripts/ci-setup.sh \
+  --rubric "tofu plan succeeds with zero syntax errors and no 0.0.0.0/0 ingress on port 22" \
   --quiet \
   -y
 ```
+
+---
+
+## See also
+
+* [Command reference](./cli-reference.md#model--sandbox-flags)
+* [Approval modes](./approval-mode.md)
+* [Goals and rubrics](./goal-and-rubrics.md)
+* [Configuration](./Configuration.md)

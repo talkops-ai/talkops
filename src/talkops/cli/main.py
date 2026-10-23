@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Main CLI entry point and argument parser for TalkOps.
 
 Routes between interactive TUI mode (default), subcommands (doctor, auth,
@@ -8,6 +22,7 @@ threads, mcp, plugin, skill), and non-interactive headless mode
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -24,66 +39,77 @@ logger = get_logger(__name__)
 
 
 def run_auth_command(*args: Any, **kwargs: Any) -> int:
+    """Execute auth command."""
     from talkops.cli.commands.auth import run_auth_command as _run
 
     return _run(*args, **kwargs)
 
 
 def run_doctor_command(*args: Any, **kwargs: Any) -> int:
+    """Execute doctor command."""
     from talkops.cli.commands.doctor import run_doctor_command as _run
 
     return _run(*args, **kwargs)
 
 
 def run_mcp_command(*args: Any, **kwargs: Any) -> int:
+    """Execute mcp command."""
     from talkops.cli.commands.mcp import run_mcp_command as _run
 
     return _run(*args, **kwargs)
 
 
 def run_serve_command(*args: Any, **kwargs: Any) -> int:
+    """Execute serve command."""
     from talkops.cli.commands.serve import run_serve_command as _run
 
     return _run(*args, **kwargs)
 
 
 def run_threads_command(*args: Any, **kwargs: Any) -> int:
+    """Execute threads command."""
     from talkops.cli.commands.threads import run_threads_command as _run
 
     return _run(*args, **kwargs)
 
 
 def setup_mcp_parser(subparsers: Any) -> None:
+    """Execute setup mcp parser."""
     from talkops.cli.commands.mcp import setup_mcp_parser as _setup
 
     _setup(subparsers)
 
 
 def setup_serve_parser(subparsers: Any) -> None:
+    """Execute setup serve parser."""
     from talkops.cli.commands.serve import setup_serve_parser as _setup
 
     _setup(subparsers)
 
 
 def setup_benchmark_parser(subparsers: Any) -> None:
+    """Execute setup benchmark parser."""
     from talkops.cli.commands.benchmark import setup_benchmark_parser as _setup
 
     _setup(subparsers)
 
 
 def run_benchmark_command(*args: Any, **kwargs: Any) -> int:
+    """Execute benchmark command."""
     from talkops.cli.commands.benchmark import run_benchmark_command as _run
 
     return _run(*args, **kwargs)
 
 
 def run_interactive(*args: Any, **kwargs: Any) -> int:
+    """Execute interactive."""
     from talkops.cli.interactive import run_interactive as _run
 
     return _run(*args, **kwargs)
 
 
 def run_non_interactive(*args: Any, **kwargs: Any) -> int:
+    """Execute non interactive."""
     from talkops.cli.non_interactive import run_non_interactive as _run
 
     return _run(*args, **kwargs)
@@ -318,8 +344,9 @@ def _ensure_cli_authenticated(
 
     if candidate_key:
         if cp_url_cfg or srv_url_cfg:
-            import asyncio
-            from talkops.state.remote_session import exchange_api_key_for_temporary_token
+            from talkops.state.remote_session import (
+                exchange_api_key_for_temporary_token,
+            )
 
             try:
                 temp_jwt = asyncio.run(
@@ -1097,7 +1124,6 @@ def main(argv: list[str] | None = None) -> int:
         subcmd = getattr(args, "threads_command", None)
         if subcmd == "delete":
             # Delete thread command
-            import asyncio
             from talkops.state.remote_session import set_remote_client_context
             from talkops.state.session import delete_thread, set_current_user_id
 

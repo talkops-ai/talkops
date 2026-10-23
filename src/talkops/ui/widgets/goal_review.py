@@ -1,8 +1,23 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Goal acceptance-criteria review widget."""
 
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from textual import on
@@ -17,8 +32,8 @@ if TYPE_CHECKING:
     from textual import events
     from textual.app import ComposeResult
 
-from talkops.utils.logger import get_logger
 import uuid
+
 from talkops.config.settings import get_glyphs
 from talkops.rubrics.generator import extract_clarifying_questions
 from talkops.ui.widgets._inline_prompt import (
@@ -30,6 +45,7 @@ from talkops.ui.widgets._inline_prompt import (
     stop_inline_prompt_blur,
 )
 from talkops.ui.widgets.ask_user import AskUserTextArea, _QuestionWidget
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from talkops.ui.widgets._ask_user_types import Question
@@ -94,12 +110,12 @@ class GoalReviewTextArea(InlinePromptTextArea):
         """Posted when Escape should leave goal criteria edit mode."""
 
     def __init__(self, **kwargs: Any) -> None:
+        """Initialize GoalReviewTextArea."""
         super().__init__(**kwargs)
         self._escape_pending_time: float | None = None
         self._escape_timer: Any = None
 
     async def _on_key(self, event: events.Key) -> None:
-        import time
         now = time.monotonic()
 
         # Terminal-emitted Option+Return (Alt+Enter) sends Escape followed rapidly by Enter.
@@ -302,6 +318,7 @@ class GoalReviewMenu(Container):
             result: GoalReviewResult,
             widget: GoalReviewMenu | None = None,
         ) -> None:
+            """Initialize Decided."""
             super().__init__()
             self.result = result
             self.widget = widget
@@ -317,6 +334,7 @@ class GoalReviewMenu(Container):
         amendment: bool = False,
         id: str | None = None,
     ) -> None:
+        """Initialize GoalReviewMenu."""
         menu_id = id if (id and id != "goal-review-menu") else f"goal-review-menu-{uuid.uuid4().hex[:8]}"
         super().__init__(
             id=menu_id,
@@ -463,7 +481,6 @@ class GoalReviewMenu(Container):
 
     def action_select(self) -> None:
         """Select the highlighted option."""
-        import time
         if self._input_mode is not None:
             return
         gap = time.monotonic() - self._last_input_mode_exit_time
@@ -485,18 +502,23 @@ class GoalReviewMenu(Container):
             getattr(self, f"action_{action_name}")()
 
     def action_key_1(self) -> None:
+        """Execute the key 1 action."""
         self._trigger_option_by_number(1)
 
     def action_key_2(self) -> None:
+        """Execute the key 2 action."""
         self._trigger_option_by_number(2)
 
     def action_key_3(self) -> None:
+        """Execute the key 3 action."""
         self._trigger_option_by_number(3)
 
     def action_key_4(self) -> None:
+        """Execute the key 4 action."""
         self._trigger_option_by_number(4)
 
     def action_key_5(self) -> None:
+        """Execute the key 5 action."""
         self._trigger_option_by_number(5)
 
     def action_answer_questions(self) -> None:
@@ -602,7 +624,6 @@ class GoalReviewMenu(Container):
 
     def action_accept(self) -> None:
         """Accept the proposed criteria unchanged."""
-        import time
         if self._input_mode is not None:
             return
         gap = time.monotonic() - self._last_input_mode_exit_time
@@ -653,7 +674,6 @@ class GoalReviewMenu(Container):
         if self._completion.resolved:
             return
         if self._input_mode is not None:
-            import time
             self._last_input_mode_exit_time = time.monotonic()
             logger.debug("GoalReviewMenu exiting input_mode %s (cool-off set)", self._input_mode)
             self._input_mode = None
@@ -868,11 +888,13 @@ class GoalReviewScreen(ModalScreen[str]):
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
+        """Initialize GoalReviewScreen."""
         super().__init__(name=name, id=id, classes=classes)
         self._objective = objective
         self._rubric = rubric
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         with Vertical(id="goal-review-container"):
             yield Label("Goal Review", id="goal-title")
             yield Static(self._objective, id="goal-objective")
@@ -896,9 +918,11 @@ class GoalReviewScreen(ModalScreen[str]):
         self.dismiss("")
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss("")
 
     def action_accept(self) -> None:
+        """Execute the accept action."""
         self.dismiss("accept")
 
 

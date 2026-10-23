@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Chat input widget for TalkOps TUI.
 
 A multi-line text input area with input mode detection (normal/command/shell),
@@ -9,8 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import os
 from dataclasses import dataclass, replace
-from talkops.utils.logger import get_logger
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Self
 
@@ -20,15 +35,15 @@ from rich.style import Style
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
+from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
 from textual.strip import Strip
 from textual.widget import Widget
 from textual.widgets import Static, TextArea
 from textual.widgets.text_area import EditResult
-from textual.events import Click
-from textual.containers import VerticalScroll
-from textual.content import Content
 
 from talkops.config.settings import get_glyphs
 from talkops.input import (
@@ -46,6 +61,7 @@ from talkops.ui.widgets.autocomplete import (
     MultiCompletionManager,
     SlashCommandController,
 )
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -749,12 +765,15 @@ class _CompletionViewAdapter:
     def render_completion_suggestions(
         self, suggestions: list[tuple[str, str]], selected_index: int
     ) -> None:
+        """Render completion suggestions."""
         self._chat_input.render_completion_suggestions(suggestions, selected_index)
 
     def clear_completion_suggestions(self) -> None:
+        """Clear completion suggestions."""
         self._chat_input.clear_completion_suggestions()
 
     def replace_completion_range(self, start: int, end: int, replacement: str) -> None:
+        """Execute replace completion range on _CompletionViewAdapter."""
         prefix = MODE_PREFIXES.get(self._chat_input.mode, "")
         if prefix and replacement.startswith(prefix):
             replacement = replacement[len(prefix) :]
@@ -772,9 +791,11 @@ class ChatTextArea(TextArea):
     """Ghost text shown after cursor when a slash command expects arguments."""
 
     def __init__(self, **kwargs) -> None:
+        """Initialize ChatTextArea."""
         super().__init__(
             language=None,
             show_line_numbers=False,
+            highlight_cursor_line=False,
             **kwargs,
         )
         self._chat_input_owner: ChatInput | None = None
@@ -963,7 +984,7 @@ class ChatTextArea(TextArea):
 
 
 class MediaAttachmentBar(Static):
-    """Antigravity CLI-style collapsible media attachment bar above ChatInput."""
+    """Collapsible media attachment bar rendered above ChatInput."""
 
     DEFAULT_CSS = """
     MediaAttachmentBar {
@@ -990,10 +1011,12 @@ class MediaAttachmentBar(Static):
         id: str = "media-attachment-bar",
         **kwargs: Any,
     ) -> None:
+        """Initialize MediaAttachmentBar."""
         super().__init__("", id=id, **kwargs)
         self._tracker = tracker
 
     def set_tracker(self, tracker: MediaTracker | None) -> None:
+        """Set tracker."""
         self._tracker = tracker
         self.refresh_bar()
 
@@ -1003,6 +1026,7 @@ class MediaAttachmentBar(Static):
         self.refresh_bar()
 
     def on_click(self, event: Click) -> None:
+        """Handle mouse click events."""
         event.stop()
         self.toggle_expanded()
 
@@ -1052,8 +1076,10 @@ class MediaAttachmentBar(Static):
 
 
 class ChatInput(Widget):
-    """Multi-line chat input with prompt glyph (❯), mode detection, history,
-    paste collapse, and inline slash command autocomplete.
+    """Multi-line chat input widget for the TalkOps TUI.
+
+    Supports prompt glyph (❯), mode detection, history, paste collapse,
+    and inline slash command autocomplete.
     """
 
     DEFAULT_CSS = """
@@ -1069,7 +1095,7 @@ class ChatInput(Widget):
         height: auto;
         min-height: 3;
         max-height: 20;
-        border: round $primary 45%;
+        border: round $primary 50%;
         border-title-color: $primary;
         border-title-style: bold;
         border-subtitle-color: $text-muted;
@@ -1132,6 +1158,14 @@ class ChatInput(Widget):
         border: none;
         background: transparent;
         padding: 0;
+
+        & .text-area--cursor-line {
+            background: transparent;
+        }
+
+        & .text-area--cursor-gutter {
+            background: transparent;
+        }
     }
 
     /* TextArea ships its own focus border/tint; the outer box shows focus. */
@@ -1153,6 +1187,7 @@ class ChatInput(Widget):
         """Fired when the user submits prompt/command."""
 
         def __init__(self, value: str, mode: str = "normal") -> None:
+            """Initialize Submitted."""
             super().__init__()
             self.value = value
             self.mode = mode
@@ -1161,6 +1196,7 @@ class ChatInput(Widget):
         """Fired when the input mode changes (for status bar updates)."""
 
         def __init__(self, mode: str) -> None:
+            """Initialize ModeChanged."""
             super().__init__()
             self.mode = mode
 
@@ -1171,6 +1207,7 @@ class ChatInput(Widget):
         """Fired when user begins typing a slash command."""
 
         def __init__(self, query: str) -> None:
+            """Initialize SlashCommandStarted."""
             super().__init__()
             self.query = query
 
@@ -1187,6 +1224,7 @@ class ChatInput(Widget):
         image_tracker: MediaTracker | None = None,
         **kwargs,
     ) -> None:
+        """Initialize ChatInput."""
         super().__init__(**kwargs)
         self._app: Any = None
         self._image_tracker: MediaTracker | None = image_tracker
@@ -1232,6 +1270,7 @@ class ChatInput(Widget):
         return True
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         self._completion_view = _CompletionViewAdapter(self)
         from talkops.ui.command_registry import get_all_entries
         self._file_controller = FuzzyFileController(self._completion_view, cwd=self._cwd)
@@ -1251,7 +1290,7 @@ class ChatInput(Widget):
         self._update_chrome()
 
     def compose(self) -> ComposeResult:
-        from textual.containers import Horizontal, Vertical
+        """Compose and yield child widgets for this component."""
         yield self._media_bar
         with Vertical(id="input-box") as box:
             self._input_box = box
@@ -1282,10 +1321,12 @@ class ChatInput(Widget):
 
     @property
     def text(self) -> str:
+        """Return the text property."""
         return self._text_area.text
 
     @text.setter
     def text(self, value: str) -> None:
+        """Set the text property."""
         mode = detect_input_mode(value)
         prefix = MODE_PREFIXES.get(mode, "")
         if prefix and value.startswith(prefix):
@@ -1306,6 +1347,7 @@ class ChatInput(Widget):
 
     @value.setter
     def value(self, val: str) -> None:
+        """Set the value property."""
         self.text = val
 
     def set_value_at_end(
@@ -1362,6 +1404,7 @@ class ChatInput(Widget):
         return True
 
     def clear(self) -> None:
+        """Clear chat input."""
         if getattr(self, "_text_area", None) is not None:
             self._text_area.argument_hint = ""
             self._text_area.clear()
@@ -1371,10 +1414,12 @@ class ChatInput(Widget):
         self.mode = "normal"
 
     def focus(self, scroll_visible: bool = True) -> Self:
+        """Focus chat input."""
         self._text_area.focus(scroll_visible=scroll_visible)
         return self
 
     def focus_input(self) -> None:
+        """Focus input."""
         self.focus()
 
     # ── Mode Watcher ────────────────────────────────────
@@ -2169,9 +2214,6 @@ class ChatInput(Widget):
     @staticmethod
     def _load_persisted_history(max_entries: int = 200) -> list[str]:
         """Load persisted prompt history from ~/.talkops/.state/history.jsonl."""
-        import json
-        import os
-
         if os.environ.get("PYTEST_CURRENT_TEST"):
             return []
         try:
@@ -2198,9 +2240,6 @@ class ChatInput(Widget):
 
     def add_history_entry(self, content: str, *, persist: bool = True) -> None:
         """Append a prompt to in-memory history and optionally persist to disk."""
-        import json
-        import os
-
         clean = content.strip()
         if not clean:
             return

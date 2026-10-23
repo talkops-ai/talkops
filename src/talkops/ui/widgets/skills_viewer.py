@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive Skills Viewer modal screen for TalkOps.
 
 Two-pane layout: left pane lists skills with ↑/↓ navigation and search filtering,
@@ -19,8 +33,10 @@ from talkops.config.settings import get_glyphs
 from talkops.ui.widgets.modal_base import (
     ModalSearchInput,
     OpsModalScreen,
-    escape_markup as escape,
     format_modal_option_row,
+)
+from talkops.ui.widgets.modal_base import (
+    escape_markup as escape,
 )
 from talkops.utils.logger import get_logger
 
@@ -52,7 +68,7 @@ class SkillDetailScreen(OpsModalScreen[None]):
         height: 1fr;
         min-height: 5;
         scrollbar-gutter: stable;
-        background: $background;
+        background: transparent;
         padding: 1;
     }
     """
@@ -63,12 +79,14 @@ class SkillDetailScreen(OpsModalScreen[None]):
         content: str,
         skill_meta: dict[str, Any] | None = None,
     ) -> None:
+        """Initialize SkillDetailScreen."""
         self.skill_name = skill_name
         self.content = content
         self.skill_meta = skill_meta or {}
         super().__init__()
 
     def compose_modal(self):
+        """Execute compose modal on SkillDetailScreen."""
         source = str(self.skill_meta.get("source", "built-in")).lower()
         badge_style = {
             "plugin": "bold $secondary",
@@ -107,6 +125,7 @@ class SkillDetailScreen(OpsModalScreen[None]):
             yield Static(Content.styled(body_text, style))
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         display_title = (
             self.skill_name.rsplit(":", 1)[-1]
@@ -124,6 +143,7 @@ class SkillItemWidget(Static):
     """A compact skill row representation retained for backwards compatibility."""
 
     def __init__(self, skill: dict[str, Any], index: int, *, classes: str = "") -> None:
+        """Initialize SkillItemWidget."""
         self.skill_name = str(skill.get("name", "unnamed"))
         self.source = str(skill.get("source", "unknown"))
         self.index = index
@@ -131,6 +151,7 @@ class SkillItemWidget(Static):
         super().__init__(classes=classes)
 
     def set_selected(self, selected: bool) -> None:
+        """Set selected."""
         self._selected = selected
         if selected:
             self.add_class("skill-item-selected")
@@ -139,6 +160,7 @@ class SkillItemWidget(Static):
         self.refresh()
 
     def render(self) -> str:
+        """Render the widget content."""
         cursor = "›" if self._selected else " "
         safe_name = escape(self.skill_name)
         badge = rf"\[{escape(self.source.upper())}]"
@@ -199,7 +221,7 @@ class SkillsViewerScreen(OpsModalScreen[None]):
 
     SkillsViewerScreen OptionList {
         height: 1fr;
-        background: $background;
+        background: transparent;
         border: none;
         padding: 0;
     }
@@ -213,7 +235,7 @@ class SkillsViewerScreen(OpsModalScreen[None]):
     SkillsViewerScreen .skills-detail-content {
         height: 1fr;
         scrollbar-gutter: stable;
-        background: $background;
+        background: transparent;
         padding: 1;
     }
 
@@ -242,6 +264,7 @@ class SkillsViewerScreen(OpsModalScreen[None]):
     """
 
     def __init__(self, skills: list[dict[str, Any]] | None = None) -> None:
+        """Initialize SkillsViewerScreen."""
         self._all_skills = list(skills) if skills is not None else []
         self._filtered_skills = list(self._all_skills)
         self._selected_index = 0
@@ -249,6 +272,7 @@ class SkillsViewerScreen(OpsModalScreen[None]):
         super().__init__()
 
     def compose_modal(self):
+        """Execute compose modal on SkillsViewerScreen."""
         yield ModalSearchInput(
             placeholder="Filter skills…",
             id="skills-filter",
@@ -261,6 +285,7 @@ class SkillsViewerScreen(OpsModalScreen[None]):
                     yield Vertical(id="skills-detail-container")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         is_narrow = self.app.size.width < 90
         self.set_class(is_narrow, "-narrow")
@@ -299,6 +324,7 @@ class SkillsViewerScreen(OpsModalScreen[None]):
             self._populate_options()
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         is_narrow = self.app.size.width < 90
         if is_narrow != self.has_class("-narrow"):
             self.set_class(is_narrow, "-narrow")
@@ -371,6 +397,7 @@ class SkillsViewerScreen(OpsModalScreen[None]):
             opt_list.highlighted = self._selected_index
 
     def on_modal_search_input_changed(self, event: ModalSearchInput.Changed) -> None:
+        """Handle modal search input changed events."""
         q = event.value.strip().lower()
         if not q:
             self._filtered_skills = list(self._all_skills)
@@ -390,24 +417,29 @@ class SkillsViewerScreen(OpsModalScreen[None]):
 
     def on_input_changed(self, event: Input.Changed) -> None:
         # Prevent double-trigger from internal input widget
+        """Handle input changed events."""
         if event.input.id == "skills-filter-input" or "modal-search" in (event.input.id or ""):
             return
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        """Handle option list option highlighted events."""
         if event.option_index is not None and 0 <= event.option_index < len(self._filtered_skills):
             self._selected_index = event.option_index
             self._update_detail_panel()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Handle option list option selected events."""
         self.action_select_skill()
 
     def action_focus_search(self) -> None:
+        """Execute the focus search action."""
         try:
             self.query_one("#skills-filter", ModalSearchInput).focus()
         except Exception:
             pass
 
     def action_select_skill(self) -> None:
+        """Execute the select skill action."""
         if not self._filtered_skills or self._selected_index >= len(self._filtered_skills):
             return
         skill = self._filtered_skills[self._selected_index]

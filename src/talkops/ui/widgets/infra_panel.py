@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Infrastructure State Panel for TalkOps TUI.
 
 Sidebar overlay displaying cloud accounts, Kubernetes context, Terraform workspace,
@@ -9,7 +23,6 @@ from __future__ import annotations
 import os
 import subprocess
 from typing import ClassVar
-
 
 from rich.text import Text
 from textual import on
@@ -59,6 +72,7 @@ class InfraStatePanel(Widget):
     ]
 
     def __init__(self, **kwargs) -> None:
+        """Initialize InfraStatePanel."""
         super().__init__(id="infra-state-panel", **kwargs)
 
     def _detect_context(self) -> dict[str, str]:
@@ -130,6 +144,7 @@ class InfraStatePanel(Widget):
         }
 
     def compose(self):
+        """Compose and yield child widgets for this component."""
         ctx = self._detect_context()
         yield Static("Infrastructure Context", classes="header")
 
@@ -162,4 +177,5 @@ class InfraStatePanel(Widget):
 
     @on(Button.Pressed, "#btn-close")
     def action_dismiss_panel(self) -> None:
+        """Execute the dismiss panel action."""
         self.remove()

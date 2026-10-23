@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Thread selector widget and modal screen for the TalkOps TUI.
 
 Provides an interactive modal screen to browse, search, resume, create, and delete conversation threads.
@@ -9,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
 
+from rich.cells import cell_len
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -18,10 +33,9 @@ from textual.widget import Widget
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from rich.cells import cell_len
-
 from talkops.config.settings import get_glyphs
-from talkops.ui.widgets.modal_base import OpsModalScreen, escape_markup as escape
+from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.ui.widgets.modal_base import escape_markup as escape
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -72,6 +86,7 @@ class CustomOptionList(OptionList):
     last_click_x: int | None = None
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
+        """Handle mouse down events."""
         self.last_click_x = event.x
 
 
@@ -125,14 +140,17 @@ class DeleteThreadConfirmScreen(OpsModalScreen[bool]):
     """
 
     def __init__(self, target_thread_id: str) -> None:
+        """Initialize DeleteThreadConfirmScreen."""
         super().__init__()
         self.target_thread_id = target_thread_id
 
     @property
     def thread_id(self) -> str:
+        """Return the thread id property."""
         return self.target_thread_id
 
     def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on DeleteThreadConfirmScreen."""
         yield Static(
             f"Delete thread {self.target_thread_id[:8]}? This cannot be undone.",
             classes="confirm-message",
@@ -142,12 +160,14 @@ class DeleteThreadConfirmScreen(OpsModalScreen[bool]):
             yield Button("Delete", id="confirm", variant="error")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         self.set_modal_title("Delete Thread")
         self.set_modal_subtitle([("enter", "choose"), ("esc", "cancel")])
         self.query_one("#cancel", Button).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button pressed events."""
         self.dismiss(event.button.id == "confirm")
 
 
@@ -180,7 +200,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
 
     ThreadSelectorScreen CustomOptionList {
         height: 1fr;
-        background: $background;
+        background: transparent;
         border: solid $primary 20%;
     }
 
@@ -207,6 +227,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
         current_thread_id: str | None = None,
         **kwargs,
     ) -> None:
+        """Initialize ThreadSelectorScreen."""
         super().__init__(**kwargs)
         self._threads = threads or []
         self._current_thread_id = current_thread_id
@@ -215,6 +236,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
         self._last_row_width: int | None = None
 
     def compose_modal(self):
+        """Execute compose modal on ThreadSelectorScreen."""
         title = f"Select Thread (current: {self._current_thread_id or 'none'})"
         yield Static(title, classes="thread-selector-title")
         yield SearchInput(placeholder="Type to search threads...", id="thread-filter")
@@ -225,6 +247,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
         )
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         self._update_modal_chrome()
         self.call_after_refresh(self._refresh_options, preserve_highlight=True)
@@ -234,6 +257,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
             pass
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         width = self._get_row_width()
         if width != self._last_row_width:
             self._last_row_width = width
@@ -323,11 +347,13 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
         return options
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changed events."""
         if event.input.id == "thread-filter":
             self._filter_query = event.value
             self._refresh_options()
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        """Handle option list option highlighted events."""
         if self._highlighted_index != event.option_index:
             self._highlighted_index = event.option_index
             self._refresh_options(preserve_highlight=True)
@@ -345,6 +371,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
             pass
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Handle option list option selected events."""
         try:
             opt_list = self.query_one("#thread-options", CustomOptionList)
             width = self._get_row_width()
@@ -361,6 +388,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
             self.dismiss(event.option.id)
 
     def action_select(self) -> None:
+        """Execute the select action."""
         try:
             opt_list = self.query_one("#thread-options", CustomOptionList)
             if opt_list.highlighted is not None:
@@ -371,6 +399,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
             pass
 
     def action_delete_thread(self) -> None:
+        """Execute the delete thread action."""
         try:
             opt_list = self.query_one("#thread-options", CustomOptionList)
             if opt_list.highlighted is None:
@@ -382,6 +411,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
                 return
 
             def after_confirm(confirmed: bool | None) -> None:
+                """Run synchronous post-execution hook for confirm."""
                 if confirmed:
                     self.run_worker(self._delete_thread_async(thread_id))
 
@@ -391,8 +421,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
 
     async def _delete_thread_async(self, thread_id: str) -> None:
         try:
-            from talkops.state.session import SessionManager
-            from talkops.state.session import get_db_path
+            from talkops.state.session import SessionManager, get_db_path
             db_path = get_db_path()
             if db_path.exists():
                 sm = SessionManager(db_path)
@@ -404,6 +433,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
             logger.warning("Error deleting thread %s: %s", thread_id, exc)
 
     def action_cursor_up(self) -> None:
+        """Execute the cursor up action."""
         try:
             opt_list = self.query_one("#thread-options", CustomOptionList)
             opt_list.action_cursor_up()
@@ -411,6 +441,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
             pass
 
     def action_cursor_down(self) -> None:
+        """Execute the cursor down action."""
         try:
             opt_list = self.query_one("#thread-options", CustomOptionList)
             opt_list.action_cursor_down()
@@ -418,6 +449,7 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
             pass
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(None)
 
 
@@ -447,6 +479,7 @@ class ThreadSelector(Widget):
         """Fired when a thread is selected."""
 
         def __init__(self, thread_id: str) -> None:
+            """Initialize Selected."""
             self.thread_id = thread_id
             super().__init__()
 
@@ -454,10 +487,12 @@ class ThreadSelector(Widget):
         """Fired when the user requests a new thread."""
 
     def __init__(self, threads: list[dict] | None = None, **kwargs) -> None:
+        """Initialize ThreadSelector."""
         super().__init__(**kwargs)
         self._threads = threads or []
 
     def compose(self):
+        """Compose and yield child widgets for this component."""
         yield Label("Threads", id="thread-title")
         yield Button("+ New Thread", id="new-thread", variant="success")
 
@@ -471,6 +506,7 @@ class ThreadSelector(Widget):
                     yield Button(label, id=f"thread-{tid}")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button pressed events."""
         btn_id = event.button.id or ""
         if btn_id == "new-thread":
             self.post_message(self.NewThread())
@@ -481,6 +517,7 @@ class ThreadSelector(Widget):
             self.remove()
 
     def action_dismiss(self) -> None:
+        """Execute the dismiss action."""
         self.remove()
 
 

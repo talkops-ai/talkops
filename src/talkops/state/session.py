@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Thread and session management using LangGraph SQLite checkpoint persistence.
 
 Provides high-performance thread listing, batch checkpoint decoding with
@@ -11,6 +25,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import sqlite3
 import sys
 import time
@@ -18,7 +33,6 @@ from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterable, 
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from datetime import datetime
-import os
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -29,6 +43,9 @@ from typing import (
     TypedDict,
     cast,
 )
+
+from langchain_core.messages import RemoveMessage
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from talkops.middleware.goal_state_notice import is_internal_message
 from talkops.state.cloud_context import CloudEnvironmentContext, format_cloud_badge
@@ -127,6 +144,109 @@ async def _guard_sqlite_handle(conn: Any) -> None:
 
 _db_path: Path | None = None
 _last_active_db_path: Path | None = None
+_HELD_PRESENCE_LOCKS: dict[str, Any] = {}
+
+
+def _presence_dir(db_path: Path | None = None) -> Path:
+    """Return the directory storing per-conversation presence lock files (modeled on agy presence/)."""
+    target = db_path or get_db_path()
+    pdir = target.parent / "presence"
+    with contextlib.suppress(OSError):
+        pdir.mkdir(parents=True, exist_ok=True)
+    return pdir
+
+
+def acquire_thread_presence(thread_id: str, *, db_path: Path | None = None) -> bool:
+    """Acquire a non-blocking exclusive OS flock on ``presence/<thread_id>.lock``.
+
+    Returns True if acquired (or already held by this process), False if held by another process.
+    """
+    if not thread_id or sys.platform == "win32":
+        return True
+    if thread_id in _HELD_PRESENCE_LOCKS:
+        return True
+    try:
+        import fcntl
+
+        lock_path = _presence_dir(db_path) / f"{thread_id}.lock"
+        fp = open(lock_path, "a+", encoding="utf-8")
+        try:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            fp.close()
+            return False
+        with contextlib.suppress(OSError):
+            fp.seek(0)
+            fp.truncate()
+            fp.write(f"{os.getpid()}\n")
+            fp.flush()
+        _HELD_PRESENCE_LOCKS[thread_id] = fp
+        return True
+    except Exception:
+        return True
+
+
+def release_thread_presence(thread_id: str) -> None:
+    """Release the presence lock held by this process for ``thread_id``."""
+    fp = _HELD_PRESENCE_LOCKS.pop(thread_id, None)
+    if fp is None:
+        return
+    with contextlib.suppress(Exception):
+        if sys.platform != "win32":
+            import fcntl
+
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+    with contextlib.suppress(Exception):
+        fp.close()
+
+
+def release_all_thread_presence() -> None:
+    """Release all thread presence locks held by this process."""
+    for tid in list(_HELD_PRESENCE_LOCKS):
+        release_thread_presence(tid)
+
+
+def is_thread_active_elsewhere(thread_id: str, *, db_path: Path | None = None) -> bool:
+    """Return True if another process holds an exclusive presence lock on ``thread_id``."""
+    if not thread_id or sys.platform == "win32":
+        return False
+    if thread_id in _HELD_PRESENCE_LOCKS:
+        return False
+    lock_path = _presence_dir(db_path) / f"{thread_id}.lock"
+    if not lock_path.exists():
+        return False
+    try:
+        import fcntl
+
+        with open(lock_path, "a+", encoding="utf-8") as fp:
+            try:
+                fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (BlockingIOError, OSError):
+                return True
+            with contextlib.suppress(OSError):
+                fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+        return False
+    except Exception:
+        return False
+
+
+def has_other_active_talkops_sessions(*, db_path: Path | None = None) -> bool:
+    """Return True if any other process holds an active thread presence lock."""
+    if sys.platform == "win32":
+        return False
+    pdir = _presence_dir(db_path)
+    if not pdir.exists():
+        return False
+    try:
+        for lock_file in pdir.glob("*.lock"):
+            tid = lock_file.stem
+            if tid in _HELD_PRESENCE_LOCKS:
+                continue
+            if is_thread_active_elsewhere(tid, db_path=db_path):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _clear_in_memory_caches() -> None:
@@ -211,7 +331,7 @@ class _CheckpointSummary(NamedTuple):
 
 
 class _ThreadSummaryRow(NamedTuple):
-    """Indexed summary row from SQLite ``thread_summaries`` (agy summarystore pattern)."""
+    """Indexed summary row from the SQLite ``thread_summaries`` table."""
 
     thread_id: str
     user_id: str
@@ -299,7 +419,7 @@ _THREAD_SUMMARIES_EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
 
 
 async def _ensure_thread_summaries_table(conn: Any) -> None:
-    """Ensure the SQLite ``thread_summaries`` table and indexes exist (agy summarystore pattern).
+    """Ensure the SQLite ``thread_summaries`` table and indexes exist.
 
     Automatically migrates pre-existing ``thread_summaries`` tables by adding any missing
     columns and creating lookup indexes on ``updated_at``, ``(user_id, updated_at)``, and
@@ -571,7 +691,10 @@ async def get_thread_title(
     if cached:
         return cached
 
-    from talkops.state.postgres_session import PostgresSessionBackend, get_postgres_session_uri
+    from talkops.state.postgres_session import (
+        PostgresSessionBackend,
+        get_postgres_session_uri,
+    )
     from talkops.state.remote_session import RemoteSessionBackend, is_remote_client_mode
 
     if is_remote_client_mode():
@@ -615,8 +738,8 @@ async def set_thread_title(
 ) -> bool:
     """Persist an LLM-generated conversation title to ``thread_summaries``.
 
-    When ``only_if_empty=True`` (the default, matching agy ``maybeGenerateConversationTitle.func1``
-    at ``0x101d8dd08``), an existing non-empty title is never overwritten.
+    When ``only_if_empty=True`` (the default), an existing non-empty title is
+    never overwritten.
     """
     if not thread_id or not isinstance(thread_id, str) or not thread_id.strip():
         return False
@@ -625,7 +748,10 @@ async def set_thread_title(
         postprocess_conversation_title,
         truncate_summary_preview,
     )
-    from talkops.state.postgres_session import PostgresSessionBackend, get_postgres_session_uri
+    from talkops.state.postgres_session import (
+        PostgresSessionBackend,
+        get_postgres_session_uri,
+    )
     from talkops.state.remote_session import RemoteSessionBackend, is_remote_client_mode
 
     cleaned_title = postprocess_conversation_title(title)
@@ -828,7 +954,6 @@ def _summarize_checkpoint(data: object) -> _CheckpointSummary:
 
 
 def _count_messages_from_deltas(deltas: list[Any]) -> int:
-    from langchain_core.messages import RemoveMessage
     from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
     from langgraph.types import Overwrite
 
@@ -1153,7 +1278,10 @@ async def list_threads(
     user_id: str | None = None,
 ) -> list[ThreadInfo]:
     """List execution threads with parsed metadata, message counts, and initial prompts."""
-    from talkops.state.postgres_session import PostgresSessionBackend, get_postgres_session_uri
+    from talkops.state.postgres_session import (
+        PostgresSessionBackend,
+        get_postgres_session_uri,
+    )
     from talkops.state.remote_session import RemoteSessionBackend, is_remote_client_mode
 
     if is_remote_client_mode():
@@ -1292,7 +1420,7 @@ async def list_threads(
                     if s_row.status:
                         t["status"] = s_row.status
 
-                    # Fast Path (agy summarystore pattern): when thread_summaries is already
+                    # Fast Path: when thread_summaries is already
                     # synchronized with the latest checkpoint_id, use precomputed counts & badges
                     # directly without deserializing heavy checkpoint/write blobs.
                     if (
@@ -1324,7 +1452,7 @@ async def list_threads(
 
 
 async def reconcile_thread_summaries(limit: int = 200) -> int:
-    """Reconcile SQLite ``thread_summaries`` with ``checkpoints`` (agy startup reconcile pattern).
+    """Reconcile SQLite ``thread_summaries`` with ``checkpoints`` at startup.
 
     - Cleans up orphaned summary rows that have no checkpoints and no custom title.
     - Backfills missing or stale summary rows (message_count, preview, metadata) from ``checkpoints``.
@@ -1374,7 +1502,10 @@ async def delete_thread(
     user_id: str | None = None,
 ) -> bool:
     """Delete a thread and all associated checkpoints, writes, and summaries."""
-    from talkops.state.postgres_session import PostgresSessionBackend, get_postgres_session_uri
+    from talkops.state.postgres_session import (
+        PostgresSessionBackend,
+        get_postgres_session_uri,
+    )
     from talkops.state.remote_session import RemoteSessionBackend, is_remote_client_mode
 
     if is_remote_client_mode():
@@ -1453,7 +1584,10 @@ async def thread_exists(
     user_id: str | None = None,
 ) -> bool:
     """Check if thread exists in checkpoints."""
-    from talkops.state.postgres_session import PostgresSessionBackend, get_postgres_session_uri
+    from talkops.state.postgres_session import (
+        PostgresSessionBackend,
+        get_postgres_session_uri,
+    )
     from talkops.state.remote_session import RemoteSessionBackend, is_remote_client_mode
 
     if is_remote_client_mode():
@@ -1482,7 +1616,10 @@ async def find_similar_threads(
     user_id: str | None = None,
 ) -> list[str]:
     """Find threads starting with or matching prefix."""
-    from talkops.state.postgres_session import PostgresSessionBackend, get_postgres_session_uri
+    from talkops.state.postgres_session import (
+        PostgresSessionBackend,
+        get_postgres_session_uri,
+    )
     from talkops.state.remote_session import RemoteSessionBackend, is_remote_client_mode
 
     if is_remote_client_mode():
@@ -1518,19 +1655,22 @@ async def get_most_recent(
     *,
     user_id: str | None = None,
 ) -> ThreadInfo | None:
-    """Return the most recently updated thread."""
+    """Return the most recently updated thread, preferring threads not locked by another terminal."""
     threads = await list_threads(
         agent_name=agent_name,
-        limit=1,
+        limit=10,
         include_message_count=True,
         branch=branch,
         cwd=cwd,
         user_id=user_id,
     )
-    return threads[0] if threads else None
-
-
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    if not threads:
+        return None
+    for t in threads:
+        tid = t.get("thread_id")
+        if tid and not is_thread_active_elsewhere(tid):
+            return t
+    return threads[0]
 
 
 class TalkOpsCheckpointer(AsyncSqliteSaver):
@@ -1543,7 +1683,7 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
     - `aprune`: prunes thread checkpoint history ('keep_latest' or 'delete_all') to keep
       storage bounded for long-lived threads.
     - Automatic write-through summary indexing to ``thread_summaries`` on ``aput`` / ``aput_writes``
-      following the Antigravity CLI (``agy``) ``summarystore`` architecture.
+      for fast zero-blob-decode thread listing.
     """
 
     @classmethod
@@ -1554,9 +1694,16 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
         """Create a new TalkOpsCheckpointer instance from a connection string."""
         import aiosqlite
 
-        async with aiosqlite.connect(conn_string, timeout=30.0) as conn:
-            await _guard_sqlite_handle(conn)
-            yield cls(conn)
+        _patch_aiosqlite()
+        conn: aiosqlite.Connection | None = None
+        try:
+            async with aiosqlite.connect(conn_string, timeout=30.0) as opened:
+                conn = opened
+                await _guard_sqlite_handle(conn)
+                yield cls(conn)
+        finally:
+            if conn is not None:
+                await _drain_aiosqlite_worker(conn)
 
     async def setup(self) -> None:
         """Set up the checkpoint database and TalkOps summary store tables/indexes."""
@@ -1721,6 +1868,7 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
     async def aget_iter(self, config: RunnableConfig) -> AsyncIterator[CheckpointTuple]:
         """Asynchronously iterate checkpoints matching config."""
         async def gen() -> AsyncIterator[CheckpointTuple]:
+            """Execute gen."""
             tup = await self.aget_tuple(config)
             if tup is not None:
                 yield tup
@@ -1897,15 +2045,23 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
             raise ValueError(f"Unknown prune strategy: {strategy}")
 
         await self.setup()
+        is_bulk_prune = thread_ids is None
         async with self.lock, self.conn.cursor() as cur:
             tids = list(thread_ids) if thread_ids is not None else None
             if tids is None:
                 await cur.execute("SELECT DISTINCT thread_id FROM checkpoints")
-                tids = [row[0] for row in await cur.fetchall()]
+                tids = [
+                    row[0]
+                    for row in await cur.fetchall()
+                    if row[0]
+                    and row[0] not in _HELD_PRESENCE_LOCKS
+                    and not is_thread_active_elsewhere(row[0])
+                ]
 
-            preserved_interrupts_by_thread: dict[str, set[tuple[str, str]]] = {tid: set() for tid in tids}
-            if not turn_completed:
-                for tid in tids:
+        for tid in tids:
+            async with self.lock, self.conn.cursor() as cur:
+                preserved_interrupts: set[tuple[str, str]] = set()
+                if not turn_completed:
                     await cur.execute(
                         """
                         SELECT DISTINCT w1.checkpoint_ns, w1.checkpoint_id
@@ -1928,10 +2084,9 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
                     )
                     for ns, cid in await cur.fetchall():
                         if cid:
-                            preserved_interrupts_by_thread[tid].add((ns or "", cid))
+                            preserved_interrupts.add((ns or "", cid))
 
-            if prune_subagents:
-                for tid in tids:
+                if prune_subagents:
                     await cur.execute(
                         "SELECT DISTINCT checkpoint_ns, checkpoint_id FROM checkpoints "
                         "WHERE thread_id = ? AND checkpoint_ns != ''",
@@ -1939,7 +2094,7 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
                     )
                     sub_rows = await cur.fetchall()
                     for sub_ns, sub_cid in sub_rows:
-                        if (sub_ns or "", sub_cid) in preserved_interrupts_by_thread[tid]:
+                        if (sub_ns or "", sub_cid) in preserved_interrupts:
                             continue
                         await cur.execute(
                             "DELETE FROM writes WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ?",
@@ -1950,7 +2105,6 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
                             (tid, sub_ns, sub_cid),
                         )
 
-            for tid in tids:
                 await cur.execute(
                     "SELECT checkpoint_ns, MAX(checkpoint_id) FROM checkpoints "
                     "WHERE thread_id = ? GROUP BY checkpoint_ns",
@@ -1962,7 +2116,7 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
                         continue
                     ns_key = checkpoint_ns or ""
                     cids_to_keep = {latest_cid}
-                    for p_ns, p_cid in preserved_interrupts_by_thread[tid]:
+                    for p_ns, p_cid in preserved_interrupts:
                         if p_ns == ns_key:
                             cids_to_keep.add(p_cid)
 
@@ -1989,7 +2143,9 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
                     """,
                     (tid,),
                 )
-            await self.conn.commit()
+                await self.conn.commit()
+            if is_bulk_prune:
+                await asyncio.sleep(0)
 
     async def avacuum(self) -> None:
         """Run VACUUM to reclaim deleted page space."""
@@ -2046,12 +2202,14 @@ class SessionManager:
     """High-level facade for thread session lifecycle in TalkOps."""
 
     def __init__(self, db_path: Path | None = None) -> None:
+        """Initialize SessionManager."""
         if db_path is not None:
             set_db_path(db_path)
         self.db_path = get_db_path()
 
     @staticmethod
     def get_db_path() -> Path:
+        """Retrieve db path."""
         return get_db_path()
 
     @staticmethod
@@ -2062,6 +2220,7 @@ class SessionManager:
         *,
         user_id: str | None = None,
     ) -> list[ThreadInfo]:
+        """List threads."""
         return await list_threads(
             limit=limit,
             agent_name=agent_name,
@@ -2075,6 +2234,7 @@ class SessionManager:
         *,
         user_id: str | None = None,
     ) -> str | None:
+        """Retrieve thread title."""
         return await get_thread_title(thread_id, user_id=user_id)
 
     @staticmethod
@@ -2086,6 +2246,7 @@ class SessionManager:
         only_if_empty: bool = True,
         user_id: str | None = None,
     ) -> bool:
+        """Set thread title."""
         return await set_thread_title(
             thread_id,
             title,
@@ -2100,6 +2261,7 @@ class SessionManager:
         *,
         user_id: str | None = None,
     ) -> bool:
+        """Delete thread."""
         return await delete_thread(thread_id, user_id=user_id)
 
     @staticmethod
@@ -2108,6 +2270,7 @@ class SessionManager:
         *,
         user_id: str | None = None,
     ) -> ThreadInfo | None:
+        """Retrieve most recent."""
         return await get_most_recent(agent_name=agent_name, user_id=user_id)
 
     @staticmethod
@@ -2116,6 +2279,7 @@ class SessionManager:
         *,
         user_id: str | None = None,
     ) -> bool:
+        """Execute thread exists on SessionManager."""
         return await thread_exists(thread_id, user_id=user_id)
 
     @staticmethod
@@ -2125,10 +2289,12 @@ class SessionManager:
         *,
         user_id: str | None = None,
     ) -> list[str]:
+        """Find and return similar threads."""
         return await find_similar_threads(prefix, limit=limit, user_id=user_id)
 
     @staticmethod
     def get_checkpointer() -> Any:
+        """Retrieve checkpointer."""
         return get_checkpointer()
 
     @staticmethod
@@ -2137,9 +2303,13 @@ class SessionManager:
         *,
         strategy: str = "keep_latest",
         turn_completed: bool = False,
+        checkpointer: Any | None = None,
     ) -> None:
         """Prune intermediate history and subagent checkpoints for a thread."""
-        from talkops.state.remote_session import RemoteSessionBackend, is_remote_client_mode
+        from talkops.state.remote_session import (
+            RemoteSessionBackend,
+            is_remote_client_mode,
+        )
 
         if is_remote_client_mode():
             await RemoteSessionBackend().prune_thread(
@@ -2148,23 +2318,37 @@ class SessionManager:
             return
 
         try:
-            async with get_checkpointer() as saver:
-                await saver.aprune(
+            if checkpointer is not None and hasattr(checkpointer, "aprune"):
+                await checkpointer.aprune(
                     [thread_id],
                     strategy=strategy,
                     prune_subagents=True,
                     turn_completed=turn_completed,
                 )
+            else:
+                async with get_checkpointer() as saver:
+                    await saver.aprune(
+                        [thread_id],
+                        strategy=strategy,
+                        prune_subagents=True,
+                        turn_completed=turn_completed,
+                    )
         except Exception:
             logger.debug("Failed to prune thread %s", thread_id, exc_info=True)
 
     @staticmethod
     async def reconcile_summaries(limit: int = 200) -> int:
-        """Reconcile SQLite ``thread_summaries`` with ``checkpoints`` (agy startup reconcile)."""
+        """Reconcile SQLite ``thread_summaries`` with ``checkpoints`` at startup."""
         return await reconcile_thread_summaries(limit=limit)
 
     @staticmethod
-    async def maintain_database(db_path: Path | None = None, *, size_threshold_mb: float = 20.0) -> dict[str, Any]:
+    async def maintain_database(
+        db_path: Path | None = None,
+        *,
+        size_threshold_mb: float = 20.0,
+        vacuum: bool = False,
+        checkpointer: Any | None = None,
+    ) -> dict[str, Any]:
         """Compact obsolete checkpoints, flush WAL pages, and vacuum database if size exceeds threshold (IA-12/DV-08)."""
         from talkops.state.postgres_session import get_postgres_session_uri
         from talkops.state.remote_session import is_remote_client_mode
@@ -2204,17 +2388,30 @@ class SessionManager:
                     return {"performed": False, "reason": "lease_busy", "initial_mb": size_mb}
 
             try:
+                if has_other_active_talkops_sessions(db_path=target_path):
+                    logger.debug("Other active TalkOps terminal sessions detected; skipping startup DB maintenance")
+                    return {"performed": False, "reason": "active_sessions_present", "initial_mb": size_mb}
+
                 logger.info("Maintaining sessions database (current size: %.1f MB)", size_mb)
-                async with get_checkpointer() as saver:
+
+                async def _run_maint(saver: Any) -> None:
                     with contextlib.suppress(Exception):
                         await saver.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
                     await saver.aprune(None, strategy="keep_latest", prune_subagents=True)
-                    await saver.avacuum()
+                    if vacuum or size_mb >= 200.0:
+                        await saver.avacuum()
                     with contextlib.suppress(Exception):
                         await saver.conn.execute("PRAGMA optimize")
-                        await saver.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        await saver.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+
+                if checkpointer is not None and hasattr(checkpointer, "aprune") and hasattr(checkpointer, "conn"):
+                    await _run_maint(checkpointer)
+                else:
+                    async with get_checkpointer() as saver:
+                        await _run_maint(saver)
+
                 with contextlib.suppress(Exception):
-                    await reconcile_thread_summaries(limit=200)
+                    await reconcile_thread_summaries(limit=50)
 
                 new_total = target_path.stat().st_size
                 if wal_path.exists():
@@ -2288,6 +2485,7 @@ __all__ = [
     "TalkOpsCheckpointer",
     "SessionManager",
     "ThreadInfo",
+    "acquire_thread_presence",
     "bind_user_context",
     "create_store",
     "delete_thread",
@@ -2301,9 +2499,13 @@ __all__ = [
     "get_db_path",
     "get_most_recent",
     "get_thread_title",
+    "has_other_active_talkops_sessions",
+    "is_thread_active_elsewhere",
     "list_threads",
     "prewarm_thread_message_counts",
     "reconcile_thread_summaries",
+    "release_all_thread_presence",
+    "release_thread_presence",
     "set_current_user_id",
     "set_db_path",
     "set_thread_title",

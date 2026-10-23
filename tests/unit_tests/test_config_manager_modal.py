@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for ConfigManagerScreen and _InlineEditScreen modal migration."""
 
 from __future__ import annotations
@@ -15,18 +29,22 @@ class DummyConfigApp(App[None]):
     """Minimal textual app to mount and test ConfigManagerScreen."""
 
     def __init__(self, screen_instance: ConfigManagerScreen | _InlineEditScreen) -> None:
+        """Initialize DummyConfigApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
 @pytest.mark.asyncio
 async def test_config_manager_screen_mount_and_search() -> None:
+    """Verify config manager screen mount and search."""
     screen = ConfigManagerScreen()
     app = DummyConfigApp(screen)
 
@@ -73,6 +91,7 @@ async def test_config_manager_screen_mount_and_search() -> None:
 
 @pytest.mark.asyncio
 async def test_inline_edit_screen() -> None:
+    """Verify inline edit screen."""
     screen = _InlineEditScreen(label="Test Option", current_value="current_val")
     app = DummyConfigApp(screen)
 

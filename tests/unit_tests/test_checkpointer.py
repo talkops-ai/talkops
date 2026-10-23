@@ -1,10 +1,27 @@
-"""Unit tests for TalkOpsCheckpointer extended capabilities."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for TalkOpsCheckpointer extended capabilities."""
+import fcntl
 import os
+import sys
 from typing import Any, cast
+
 import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata, empty_checkpoint
+
 from talkops.state.session import TalkOpsCheckpointer, get_checkpointer
 
 
@@ -225,8 +242,6 @@ async def test_checkpointer_aprune_preserves_subagent_interrupt_checkpoints():
 @pytest.mark.asyncio
 async def test_session_manager_maintain_database_lease_contention(tmp_path):
     """Verify maintain_database respects size threshold and skips when lease is held (DV-08)."""
-    import fcntl
-    import sys
     from talkops.state.session import SessionManager
 
     db_path = tmp_path / "sessions.db"
@@ -308,4 +323,68 @@ async def test_checkpointer_aprune_agent_session_namespaces_and_resolved_interru
         assert await saver.aget_tuple(cfg_latest) is not None
         # Orphaned AgentSessionMiddleware namespace must be pruned
         assert await saver.aget_tuple(cfg_agent_ns) is None
+
+
+@pytest.mark.asyncio
+async def test_thread_presence_lock_and_maintain_database_skips_active_terminals(tmp_path):
+    """Verify per-thread presence lock prevents maintain_database contention across terminals."""
+    from talkops.state.session import (
+        SessionManager,
+        acquire_thread_presence,
+        has_other_active_talkops_sessions,
+        is_thread_active_elsewhere,
+        release_thread_presence,
+    )
+
+    db_path = tmp_path / "sessions.db"
+    db_path.write_bytes(b"0" * 2048)
+
+    assert acquire_thread_presence("thread-local-1", db_path=db_path) is True
+    assert is_thread_active_elsewhere("thread-local-1", db_path=db_path) is False
+    release_thread_presence("thread-local-1")
+
+    if sys.platform != "win32":
+        presence_dir = tmp_path / "presence"
+        presence_dir.mkdir(parents=True, exist_ok=True)
+        foreign_lock = presence_dir / "thread-terminal-2.lock"
+        with open(foreign_lock, "a+", encoding="utf-8") as fp:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert is_thread_active_elsewhere("thread-terminal-2", db_path=db_path) is True
+            assert has_other_active_talkops_sessions(db_path=db_path) is True
+            res = await SessionManager.maintain_database(db_path=db_path, size_threshold_mb=0.0)
+            assert res["performed"] is False
+            assert res["reason"] == "active_sessions_present"
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_agent_task_drains_queued_messages_without_reconciling_deadlock():
+    """Verify _cleanup_agent_task clears _agent_reconciling before calling _process_next_from_queue."""
+    from unittest.mock import AsyncMock
+
+    from talkops.ui.app import QueuedMessage, TalkOpsApp
+
+    app = TalkOpsApp(defer_server_start=True)
+    app._startup_sequence_running = False
+    app._connecting = False
+    app._reloading = False
+    app._sync_goal_state_from_checkpoint = AsyncMock(return_value=True)
+    app._sync_session_cost_from_checkpoint = AsyncMock()
+    app._regroup_completed_tools = AsyncMock()
+    app._mount_turn_summary = AsyncMock()
+
+    processed: list[tuple[str, str]] = []
+
+    async def _fake_process(text: str, mode: str) -> None:
+        processed.append((text, mode))
+
+    app._process_message = _fake_process  # type: ignore[method-assign]
+    app._pending_messages.append(QueuedMessage(text="second prompt on same terminal", mode="normal"))
+
+    await app._cleanup_agent_task()
+
+    assert app._agent_reconciling is False
+    assert len(app._pending_messages) == 0
+    assert processed == [("second prompt on same terminal", "normal")]
+
 

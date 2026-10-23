@@ -1,17 +1,40 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Agent mode discovery, configuration, and default persistence for TalkOps."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from talkops.config.paths import STATE_DIR as _STATE_DIR
 from talkops.config.toml_config import (
     clear_default_agent as clear_default_agent,
+)
+from talkops.config.toml_config import (
     load_default_agent as _toml_load_default_agent,
+)
+from talkops.config.toml_config import (
     load_recent_agent as load_recent_agent,
+)
+from talkops.config.toml_config import (
     save_default_agent as save_default_agent,
+)
+from talkops.config.toml_config import (
     save_recent_agent as save_recent_agent,
 )
 from talkops.utils.logger import get_logger
@@ -28,7 +51,6 @@ AVAILABLE_AGENTS: list[str] = [
 
 def get_available_agent_names() -> list[str]:
     """Return the list of available agent modes and discovered custom agents."""
-    from pathlib import Path
     from talkops.config import paths as config_paths
 
     names = list(AVAILABLE_AGENTS)
@@ -154,6 +176,7 @@ class CLIContextSchema:
         extra: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize CLIContextSchema."""
         resolved_cwd = cwd or working_dir
         ws = dict(workspace) if isinstance(workspace, dict) else {}
         if not resolved_cwd and ws and isinstance(ws.get("cwd"), str):
@@ -207,11 +230,13 @@ class CLIContextSchema:
         return self.extra.get(key, default)
 
     def __getitem__(self, key: str) -> Any:
+        """Return the item for the given key or index."""
         if hasattr(self, key):
             return getattr(self, key)
         return self.extra[key]
 
     def __contains__(self, key: object) -> bool:
+        """Return whether the given item is present."""
         if not isinstance(key, str):
             return False
         return (hasattr(self, key) and getattr(self, key) is not None) or (key in self.extra)

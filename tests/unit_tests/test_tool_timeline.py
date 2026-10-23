@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for the refined tool-call timeline (Change 7).
 
 Covers the structured header parts, the styled header for each lifecycle
@@ -49,10 +63,12 @@ def _span_styles(content) -> list[str]:
     ],
 )
 def test_format_tool_display_legacy_output_unchanged(name, args, expected) -> None:
+    """Verify format tool display legacy output unchanged."""
     assert format_tool_display(name, args) == expected
 
 
 def test_format_tool_parts_splits_name_scope_detail() -> None:
+    """Verify format tool parts splits name scope detail."""
     p = format_tool_parts(
         "plugin__aws-compute_talkops__describe_instances_f0b5243c096e",
         {"region": "ap-south-1"},
@@ -68,6 +84,7 @@ def test_format_tool_parts_splits_name_scope_detail() -> None:
 
 
 def test_result_summary_pluralisation() -> None:
+    """Verify result summary pluralisation."""
     assert format_tool_result_summary("read_file", "one") == "⎿ Read 1 line"
     assert format_tool_result_summary("read_file", "a\nb") == "⎿ Read 2 lines"
     assert format_tool_result_summary("grep", "x:1: hit") == "⎿ 1 match found"
@@ -78,6 +95,7 @@ def test_result_summary_pluralisation() -> None:
 
 
 def test_header_running_uses_teal_spinner_and_plain_detail() -> None:
+    """Verify header running uses teal spinner and plain detail."""
     msg = ToolCallMessage("execute", {"command": "kubectl get pods"})
     msg._status = "running"
     msg._start_time = time.time()
@@ -87,6 +105,7 @@ def test_header_running_uses_teal_spinner_and_plain_detail() -> None:
 
 
 def test_header_running_shows_elapsed_after_threshold() -> None:
+    """Verify header running shows elapsed after threshold."""
     msg = ToolCallMessage("execute", {"command": "sleep 60"})
     msg._status = "running"
     msg._start_time = time.time() - 14
@@ -103,6 +122,7 @@ def test_header_running_shows_elapsed_after_threshold() -> None:
     ],
 )
 def test_header_glyph_colour_tracks_status(status, glyph_style) -> None:
+    """Verify header glyph colour tracks status."""
     msg = ToolCallMessage("read_file", {"file_path": "a.txt"})
     msg._status = status
     content = msg._header_content()
@@ -111,12 +131,14 @@ def test_header_glyph_colour_tracks_status(status, glyph_style) -> None:
 
 
 def test_header_error_turns_name_red() -> None:
+    """Verify header error turns name red."""
     msg = ToolCallMessage("execute", {"command": "false"})
     msg._status = "error"
     assert "bold $error" in _span_styles(msg._header_content())[1:]
 
 
 def test_header_timed_success_shows_duration() -> None:
+    """Verify header timed success shows duration."""
     msg = ToolCallMessage("execute", {"command": "make"})
     msg._status = "success"
     msg._duration = 4.2
@@ -126,6 +148,7 @@ def test_header_timed_success_shows_duration() -> None:
 
 
 def test_header_task_uses_subagent_label() -> None:
+    """Verify header task uses subagent label."""
     msg = ToolCallMessage("task", {"subagent_type": "aws-security"})
     msg._status = "success"
     assert msg._header_content().plain.endswith("Subagent  aws-security")
@@ -135,12 +158,14 @@ def test_header_task_uses_subagent_label() -> None:
 
 
 def test_set_error_skips_command_echo_when_header_shows_it() -> None:
+    """Verify set error skips command echo when header shows it."""
     msg = ToolCallMessage("execute", {"command": "terraform plan"})
     msg.set_error("Error: boom")
     assert msg._output == "Error: boom"
 
 
 def test_set_error_keeps_command_echo_for_multiline_command() -> None:
+    """Verify set error keeps command echo for multiline command."""
     command = "set -e\nterraform plan"
     msg = ToolCallMessage("execute", {"command": command})
     msg.set_error("Error: boom")
@@ -148,6 +173,7 @@ def test_set_error_keeps_command_echo_for_multiline_command() -> None:
 
 
 def test_arg_shown_in_header() -> None:
+    """Verify arg shown in header."""
     assert _arg_shown_in_header("ap-south-1", "ap-south-1")
     long = "x" * 60
     assert _arg_shown_in_header(long, "x" * 40 + "…")
@@ -159,6 +185,7 @@ def test_arg_shown_in_header() -> None:
 
 
 def test_emphasize_counts_highlights_numbers_only() -> None:
+    """Verify emphasize counts highlights numbers only."""
     pieces = _emphasize_counts("Read 2 files, ran 10 commands")
     assert ("2", "$primary") in pieces
     assert ("10", "$primary") in pieces
@@ -168,6 +195,7 @@ def test_emphasize_counts_highlights_numbers_only() -> None:
 
 
 def test_live_line_highlights_in_flight_segment() -> None:
+    """Verify live line highlights in flight segment."""
     content = ToolGroupSummary._live_line("⠋", ["read_file"], ["execute"])
     assert content.plain == "⠋ Read 1 file, running 1 shell command…"
     active = [

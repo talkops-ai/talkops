@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unicode security helpers for deceptive text and URL checks in TalkOps."""
 
 from __future__ import annotations
@@ -76,12 +90,14 @@ _URL_SAFE_LOCAL_HOSTS: frozenset[str] = frozenset({"localhost"})
 
 @dataclass(frozen=True, slots=True)
 class UnicodeIssue:
+    """Represent unicode issue."""
     position: int
     character: str
     codepoint: str
     name: str
 
     def __post_init__(self) -> None:
+        """Validate and normalize fields after dataclass initialization."""
         if len(self.character) != 1:
             msg = f"character must be a single code point, got length {len(self.character)}"
             raise ValueError(msg)
@@ -93,6 +109,7 @@ class UnicodeIssue:
 
 @dataclass(frozen=True, slots=True)
 class UrlSafetyResult:
+    """Represent url safety result."""
     safe: bool
     decoded_domain: str | None
     warnings: tuple[str, ...]
@@ -110,6 +127,7 @@ class UnicodeSanitizeResult:
 
 
 def detect_dangerous_unicode(text: str) -> list[UnicodeIssue]:
+    """Execute detect dangerous unicode."""
     issues: list[UnicodeIssue] = []
     for position, character in enumerate(text):
         if character not in _DANGEROUS_CHARACTERS:
@@ -126,6 +144,7 @@ def detect_dangerous_unicode(text: str) -> list[UnicodeIssue]:
 
 
 def strip_dangerous_unicode(text: str) -> str:
+    """Execute strip dangerous unicode."""
     return "".join(ch for ch in text if ch not in _DANGEROUS_CHARACTERS)
 
 
@@ -136,6 +155,7 @@ def sanitize_control_chars(
     collapse_whitespace: bool = True,
     max_length: int | None = None,
 ) -> str:
+    """Sanitize control chars."""
     allowed = {" ", "\n"} if keep_newlines else {" "}
     cleaned = "".join(
         ch if ch in allowed or not unicodedata.category(ch).startswith("C") else " "
@@ -152,6 +172,7 @@ def sanitize_control_chars(
 
 
 def render_with_unicode_markers(text: str) -> str:
+    """Render with unicode markers."""
     rendered_parts: list[str] = []
     for character in text:
         if character not in _DANGEROUS_CHARACTERS:
@@ -164,6 +185,7 @@ def render_with_unicode_markers(text: str) -> str:
 
 
 def summarize_issues(issues: list[UnicodeIssue], *, max_items: int = 3) -> str:
+    """Execute summarize issues."""
     unique_entries: list[str] = []
     seen: set[str] = set()
     for issue in issues:
@@ -183,6 +205,7 @@ def summarize_issues(issues: list[UnicodeIssue], *, max_items: int = 3) -> str:
 
 
 def format_warning_detail(warnings: tuple[str, ...], *, max_shown: int = 2) -> str:
+    """Format warning detail."""
     shown = warnings[:max_shown]
     detail = "; ".join(shown)
     remaining = len(warnings) - max_shown
@@ -222,6 +245,7 @@ def normalize_confusables(text: str) -> str:
 
 
 def check_url_safety(url: str) -> UrlSafetyResult:
+    """Check url safety."""
     warnings: list[str] = []
     suspicious = False
 
@@ -380,6 +404,7 @@ def iter_string_values(
     *,
     prefix: str = "",
 ) -> list[tuple[str, str]]:
+    """Execute iter string values."""
     values: list[tuple[str, str]] = []
     for key, value in data.items():
         key_path = f"{prefix}.{key}" if prefix else key
@@ -414,6 +439,7 @@ def _iter_string_values_from_list(
 
 
 def looks_like_url_key(arg_path: str) -> bool:
+    """Execute looks like url key."""
     key = arg_path.rsplit(".", maxsplit=1)[-1]
     key = key.split("[", maxsplit=1)[0].lower()
     return key in URL_ARG_KEYS

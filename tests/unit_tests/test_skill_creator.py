@@ -1,15 +1,30 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for the skill-creator built-in skill, scripts, and slash command integration."""
 
 import importlib.util
 import os
 from pathlib import Path
+
 import pytest
 
 from talkops.commands import CommandContext, CommandRouter
 from talkops.commands.power.skill_creator import SkillCreatorHandler
 from talkops.ui.command_registry import (
-    COMMANDS,
     _STATIC_SKILL_ALIASES,
+    COMMANDS,
     build_skill_commands,
     get_all_entries,
     get_command,
@@ -176,7 +191,9 @@ async def test_skill_creator_handler_delegation():
     handler = SkillCreatorHandler()
 
     class MockApp:
+        """Test suite or helper class for mock app."""
         def __init__(self):
+            """Initialize MockApp."""
             self.invoked_command = None
 
         async def _handle_skill_command(self, command: str) -> None:

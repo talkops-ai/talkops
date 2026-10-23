@@ -1,11 +1,26 @@
-"""Unit tests for restoring the default model when transitioning from Smart to Manual mode."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-import pytest
+"""Unit tests for restoring the default model when transitioning from Smart to Manual mode."""
 from unittest.mock import MagicMock
 
+import pytest
+from langchain_core.messages import HumanMessage
+
 from talkops.approval_mode import ApprovalMode
-from talkops.ui.app import TalkOpsApp
 from talkops.config.settings import get_settings
+from talkops.ui.app import TalkOpsApp
 from talkops.ui.textual_adapter import TextualAdapter
 
 
@@ -153,14 +168,16 @@ async def test_smart_to_auto_mode_also_restores_default_model(monkeypatch, tmp_p
 @pytest.mark.asyncio
 async def test_jev_router_bypasses_and_clears_stale_routes_in_manual_mode():
     """Verify that in Manual mode, Jev router clears stale checkpointed routes and does not override model calls."""
-    from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
-    from langchain_core.messages import HumanMessage
     from langchain.agents.middleware.types import ModelRequest, ModelResponse
+
+    from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
 
     middleware = JevDynamicModelRouterMiddleware()
 
     class DummyRuntime:
+        """Test suite or helper class for dummy runtime."""
         def __init__(self, context=None):
+            """Initialize DummyRuntime."""
             self.context = context or {}
 
     manual_runtime = DummyRuntime(context={"approval_mode": "manual", "smart": False, "model": "openai:gpt-5.6-luna"})
@@ -192,6 +209,7 @@ async def test_jev_router_bypasses_and_clears_stale_routes_in_manual_mode():
     handler_received_request = None
 
     async def fake_handler(req):
+        """Provide fake handler test helper or fixture."""
         nonlocal handler_received_request
         handler_received_request = req
         return MagicMock(spec=ModelResponse)
@@ -227,4 +245,24 @@ async def test_textual_adapter_ignores_model_routed_event_in_manual_mode():
     assert app._model == "openai:gpt-5.6-luna"
     assert app._smart_routed_active is False
     assert not status_bar_mock.set_model.called
+
+
+@pytest.mark.asyncio
+async def test_smart_mode_warns_when_typesafe_api_key_missing(monkeypatch):
+    """Verify that switching to Smart mode shows a warning toast if TYPESAFE_API_KEY is not configured."""
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "typesafe_api_key", None)
+
+    app = TalkOpsApp(model="openai:gpt-5.6-luna", defer_server_start=True)
+    app.notify = MagicMock()
+
+    await app._set_approval_mode(ApprovalMode.SMART)
+
+    app.notify.assert_called_once()
+    call_args, call_kwargs = app.notify.call_args
+    assert "TYPESAFE_API_KEY is not configured" in call_args[0]
+    assert call_kwargs.get("severity") == "warning"
+
 

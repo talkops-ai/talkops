@@ -1,18 +1,41 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit and integration tests for TalkOps Addon Marketplace (`.talkops/`), Python dependency auto-installer, and `webhooks` <-> `channels` outbound notification & thread binding."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import AsyncIterator
 import json
-from pathlib import Path
 import subprocess
+from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 from starlette.testclient import TestClient
+from talkops_channels import (  # type: ignore[import-not-found]
+    ChannelExposure,
+    ChannelHub,
+    ChannelsAddon,
+    ExposureMode,
+    PairingStore,
+    SlackChannelConfig,
+    SlackWebhookChannel,
+)
 
 from talkops.addons import (
     AddonManager,
@@ -44,15 +67,6 @@ from talkops.webhooks.models import (
     parse_outbound_channel_routes,
 )
 from talkops.webhooks.sinks import WebhookRunResult
-from talkops_channels import (  # type: ignore[import-not-found]
-    ChannelExposure,
-    ChannelHub,
-    ChannelsAddon,
-    ExposureMode,
-    PairingStore,
-    SlackChannelConfig,
-    SlackWebhookChannel,
-)
 
 
 def test_addon_manifest_and_marketplace_in_libs_directory() -> None:
@@ -210,7 +224,9 @@ async def test_webhook_to_channel_outbound_notification_and_thread_binding(
     gateway_runs: list[dict[str, Any]] = []
 
     class FakeGateway:
+        """Test suite or helper class for fake gateway."""
         def __init__(self) -> None:
+            """Initialize FakeGateway."""
             self.event_bus = event_bus
             self.graph = None
 
@@ -223,6 +239,7 @@ async def test_webhook_to_channel_outbound_notification_and_thread_binding(
             context: Any = None,
             **kwargs: Any,
         ) -> AsyncIterator[tuple[tuple[str, ...], str, Any]]:
+            """Provide stream run test helper or fixture."""
             gateway_runs.append(
                 {
                     "input": input_payload,
@@ -334,19 +351,35 @@ async def test_webhook_to_channel_outbound_notification_and_thread_binding(
             # Drain background webhook investigation
             await dispatcher.drain_background_tasks()
 
-            # Verify Slack received BOTH:
-            # (a) The initial `webhook.received` incident thread creation in `C_INCIDENTS`
-            # (b) The follow-up `webhook.completed` RCA report inside that exact Slack thread (`1710000100.0001`)!
-            assert len(slack_api_calls) >= 2
+            # Verify Slack received:
+            # (a) The initial `webhook.received` incident thread creation in `C_INCIDENTS` with Block Kit blocks
+            # (b) The follow-up `webhook.completed` RCA report inside that exact Slack thread (`1710000100.0001`) with Block Kit blocks
+            # (c) An in-place `chat.update` on the parent incident card (`1710000100.0001`) marking the RCA complete
+            assert len(slack_api_calls) >= 3
             first_post = slack_api_calls[0][1]
             assert first_post["channel"] == "C_INCIDENTS"
             assert "PAGERDUTY" in first_post["text"]
             assert "High Memory Usage on prod-api" in first_post["text"]
+            assert isinstance(first_post.get("blocks"), list)
+            assert first_post["blocks"][0]["type"] == "header"
+            assert "High Memory Usage on prod-api" in first_post["blocks"][0]["text"]["text"]
 
             second_post = slack_api_calls[1][1]
             assert second_post["channel"] == "C_INCIDENTS"
             assert second_post.get("thread_ts") == "1710000100.0001"
             assert "OOMKilled on pod" in second_post["text"]
+            assert isinstance(second_post.get("blocks"), list)
+            assert second_post["blocks"][0]["type"] == "header"
+
+            parent_update_path, parent_update = slack_api_calls[2]
+            assert parent_update_path.endswith("/chat.update")
+            assert parent_update["channel"] == "C_INCIDENTS"
+            assert parent_update["ts"] == "1710000100.0001"
+            assert any(
+                "RCA Complete" in str(field.get("text", ""))
+                for block in parent_update.get("blocks", [])
+                for field in block.get("fields", [])
+            )
 
             # 5. Now an engineer replies in that Slack thread (`C_INCIDENTS:1710000100.0001`)!
             # Verify `ChannelHub` resolves the bound `webhook_lg_thread_id` and continues the exact same thread!

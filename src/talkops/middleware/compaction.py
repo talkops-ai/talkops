@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """CLI conversation compaction middleware and lossless transcript architecture.
 
 Provides TalkOps's context compaction and lossless history preservation system:
@@ -29,17 +43,17 @@ Provides TalkOps's context compaction and lossless history preservation system:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
 import contextlib
+import json
+import os
+import re
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import IntEnum
 from functools import partial
-import json
-import os
 from pathlib import Path
-import re
-import time
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, cast
 from uuid import uuid4
 
@@ -61,7 +75,13 @@ from langchain.agents.middleware.types import (
     ModelResponse,
 )
 from langchain.tools import ToolRuntime
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.tools import InjectedToolArg, StructuredTool
 from langgraph.types import Command
 
@@ -1978,6 +1998,7 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
         active_thread_id: str = "default",
         **kwargs: Any,
     ) -> None:
+        """Initialize TalkOpsSummarizationMiddleware."""
         super().__init__(*args, **kwargs)
         self._checkpoint_config = checkpoint_config or CheckpointConfig()
         self._active_thread_id = active_thread_id
@@ -2003,6 +2024,7 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> Any:
+        """Intercept and wrap synchronous model invocation."""
         self._capture_request_token_context(request)
         return super().wrap_model_call(request, handler)
 
@@ -2011,6 +2033,7 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> Any:
+        """Intercept and wrap asynchronous model invocation."""
         self._capture_request_token_context(request)
         return await super().awrap_model_call(request, handler)
 
@@ -2158,7 +2181,9 @@ def _create_talkops_summarization_middleware(
 ) -> TalkOpsSummarizationMiddleware:
     """Create an ``TalkOpsSummarizationMiddleware`` honoring model profile & ``autoCompact``."""
     from deepagents._models import resolve_model  # noqa: PLC0415
-    from deepagents.middleware.summarization import compute_summarization_defaults  # noqa: PLC0415
+    from deepagents.middleware.summarization import (
+        compute_summarization_defaults,  # noqa: PLC0415
+    )
 
     resolved_model = resolve_model(model) if isinstance(model, str) else model
     defaults = compute_summarization_defaults(resolved_model)

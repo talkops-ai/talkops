@@ -1,10 +1,24 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for the status bar segments, context meter and PROD pill."""
 
 from __future__ import annotations
 
-from textual.content import Content
 import pytest
 from textual.app import App, ComposeResult
+from textual.content import Content
 from textual.widgets import Static
 
 from talkops.ui import context_detection
@@ -25,6 +39,7 @@ class _ThemedApp(App):
     """Minimal app carrying the TalkOps theme variables StatusBar's CSS uses."""
 
     def __init__(self) -> None:
+        """Initialize _ThemedApp."""
         super().__init__()
         from talkops.ui.theme import register_app_themes
 
@@ -32,11 +47,13 @@ class _ThemedApp(App):
         self.theme = "talkops-dark"
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
+        """Provide get theme variable defaults test helper or fixture."""
         from talkops.ui.theme import get_css_variable_defaults, get_theme_colors
 
         return get_css_variable_defaults(colors=get_theme_colors(self))
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield StatusBar(id="status-bar")
 
 
@@ -59,6 +76,7 @@ def _styled(content) -> dict[str, str]:
     ["client-prod", "prod", "acme_production", "prd-eu", "PROD", "eks:prod/api", "team@prod"],
 )
 def test_production_names(name):
+    """Verify production names."""
     assert is_production_name(name)
 
 
@@ -67,10 +85,12 @@ def test_production_names(name):
     ["product-dev", "reproduce", "preprod-test", "preprod", "client-devops", "", None],
 )
 def test_non_production_names(name):
+    """Verify non production names."""
     assert not is_production_name(name)
 
 
 def test_detect_production_reports_source_in_priority_order():
+    """Verify detect production reports source in priority order."""
     assert detect_production(aws_profile="client-prod") == "aws"
     assert detect_production(aws_profile="dev", k8s_context="eks-prod") == "k8s"
     assert detect_production(tf_workspace="production") == "tf"
@@ -79,6 +99,7 @@ def test_detect_production_reports_source_in_priority_order():
 
 
 def test_current_k8s_context_reads_kubeconfig(tmp_path, monkeypatch):
+    """Verify current k8s context reads kubeconfig."""
     cfg = tmp_path / "config"
     cfg.write_text(
         "apiVersion: v1\ncontexts: []\ncurrent-context: \"eks-prod\"\nkind: Config\n",
@@ -90,12 +111,14 @@ def test_current_k8s_context_reads_kubeconfig(tmp_path, monkeypatch):
 
 
 def test_current_k8s_context_missing_file(tmp_path, monkeypatch):
+    """Verify current k8s context missing file."""
     monkeypatch.delenv("KUBECONFIG_CONTEXT", raising=False)
     monkeypatch.setenv("KUBECONFIG", str(tmp_path / "nope"))
     assert current_k8s_context() == ""
 
 
 def test_current_k8s_context_env_override(monkeypatch):
+    """Verify current k8s context env override."""
     monkeypatch.setenv("KUBECONFIG_CONTEXT", "kind-local")
     assert current_k8s_context() == "kind-local"
 
@@ -114,24 +137,29 @@ def test_current_k8s_context_env_override(monkeypatch):
     ],
 )
 def test_context_meter(percent, plain, style):
+    """Verify context meter."""
     content = format_context_meter(percent, ascii=False)
     assert content.plain == plain
     assert _styled(content)[f" {percent}%"] == style
 
 
 def test_context_meter_any_usage_fills_one_cell():
+    """Verify context meter any usage fills one cell."""
     assert format_context_meter(2, ascii=False).plain == "▰▱▱▱▱ 2%"
 
 
 def test_context_meter_ascii():
+    """Verify context meter ascii."""
     assert format_context_meter(61, ascii=True).plain == "####- 61%"
 
 
 def test_context_meter_clamps():
+    """Verify context meter clamps."""
     assert format_context_meter(150, ascii=False).plain == "▰▰▰▰▰ 100%"
 
 
 def test_percent_style_thresholds_are_exclusive():
+    """Verify percent style thresholds are exclusive."""
     assert context_percent_style(60) == "dim"
     assert context_percent_style(60.1) == "$warning"
     assert context_percent_style(80) == "$warning"
@@ -139,6 +167,7 @@ def test_percent_style_thresholds_are_exclusive():
 
 
 def test_format_cwd_short():
+    """Verify format cwd short."""
     assert format_cwd_short("~/Documents/work/talkops").endswith("/talkops")
     assert format_cwd_short("~/Documents/work/talkops").startswith("~/")
     assert "work" not in format_cwd_short("~/Documents/work/talkops")
@@ -161,6 +190,7 @@ async def _bar(pilot) -> StatusBar:
 
 @pytest.mark.asyncio
 async def test_prod_profile_shows_pill_and_red_profile():
+    """Verify prod profile shows pill and red profile."""
     app = _ThemedApp()
     async with app.run_test(size=(120, 3)) as pilot:
         bar = await _bar(pilot)
@@ -175,6 +205,7 @@ async def test_prod_profile_shows_pill_and_red_profile():
 
 @pytest.mark.asyncio
 async def test_non_prod_profile_hides_pill():
+    """Verify non prod profile hides pill."""
     app = _ThemedApp()
     async with app.run_test(size=(120, 3)) as pilot:
         bar = await _bar(pilot)
@@ -194,6 +225,7 @@ async def test_non_prod_profile_hides_pill():
 
 @pytest.mark.asyncio
 async def test_k8s_prod_context_lights_pill(monkeypatch):
+    """Verify k8s prod context lights pill."""
     monkeypatch.setattr(context_detection, "current_k8s_context", lambda: "eks-prod")
     app = _ThemedApp()
     async with app.run_test(size=(120, 3)) as pilot:
@@ -209,6 +241,7 @@ async def test_k8s_prod_context_lights_pill(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tokens_display_contains_meter_and_separators():
+    """Verify tokens display contains meter and separators."""
     app = _ThemedApp()
     async with app.run_test(size=(120, 3)) as pilot:
         bar = await _bar(pilot)
@@ -229,6 +262,7 @@ async def test_tokens_display_contains_meter_and_separators():
 
 @pytest.mark.asyncio
 async def test_separator_hides_with_its_neighbour():
+    """Verify separator hides with its neighbour."""
     app = _ThemedApp()
     async with app.run_test(size=(120, 3)) as pilot:
         bar = await _bar(pilot)
@@ -241,6 +275,7 @@ async def test_separator_hides_with_its_neighbour():
 
 @pytest.mark.asyncio
 async def test_narrow_drops_cwd_region_model_and_count():
+    """Verify narrow drops cwd region model and count."""
     app = _ThemedApp()
     async with app.run_test(size=(56, 3)) as pilot:
         bar = await _bar(pilot)
@@ -265,6 +300,7 @@ async def test_narrow_drops_cwd_region_model_and_count():
 
 @pytest.mark.asyncio
 async def test_pending_tokens_keep_placeholder():
+    """Verify pending tokens keep placeholder."""
     app = _ThemedApp()
     async with app.run_test(size=(120, 3)) as pilot:
         bar = await _bar(pilot)

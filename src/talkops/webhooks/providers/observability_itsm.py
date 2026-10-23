@@ -1,9 +1,23 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Datadog, ServiceNow, and Generic (Azure Monitor, Opsgenie, Jira, Argo CD) webhook adapters."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from talkops.webhooks.models import (
@@ -28,6 +42,7 @@ class DatadogWebhookAdapter(WebhookProviderAdapter):
         raw_body: bytes,
         config: WebhookConfig,
     ) -> NormalizedWebhookEvent:
+        """Parse datadog webhook adapter."""
         data = self.decode_json_body(raw_body)
 
         alert_id = str(data.get("alert_id") or data.get("id") or "dd-alert")
@@ -81,6 +96,7 @@ class ServiceNowWebhookAdapter(WebhookProviderAdapter):
         raw_body: bytes,
         config: WebhookConfig,
     ) -> NormalizedWebhookEvent:
+        """Parse service now webhook adapter."""
         data = self.decode_json_body(raw_body)
 
         sys_id = str(data.get("sys_id") or data.get("id") or "snow-incident")
@@ -134,6 +150,7 @@ class GenericWebhookAdapter(WebhookProviderAdapter):
         raw_body: bytes,
         config: WebhookConfig,
     ) -> NormalizedWebhookEvent:
+        """Parse generic webhook adapter."""
         data = self.decode_json_body(raw_body)
 
         # 1. Detect Azure Monitor Common Alert Schema (`schemaId == "azureMonitorCommonAlertSchema"`)

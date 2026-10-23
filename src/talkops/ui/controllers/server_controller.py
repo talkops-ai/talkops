@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Server lifecycle, startup trust, reload, restart, and package update controller."""
 
 from __future__ import annotations
@@ -13,7 +27,12 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from textual.css.query import NoMatches
 
 from talkops.mcp.mcp_info import MCPServerInfo
-from talkops.ui.widgets.messages import CommandOutputMessage, ErrorMessage, SystemMessage, UserMessage
+from talkops.ui.widgets.messages import (
+    CommandOutputMessage,
+    ErrorMessage,
+    SystemMessage,
+    UserMessage,
+)
 from talkops.ui.widgets.status import StatusBar
 from talkops.ui.widgets.welcome import WelcomeBanner
 from talkops.utils.logger import bind_logging_to_thread, get_logger
@@ -193,6 +212,7 @@ class ServerLifecycleController:
     """Manages workspace trust, background server lifecycle, `/reload`, `/restart`, `/install`, and `/update`."""
 
     def __init__(self, app: TalkOpsApp) -> None:
+        """Initialize ServerLifecycleController."""
         self._app = app
 
     async def evaluate_startup_trust_and_settings(self) -> None:
@@ -509,7 +529,10 @@ class ServerLifecycleController:
         except Exception:
             pass
 
-        from talkops.exceptions import MissingCredentialsError, MissingProviderPackageError
+        from talkops.exceptions import (
+            MissingCredentialsError,
+            MissingProviderPackageError,
+        )
 
         if isinstance(event.error, MissingCredentialsError):
             env_var_hint = f" (`{event.error.env_var}`)" if event.error.env_var else ""
@@ -563,6 +586,12 @@ class ServerLifecycleController:
         except Exception:
             pass
         if app._agent_thread_id:
+            try:
+                from talkops.state.session import acquire_thread_presence
+
+                acquire_thread_presence(app._agent_thread_id)
+            except Exception:
+                pass
             bind_logging_to_thread(app._agent_thread_id)
             task_watcher = getattr(app, "_task_watcher", None)
             if task_watcher is not None and getattr(app, "is_running", False):
@@ -649,6 +678,7 @@ class ServerLifecycleController:
         return task
 
     def track_server_restart_task(self, task: asyncio.Task[Any]) -> None:
+        """Execute track server restart task on ServerLifecycleController."""
         self._app._server_restart_tasks.add(task)
         task.add_done_callback(self._app._server_restart_tasks.discard)
 
@@ -924,8 +954,18 @@ class ServerLifecycleController:
                     pass
                 return _ServerRespawnResult(restarted=False)
 
-            from talkops.mcp.preload import preload_mcp_server_info
+            from talkops.mcp.preload import (
+                get_cached_mcp_server_infos,
+                preload_mcp_server_info,
+            )
             from talkops.ui.remote_client import RemoteAgent
+
+            if getattr(server_proc, "is_in_process", False) is True:
+                app._client = server_proc.create_client()
+            else:
+                app._client = RemoteAgent(url=server_proc.url, graph_name="agent")
+            if app._adapter:
+                app._adapter.set_client(app._client)
 
             mcp_info = None
             mcp_error = None
@@ -936,21 +976,31 @@ class ServerLifecycleController:
                 mcp_status = "disabled"
             else:
                 try:
-                    mcp_info = await preload_mcp_server_info(**preload_kwargs)
+                    mcp_info = await asyncio.wait_for(
+                        preload_mcp_server_info(**preload_kwargs),
+                        timeout=3.0,
+                    )
                     mcp_status = "fresh" if mcp_info is not None else "unavailable"
+                except TimeoutError:
+                    logger.debug("MCP preload during respawn exceeded 3.0s; continuing in background")
+                    cached = [
+                        s for s in get_cached_mcp_server_infos()
+                        if not str(getattr(s, "name", s)).startswith("subagent__")
+                    ]
+                    mcp_info = cached if cached else app._mcp_server_info
+                    mcp_status = "fresh" if mcp_info is not None else "unavailable"
+                    if getattr(app, "is_running", False):
+                        app.run_worker(
+                            app._preload_mcp_metadata_background(),
+                            group="mcp-preload",
+                            exclusive=True,
+                        )
                 except Exception as exc:
                     logger.exception(mcp_failure_log)
                     mcp_error = f"{type(exc).__name__}: {exc}"
                     app.notify(f"{mcp_failure_toast} ({mcp_error})", severity="warning")
 
             ready_mcp_info = mcp_info if mcp_status != "unavailable" else app._mcp_server_info
-
-            if getattr(server_proc, "is_in_process", False) is True:
-                app._client = server_proc.create_client()
-            else:
-                app._client = RemoteAgent(url=server_proc.url, graph_name="agent")
-            if app._adapter:
-                app._adapter.set_client(app._client)
 
             app.post_message(
                 app.ServerReady(
@@ -988,8 +1038,15 @@ class ServerLifecycleController:
         """Capture runtime snapshot of reloadable items for change detection."""
         app = self._app
         try:
-            from talkops.config.cloud_profiles import get_active_aws_profile, get_active_aws_region
-            from talkops.config.toml_config import load_agent_pool, load_default_agent, load_default_model
+            from talkops.config.cloud_profiles import (
+                get_active_aws_profile,
+                get_active_aws_region,
+            )
+            from talkops.config.toml_config import (
+                load_agent_pool,
+                load_default_agent,
+                load_default_model,
+            )
 
             prof = get_active_aws_profile()
             reg = get_active_aws_region() or (getattr(app._settings, "aws_region", None) if app._settings else None)
@@ -1195,6 +1252,10 @@ class ServerLifecycleController:
             }
             added_skills = sorted(new_skill_names - old_skill_names)
             removed_skills = sorted(old_skill_names - new_skill_names)
+            try:
+                app.query_one(WelcomeBanner).refresh_capabilities()
+            except Exception:
+                pass
 
             if hasattr(app, "_chat_input") and app._chat_input:
                 from talkops.ui.command_registry import (

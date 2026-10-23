@@ -1,8 +1,28 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Plugin management command handler for TalkOps."""
+
+from __future__ import annotations
+
+import argparse
 import asyncio
-from talkops.utils.logger import get_logger
+import shlex
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -12,27 +32,33 @@ class PluginsHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/plugins"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.CORE
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.READ_ONLY
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
         # If subcommand arguments were passed, route to CLI plugin executor
+        """Execute the command handler with the provided command context."""
         args_text = (ctx.args or "").strip()
         if args_text:
-            import shlex
-            import argparse
-            from talkops.plugins.commands_cli import setup_plugin_parser, execute_plugin_command
+            from talkops.plugins.commands_cli import (
+                execute_plugin_command,
+                setup_plugin_parser,
+            )
 
             parser = argparse.ArgumentParser(prog="talkops", add_help=False)
             subparsers = parser.add_subparsers()

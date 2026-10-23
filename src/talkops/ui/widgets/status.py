@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Status bar widget."""
 
 from __future__ import annotations
@@ -6,7 +20,6 @@ import inspect
 import math
 import os
 from contextlib import suppress
-from talkops.utils.logger import get_logger
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, get_args
 
@@ -22,6 +35,7 @@ from talkops.config.env_vars import HIDE_CWD, HIDE_GIT_BRANCH, is_env_truthy
 from talkops.config.settings import ASCII_GLYPHS, UNICODE_GLYPHS, get_glyphs
 from talkops.ui import context_detection
 from talkops.ui.widgets.loading import Spinner
+from talkops.utils.logger import get_logger
 from talkops.utils.session_stats import format_cost
 
 logger = get_logger(__name__)
@@ -223,7 +237,7 @@ class BranchLabel(Widget):
 
     Unlike CSS `text-overflow: ellipsis` (which always uses the Unicode
     ellipsis character), this widget truncates manually in :meth:`render` using
-    :func:`get_glyphs` so ASCII mode (`OPSCODE_UI_CHARSET_MODE=ascii`)
+    :func:`get_glyphs` so ASCII mode (`TALKOPS_UI_CHARSET_MODE=ascii`)
     gets `"..."` instead of `"…"`.
     """
 
@@ -617,7 +631,10 @@ class StatusBar(Horizontal):
             self.query_one("#tokens-display", Static).display = False
         # Initialize active cloud profile and region display
         try:
-            from talkops.config.cloud_profiles import get_active_aws_profile, get_active_aws_region
+            from talkops.config.cloud_profiles import (
+                get_active_aws_profile,
+                get_active_aws_region,
+            )
 
             self.set_cloud(
                 profile=get_active_aws_profile(),
@@ -885,6 +902,7 @@ class StatusBar(Horizontal):
 
     @auto_approve.setter
     def auto_approve(self, enabled: bool) -> None:
+        """Set the auto approve property."""
         self.set_approval_mode("auto" if enabled else "manual")
 
     def set_approval_mode(self, mode: str) -> None:

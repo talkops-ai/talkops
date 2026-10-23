@@ -1,16 +1,34 @@
-"""External editor support for composing prompts in TalkOps"""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""External editor support for composing prompts in TalkOps."""
 
 from __future__ import annotations
 
 import contextlib
-from talkops.utils.logger import get_logger
 import os
+import re
 import shlex
+import shutil
 import subprocess  # noqa: S404
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 from typing import Any
+
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -82,9 +100,6 @@ _LOCAL_URI_SCHEMES: tuple[str, ...] = (
 
 def _strip_local_uri_scheme(raw: str) -> tuple[str, int | None]:
     """Strip local/LLM file URI schemes (file://, sandbox:, etc.) and #L line fragments."""
-    import re
-    import urllib.parse
-
     cleaned = raw.strip()
     lower = cleaned.lower()
     for prefix in _LOCAL_URI_SCHEMES:
@@ -118,7 +133,6 @@ def extract_file_path(text: str) -> str | None:
     if not text:
         return None
 
-    import re
 
     raw = text.strip()
     if (raw.startswith(('"', "'", "`")) and raw.endswith(('"', "'", "`"))) and len(raw) >= 2:
@@ -179,9 +193,6 @@ def open_file_in_editor(
     Returns:
         True if the editor was launched successfully, False otherwise.
     """
-    import re
-    import shutil
-
     raw, anchor_line = _strip_local_uri_scheme(str(path))
     if line is None and anchor_line is not None:
         line = anchor_line

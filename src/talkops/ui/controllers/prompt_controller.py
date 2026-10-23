@@ -1,9 +1,21 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Inline prompt controller for tool approvals, ask_user questions, and goal reviews.
 
-Inspired by Antigravity CLI's ``store/tool_confirmation_manager.go`` and
-``store/ask_question_manager.go``, this controller extracts inline prompt
-mounting, lifecycle management, focus restoration, interrupt cancellation, and
-scoped key routing out of ``TalkOpsApp``.
+Extracts inline prompt mounting, lifecycle management, focus restoration,
+interrupt cancellation, and scoped key routing out of ``TalkOpsApp``.
 """
 
 from __future__ import annotations
@@ -36,6 +48,7 @@ class PromptController:
     """Manages inline prompts (`ApprovalMenu`, `AskUserMenu`, `GoalReviewMenu`)."""
 
     def __init__(self, app: TalkOpsApp) -> None:
+        """Initialize PromptController."""
         self._app = app
         self.pending_approval_widget: ApprovalMenu | Any | None = None
         self.approval_placeholder: Any | None = None

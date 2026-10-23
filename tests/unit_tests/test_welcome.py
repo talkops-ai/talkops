@@ -1,11 +1,30 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Welcome Banner widget."""
 
 from __future__ import annotations
 
+import argparse
+import json
+import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.widget import Widget
 
 from talkops.ui.widgets.welcome import (
     WelcomeBanner,
@@ -25,6 +44,7 @@ class WelcomeHarnessApp(App[None]):
     """App mounting WelcomeBanner to test rendering and lifecycle."""
 
     def __init__(self):
+        """Initialize WelcomeHarnessApp."""
         super().__init__()
         from talkops.ui.theme import register_app_themes
 
@@ -32,12 +52,14 @@ class WelcomeHarnessApp(App[None]):
         self.banner = WelcomeBanner()
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
+        """Provide get theme variable defaults test helper or fixture."""
         from talkops.ui.theme import get_css_variable_defaults, get_theme_colors
 
         colors = get_theme_colors(self)
         return get_css_variable_defaults(colors=colors)
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield self.banner
 
 
@@ -100,8 +122,6 @@ async def test_welcome_banner_displays_logo_tagline_and_control_plane_user(
     tmp_path, monkeypatch
 ):
     """Verify WelcomeBanner renders the TalkOps logo, 'DevOps on Demand', and Control Plane user."""
-    import json
-
     auth_file = tmp_path / "auth.json"
     auth_file.write_text(
         json.dumps(
@@ -167,8 +187,6 @@ def test_welcome_logo_preserves_brand_colors_in_all_status_states():
 
 def test_ensure_cli_authenticated_clears_revoked_key_and_triggers_sso(tmp_path, monkeypatch):
     """Verify _ensure_cli_authenticated detects a 401 revoked key from Control Plane and re-authenticates via SSO."""
-    import argparse
-    import json
     from talkops.cli.main import _ensure_cli_authenticated
 
     auth_file = tmp_path / "auth.json"
@@ -300,6 +318,7 @@ def test_full_icon_cells_paint_background_to_avoid_line_spacing_seams():
 
 
 def test_build_logo_text_without_icon_renders_only_text_stack():
+    """Verify build logo text without icon renders only text stack."""
     from talkops.ui.widgets.welcome import _build_logo_text
 
     logo = _build_logo_text(status="connected", user_display="a@b.co", show_icon=False)
@@ -327,6 +346,7 @@ def test_logo_image_probe_is_noop_without_tty(monkeypatch):
 
 
 def test_logo_image_env_var_disables_probe(monkeypatch):
+    """Verify logo image env var disables probe."""
     from talkops.ui.widgets import logo_image
 
     monkeypatch.setenv("TALKOPS_LOGO_IMAGE", "0")
@@ -334,6 +354,7 @@ def test_logo_image_env_var_disables_probe(monkeypatch):
 
 
 def test_logo_image_asset_is_bundled():
+    """Verify logo image asset is bundled."""
     from PIL import Image
 
     from talkops.ui.widgets.logo_image import LOGO_ICON_PATH
@@ -345,6 +366,7 @@ def test_logo_image_asset_is_bundled():
 
 
 def test_tgp_only_trusted_in_kitty_and_ghostty(monkeypatch):
+    """Verify tgp only trusted in kitty and ghostty."""
     from talkops.ui.widgets import logo_image
 
     for var in ("KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR"):
@@ -362,8 +384,6 @@ def test_tgp_only_trusted_in_kitty_and_ghostty(monkeypatch):
 @pytest.mark.asyncio
 async def test_welcome_banner_uses_image_widget_when_graphics_supported(monkeypatch):
     """With a detected protocol the banner shows the PNG + a text-only _LeftPanel."""
-    from textual.widget import Widget
-
     from talkops.ui.widgets import welcome
 
     class _FakeImage(Widget):
@@ -404,6 +424,7 @@ def test_wordmark_is_larger_than_tagline_and_fits_panel():
 
 
 def test_wordmark_switches_to_dark_ink_on_light_backgrounds():
+    """Verify wordmark switches to dark ink on light backgrounds."""
     from talkops.ui.widgets.welcome import _build_logo_text
 
     dark = _build_logo_text(beam_x=-100, user_display="", panel_bg="#11121D")
@@ -415,9 +436,6 @@ def test_wordmark_switches_to_dark_ink_on_light_backgrounds():
 @pytest.mark.asyncio
 async def test_inprocess_server_restart_silently_refreshes_expired_jwt(tmp_path, monkeypatch):
     """When config.api_key holds an expired temporary JWT on restart, astart() silently refreshes using stored.api_key."""
-    import json
-    import time
-    from types import SimpleNamespace
     import jwt
 
     from talkops.cli.server_manager import InProcessServerHandle
@@ -505,4 +523,90 @@ async def test_inprocess_server_restart_silently_refreshes_expired_jwt(tmp_path,
         stop_background_token_refresh_task()
         await handle.astop()
         clear_remote_client_context()
+
+
+@pytest.mark.asyncio
+async def test_message_list_clear_preserves_welcome_banner():
+    """Verify MessageList.clear() removes conversation messages while keeping WelcomeBanner."""
+    from talkops.ui.widgets.messages import MessageList, SystemMessage, UserMessage
+
+    class _ClearHarnessApp(App[None]):
+        def get_theme_variable_defaults(self) -> dict[str, str]:
+            from talkops.ui.theme import get_css_variable_defaults, get_theme_colors
+
+            return get_css_variable_defaults(colors=get_theme_colors(self))
+
+        def compose(self) -> ComposeResult:
+            with MessageList(id="messages"):
+                yield WelcomeBanner(id="welcome")
+
+    app = _ClearHarnessApp()
+    async with app.run_test(size=(120, 24)) as pilot:
+        messages = app.query_one("#messages", MessageList)
+        messages.add_user_message("hello")
+        messages.add_system_message("world")
+        await pilot.pause()
+        assert len(messages.children) == 3
+
+        messages.clear()
+        await pilot.pause()
+
+        assert len(messages.children) == 1
+        assert isinstance(messages.children[0], WelcomeBanner)
+        assert not list(messages.query(UserMessage))
+        assert not list(messages.query(SystemMessage))
+
+
+@pytest.mark.asyncio
+async def test_new_session_commands_preserve_welcome_banner_and_notify():
+    """Verify /clear and resume_thread(is_new=True) keep a clean WelcomeBanner and show a toast."""
+    from talkops.ui.app import TalkOpsApp
+    from talkops.ui.widgets.messages import (
+        CommandOutputMessage,
+        MessageList,
+        SystemMessage,
+        UserMessage,
+    )
+
+    app = TalkOpsApp(check_workspace_trust=False)
+    notifications: list[str] = []
+    orig_notify = app.notify
+
+    def _capture_notify(message: str, *args: Any, **kwargs: Any) -> None:
+        notifications.append(str(message))
+        orig_notify(message, *args, **kwargs)
+
+    app.notify = _capture_notify  # type: ignore[method-assign]
+
+    async with app.run_test(size=(120, 24)) as pilot:
+        await pilot.pause()
+        messages = app.query_one("#messages", MessageList)
+        await app._mount_message(UserMessage("first question"))
+        await pilot.pause()
+        assert any(isinstance(c, UserMessage) for c in messages.children)
+
+        # 1. Initiate new session via /clear
+        await app._handle_command("/clear")
+        await pilot.pause()
+
+        assert list(messages.query(WelcomeBanner))
+        assert not list(messages.query(UserMessage))
+        assert not list(messages.query(CommandOutputMessage))
+        assert any("Started new thread" in n for n in notifications)
+
+        # 2. Add another message and initiate new session via resume_thread(is_new=True)
+        notifications.clear()
+        await app._mount_message(UserMessage("second question"))
+        await pilot.pause()
+
+        await app.resume_thread("abcdef12-3456-7890-abcd-ef1234567890", is_new=True)
+        await pilot.pause()
+
+        assert list(messages.query(WelcomeBanner))
+        assert not list(messages.query(UserMessage))
+        assert not [
+            m for m in messages.query(SystemMessage) if "Created new thread" in str(getattr(m, "_content", ""))
+        ]
+        assert any("Started new thread (abcdef12)" in n for n in notifications)
+
 

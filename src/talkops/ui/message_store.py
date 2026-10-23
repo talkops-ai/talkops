@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """In-memory message store for the TalkOps TUI.
 
 Keeps an ordered, thread-isolated history of all conversation messages so they
@@ -61,6 +75,7 @@ class MessageStore:
     """
 
     def __init__(self) -> None:
+        """Initialize MessageStore."""
         self._threads: dict[str, list[MessageData]] = {}
 
     def append(
@@ -149,4 +164,5 @@ class MessageStore:
                 )
 
     def __len__(self) -> int:
+        """Return the number of elements."""
         return sum(len(msgs) for msgs in self._threads.values())

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for deterministic benchmark scorers and statistical rigor engine (Phase 3)."""
 
 from __future__ import annotations
@@ -27,8 +41,10 @@ from talkops.benchmarks.stats import (
 
 
 class TestSREGymLCSScorer:
+    """Test suite or helper class for test sre gym lcs scorer."""
     def test_pass_at_exact_threshold_7_over_9(self) -> None:
         # (1.0 + 1.0 + 1/3) / 3 = 7/9
+        """Verify pass at exact threshold 7 over 9."""
         res = score_sregym_lcs(localization=1.0, characterization=1.0, scope=1.0 / 3.0, mitigated=True)
         assert math.isclose(res.composite_score, SREGYM_LCS_PASS_THRESHOLD, rel_tol=1e-9)
         assert res.passed is True
@@ -38,6 +54,7 @@ class TestSREGymLCSScorer:
         assert d["end_to_end_mitigated"] is True
 
     def test_fail_below_7_over_9(self) -> None:
+        """Verify fail below 7 over 9."""
         res = score_sregym_lcs(localization=1.0, characterization=0.5, scope=0.5, mitigated=True)
         # 2.0 / 3 = 6/9 < 7/9
         assert res.passed is False
@@ -45,6 +62,7 @@ class TestSREGymLCSScorer:
         assert math.isclose(res.composite_score, 2.0 / 3.0)
 
     def test_string_and_set_inference_plus_clamping(self) -> None:
+        """Verify string and set inference plus clamping."""
         res = score_sregym_lcs(
             predicted_component="checkout-service",
             true_component="checkout-service",
@@ -66,10 +84,12 @@ class TestSREGymLCSScorer:
 
 
 class TestSREMarathonScorer:
+    """Test suite or helper class for test sre marathon scorer."""
     def test_strict_lifecycle_ordering_gates_downstream_credit(self) -> None:
         # Fault 1: a=1, b=1, c=1 -> raw=3
         # Fault 2: a=0, b=1, c=1 -> raw=0 (lucky fix without detection gets zero credit!)
         # Fault 3: a=1, b=0, c=1 -> raw=1 (mitigation without localization gets zero c credit)
+        """Verify strict lifecycle ordering gates downstream credit."""
         outcomes = [
             MarathonFaultOutcome(fault_id="f1", correlated=True, localized=True, repaired=True),
             MarathonFaultOutcome(fault_id="f2", correlated=False, localized=True, repaired=True),
@@ -82,6 +102,7 @@ class TestSREMarathonScorer:
         assert outcomes[2].ordered_points == 1.0
 
     def test_safety_penalties_and_service_degradation_integral(self) -> None:
+        """Verify safety penalties and service degradation integral."""
         outcomes = [
             MarathonFaultOutcome(
                 fault_id="f1",
@@ -112,10 +133,13 @@ class TestSREMarathonScorer:
 
 
 class TestMultimodalRCAScorer:
+    """Test suite or helper class for test multimodal rca scorer."""
     def test_28_fault_taxonomy_completeness(self) -> None:
+        """Verify 28 fault taxonomy completeness."""
         assert len(CANONICAL_28_FAULT_TAXONOMY) == 28
 
     def test_umodel_topological_distance_decay(self) -> None:
+        """Verify umodel topological distance decay."""
         graph = {
             "frontend": ["checkout"],
             "checkout": ["payment", "redis"],
@@ -127,6 +151,7 @@ class TestMultimodalRCAScorer:
         assert score_umodel_localization("frontend", "postgres", topology_graph=graph) == (0.0, 3)
 
     def test_numeric_checkpoint_verification(self) -> None:
+        """Verify numeric checkpoint verification."""
         cp = NumericCheckpoint(
             metric_name="cpu_throttling_pct",
             comparator="approx",
@@ -140,6 +165,7 @@ class TestMultimodalRCAScorer:
         assert verify_numeric_checkpoint(cp, text_hallucinated) is False
 
     def test_composite_multimodal_rca_score(self) -> None:
+        """Verify composite multimodal rca score."""
         graph = {"checkout": ["payment"]}
         checkpoints = [
             NumericCheckpoint("p99_latency", "approx", 1420.0, unit="ms", tolerance=0.05),
@@ -167,7 +193,9 @@ class TestMultimodalRCAScorer:
 
 
 class TestOpenRCAPAVEScorerAndBradleyTerry:
+    """Test suite or helper class for test open rcapave scorer and bradley terry."""
     def test_openrca_pave_exposes_naming_vs_proving_delta(self) -> None:
+        """Verify openrca pave exposes naming vs proving delta."""
         cases = [
             # Case 1: Named right service by luck, but failed to prove the causal path
             {
@@ -191,6 +219,7 @@ class TestOpenRCAPAVEScorerAndBradleyTerry:
         assert res["naming_vs_proving_delta_pct"] == 50.0
 
     def test_bradley_terry_elo_ranking_order(self) -> None:
+        """Verify bradley terry elo ranking order."""
         matches = [
             ("talkops", "claude_code", 1.0),
             ("talkops", "claude_code", 1.0),
@@ -204,8 +233,10 @@ class TestOpenRCAPAVEScorerAndBradleyTerry:
 
 
 class TestStatisticalRigorEngine:
+    """Test suite or helper class for test statistical rigor engine."""
     def test_mcnemar_exact_test_significant_and_tied(self) -> None:
         # 12 tasks where TalkOps passes and baseline fails, 1 where baseline passes and TalkOps fails
+        """Verify mcnemar exact test significant and tied."""
         ops = [True] * 10 + [True] * 12 + [False] * 1 + [False] * 5
         base = [True] * 10 + [False] * 12 + [True] * 1 + [False] * 5
         res = mcnemar_exact_test(ops, base)
@@ -224,6 +255,7 @@ class TestStatisticalRigorEngine:
         assert tied.p_value == 1.0
 
     def test_benjamini_hochberg_fdr_correction(self) -> None:
+        """Verify benjamini hochberg fdr correction."""
         raw_ps = [0.001, 0.012, 0.04, 0.20]
         labels = ["SREGym", "DevOps-Gym", "Terminal-Bench", "MULTI-Bench"]
         entries = benjamini_hochberg_correction(raw_ps, alpha=0.05, labels=labels)
@@ -234,6 +266,7 @@ class TestStatisticalRigorEngine:
         assert entries[3].significant is False
 
     def test_paired_bootstrap_ci_detects_cost_reduction(self) -> None:
+        """Verify paired bootstrap ci detects cost reduction."""
         ops_cost = [0.10, 0.12, 0.11, 0.09, 0.13, 0.10, 0.11, 0.12, 0.10, 0.09]
         base_cost = [0.25, 0.28, 0.24, 0.22, 0.30, 0.26, 0.25, 0.27, 0.24, 0.23]
         res = paired_bootstrap_ci(ops_cost, base_cost, n_resamples=2000, seed=42)
@@ -242,6 +275,7 @@ class TestStatisticalRigorEngine:
         assert res.statistically_nonzero is True
 
     def test_compute_pareto_frontier(self) -> None:
+        """Verify compute pareto frontier."""
         configs = [
             {"name": "talkops_hybrid", "resolution_rate": 0.72, "cost_usd": 0.42, "mttr_seconds": 95.0},
             {"name": "opus_homogeneous", "resolution_rate": 0.74, "cost_usd": 1.15, "mttr_seconds": 110.0},

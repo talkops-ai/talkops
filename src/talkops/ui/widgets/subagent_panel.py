@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Live panel showing subagents fanned out from within `js_eval` or `task` calls.
 
 When the agent writes code that calls the top-level `task()` global or spawns subagents,
@@ -8,7 +22,6 @@ a docked, live-updating fan-out panel.
 from __future__ import annotations
 
 import contextlib
-from talkops.utils.logger import get_logger
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -22,6 +35,7 @@ from textual.widgets import Static
 from talkops.config.settings import get_glyphs
 from talkops.ui.theme import get_theme_colors
 from talkops.ui.widgets.loading import Spinner
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from textual import events
@@ -88,6 +102,7 @@ class _SubagentRecord:
     current_action: str | None = None
 
     def elapsed_seconds(self) -> float:
+        """Execute elapsed seconds on _SubagentRecord."""
         if self.duration_ms is not None:
             return self.duration_ms / 1000
         return max(0.0, time.monotonic() - self.started_monotonic)
@@ -104,6 +119,7 @@ class _Phase:
     aliases: dict[str, str] = field(default_factory=dict)
 
     def add(self, record: _SubagentRecord) -> None:
+        """Add phase."""
         if record.id not in self.records:
             self.order.append(record.id)
         self.records[record.id] = record
@@ -121,6 +137,7 @@ class _Phase:
         self.aliases[old_id] = new_id
 
     def find_record(self, sub_id: str) -> _SubagentRecord | None:
+        """Find and return record."""
         rec = self.records.get(sub_id)
         if rec is not None:
             return rec
@@ -130,23 +147,29 @@ class _Phase:
         return None
 
     def counts(self) -> tuple[int, int]:
+        """Execute counts on _Phase."""
         total = len(self.order)
         done = sum(1 for sub_id in self.order if (rec := self.records.get(sub_id)) and rec.status != "running")
         return done, total
 
     def any_running(self) -> bool:
+        """Execute any running on _Phase."""
         return any(r.status == "running" for r in self.records.values())
 
     def any_error(self) -> bool:
+        """Execute any error on _Phase."""
         return any(r.status == "error" for r in self.records.values())
 
     def any_cancelled(self) -> bool:
+        """Execute any cancelled on _Phase."""
         return any(r.status == "cancelled" for r in self.records.values())
 
     def all_terminal(self) -> bool:
+        """Execute all terminal on _Phase."""
         return bool(self.records) and not self.any_running()
 
     def elapsed_seconds(self) -> float:
+        """Execute elapsed seconds on _Phase."""
         if not self.records:
             return 0.0
         earliest = min(r.started_monotonic for r in self.records.values())
@@ -232,6 +255,7 @@ class SubagentPanel(Vertical):
     expanded: reactive[bool] = reactive(default=True, init=False)
 
     def __init__(self, **kwargs: Any) -> None:
+        """Initialize SubagentPanel."""
         super().__init__(**kwargs)
         self._phases: dict[str, _Phase] = {}
         self._phase_order: list[str] = []
@@ -247,10 +271,12 @@ class SubagentPanel(Vertical):
         self._paused = False
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         if not self._paused and (self._dirty or self._any_running()):
             self._ensure_timer()
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield Static("", id="subagent-header", markup=False)
         with Horizontal(id="subagent-body"):
             with VerticalScroll(id="subagent-phases-scroll"):
@@ -534,6 +560,7 @@ class SubagentPanel(Vertical):
         return any(phase.any_running() for phase in self._phases.values())
 
     def on_click(self, event: events.Click) -> None:
+        """Handle mouse click events."""
         if self._header_clicked(event):
             self.toggle()
             event.stop()
@@ -564,6 +591,7 @@ class SubagentPanel(Vertical):
         return offset.y - 1
 
     def on_key(self, event: events.Key) -> None:
+        """Handle keyboard press events."""
         if len(self._phase_order) <= 1:
             return
         if event.key in {"down", "j"}:
@@ -587,6 +615,7 @@ class SubagentPanel(Vertical):
         self._refresh()
 
     def prepare_turn(self, *, model_label: str | None = None) -> None:
+        """Execute prepare turn on SubagentPanel."""
         self._model_label = (
             _sanitize(model_label, max_chars=_MODEL_COL) if model_label else None
         )
@@ -596,6 +625,7 @@ class SubagentPanel(Vertical):
             self._pending_reset = True
 
     def reset(self, *, model_label: str | None = None, **_kwargs: Any) -> None:
+        """Reset subagent panel."""
         self._clear()
         self._model_label = (
             _sanitize(model_label, max_chars=_MODEL_COL) if model_label else None
@@ -614,6 +644,7 @@ class SubagentPanel(Vertical):
         self.remove_class("-visible")
 
     def finalize_running(self) -> None:
+        """Execute finalize running on SubagentPanel."""
         changed = False
         for phase in self._phases.values():
             for record in phase.records.values():
@@ -631,9 +662,11 @@ class SubagentPanel(Vertical):
         self.add_class("-visible")
 
     def toggle(self) -> None:
+        """Toggle subagent panel."""
         self.expanded = not self.expanded
 
     def watch_expanded(self, expanded: bool) -> None:
+        """React to changes in the expanded reactive attribute."""
         try:
             body = self.query_one("#subagent-body")
         except (NoMatches, TooManyMatches):
@@ -647,6 +680,7 @@ class SubagentPanel(Vertical):
             self.call_after_refresh(self._refresh)
 
     def on_resize(self, _event: events.Resize) -> None:
+        """Handle terminal or container resize events."""
         self._refresh()
 
     def _mark_dirty(self) -> None:
@@ -965,6 +999,7 @@ class SubagentColumn(Vertical):
     """Backwards-compatibility column class."""
 
     def __init__(self, agent_name: str, task: str) -> None:
+        """Initialize SubagentColumn."""
         super().__init__()
         self.agent_name = agent_name
         self.task_desc = task

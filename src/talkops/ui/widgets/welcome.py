@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Welcome banner & first-run onboarding widget for TalkOps TUI.
 
 Displays a two-panel "launch console" card:
@@ -130,12 +144,12 @@ def _gradient(stops: Sequence[str], t: float) -> str:
 #   - Speech bubble outline (#1F7ACB)
 #   - Intertwined infinity wave (#1F7ACB blue + #7AC143 green)
 #   - Wordmark "TalkOps.ai" (#FFFFFF) + version + tagline "DevOps on Demand" (#F3F4F6)
-#   - Authenticated Control Plane user & tier in Antigravity CLI style
+#   - Authenticated Control Plane user identity & license tier badge
 
 _LOGO_BLUE = "#1F7ACB"
 _LOGO_GREEN = "#7AC143"
 _LOGO_WORDMARK = "#FFFFFF"
-_LOGO_VERSION = "#7AA2F7"
+_LOGO_VERSION = "#22D3EE"
 _LOGO_TAGLINE = "#94A3B8"
 _LOGO_USER = "#CBD5E1"
 
@@ -262,7 +276,7 @@ _WORDMARK_COLS = len(_WORDMARK_SUBPIXELS[0]) // 2  # 33 cells
 # small + wide + muted contrasts with big + bold + bright.
 _TAGLINE_TEXT = "DevOps on Demand"
 _TAGLINE_LOCKUP = " ".join(_TAGLINE_TEXT.upper())
-_LOGO_RULE = "#334155"
+_LOGO_RULE = "#1B2436"
 
 _LOGO_WIDTH = 56
 _MAX_USER_DISPLAY_CHARS = 36
@@ -284,7 +298,7 @@ def _format_tier_label(raw_tier: str) -> str:
 
 
 def _format_user_display(user_identity: str, user_tier: str = "") -> str:
-    """Format ``email (Tier)`` in Antigravity CLI style, fitting within banner width."""
+    """Format ``email (Tier)`` for the welcome banner, fitting within banner width."""
     identity = (user_identity or "").strip()
     if not identity:
         return ""
@@ -364,10 +378,10 @@ def _beam_override_color(dist: int, status: str) -> str | None:
 
 def _beam_accent(status: str) -> str:
     if status == "connected":
-        return "#60A5FA"
+        return "#34D399"
     if status in ("starting", "connecting", "warning", "degraded"):
-        return "#FDE047"
-    return "#FCA5A5"
+        return "#FBBF24"
+    return "#FB7185"
 
 
 def _wordmark_beam_color(dist: int, status: str, base: str) -> str | None:
@@ -442,7 +456,7 @@ def _build_logo_text(
     status: str = "connected",
     *,
     user_display: str | None = None,
-    panel_bg: str = "#11121D",
+    panel_bg: str = "#07090E",
     status_label: str | None = None,
     status_color: str | None = None,
     show_icon: bool = True,
@@ -482,7 +496,12 @@ def _build_logo_text(
     ver_str = f"v{ver_clean}" if ver_clean else ""
     dot = _dot()
     sep = _sep()
-    wordmark_color = "#0F172A" if _is_light_background(panel_bg) else _LOGO_WORDMARK
+    is_light = _is_light_background(panel_bg)
+    wordmark_color = "#0F172A" if is_light else _LOGO_WORDMARK
+    tagline_color = "#475569" if is_light else _LOGO_TAGLINE
+    rule_color = "#CBD5E1" if is_light else _LOGO_RULE
+    user_color = "#334155" if is_light else _LOGO_USER
+    version_color = "#0369A1" if is_light else _LOGO_VERSION
     stack_x = _ICON_COLS + 2 if show_icon else 0  # beam column where the stack starts
 
     # ── Right-hand stack: one list of (text, style) segments per row ──
@@ -490,21 +509,21 @@ def _build_logo_text(
     tagline_pad = " " * max((_WORDMARK_COLS - len(_TAGLINE_LOCKUP)) // 2, 0)
     if ascii_mode:
         rows[1] = [(_WORDMARK_TEXT, f"bold {wordmark_color}")]
-        rows[3] = [(_TAGLINE_TEXT, _LOGO_TAGLINE)]
-        rows[4] = [("-" * _WORDMARK_COLS, _LOGO_RULE)]
+        rows[3] = [(_TAGLINE_TEXT, tagline_color)]
+        rows[4] = [("-" * _WORDMARK_COLS, rule_color)]
     else:
-        rows[3] = [(tagline_pad + _TAGLINE_LOCKUP, _LOGO_TAGLINE)]
-        rows[4] = [("─" * _WORDMARK_COLS, _LOGO_RULE)]
+        rows[3] = [(tagline_pad + _TAGLINE_LOCKUP, tagline_color)]
+        rows[4] = [("─" * _WORDMARK_COLS, rule_color)]
 
     session_rows: list[list[tuple[str, str]]] = []
     if resolved_user:
-        session_rows.append([(resolved_user, _LOGO_USER)])
+        session_rows.append([(resolved_user, user_color)])
     health: list[tuple[str, str]] = []
     if ver_str:
-        health.append((ver_str, _LOGO_VERSION))
+        health.append((ver_str, version_color))
     if status_label:
         if health:
-            health.append((f"  {sep}  ", _LOGO_RULE))
+            health.append((f"  {sep}  ", rule_color))
         health.append((f"{dot} {status_label}", f"bold {status_color}"))
     if health:
         session_rows.append(health)
@@ -781,10 +800,12 @@ def _build_info_text(
     out = Text(no_wrap=True, overflow="ellipsis")
 
     def header(title: str) -> None:
+        """Execute header."""
         out.append(title, style=header_style)
         out.append("\n")
 
     def row(health: str | None, label: str, value: Text) -> None:
+        """Execute row."""
         if health is None:
             out.append("  ")
         else:
@@ -843,6 +864,7 @@ def _build_info_text(
     list_w = max(value_w - _COUNT_W, 8)
 
     def count_cell(n: int) -> Text:
+        """Count cell."""
         return Text(f"{n:<{_COUNT_W}}", style=f"bold {value_style}")
 
     skills_val = count_cell(len(info.skills))
@@ -931,6 +953,7 @@ class _LeftPanel(Widget):
     def __init__(
         self, *, user_display: str | None = None, show_icon: bool = True, **kwargs: Any
     ) -> None:
+        """Initialize _LeftPanel."""
         super().__init__(**kwargs)
         self._cycle_count = 0
         self._anim_timer: Timer | None = None
@@ -1030,10 +1053,12 @@ class _InfoPanel(Widget):
     status: reactive[str] = reactive("starting")
 
     def __init__(self, info: _BannerInfo, **kwargs: Any) -> None:
+        """Initialize _InfoPanel."""
         super().__init__(**kwargs)
         self._info = info
 
     def render(self) -> Text:
+        """Render the widget content."""
         width = self.content_size.width or _DEFAULT_INFO_WIDTH
         return _build_info_text(
             self._info,
@@ -1043,6 +1068,7 @@ class _InfoPanel(Widget):
         )
 
     def get_content_height(self, container: Any, viewport: Any, width: int) -> int:
+        """Calculate and return the preferred content height."""
         return len(
             _build_info_text(
                 self._info,
@@ -1053,6 +1079,7 @@ class _InfoPanel(Widget):
         )
 
     def watch_status(self, _old: str, _new: str) -> None:
+        """React to changes in the status reactive attribute."""
         self.refresh()
 
     async def action_show_skills_popup(self) -> None:
@@ -1153,6 +1180,7 @@ class WelcomeBanner(Widget):
         user_tier: str = "",
         **kwargs: Any,
     ) -> None:
+        """Initialize WelcomeBanner."""
         super().__init__(**kwargs)
         self.border_title = None
         self._info = _BannerInfo(
@@ -1186,6 +1214,7 @@ class WelcomeBanner(Widget):
         self._info.subagents = list(value)
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         self._info.skills = _collect_skills()
         self._info.subagents = _collect_subagents()
         self._info.project = _project_display()
@@ -1243,6 +1272,12 @@ class WelcomeBanner(Widget):
     def update_mcp(self, servers: Sequence[MCPServerInfo] | None) -> None:
         """Reflect probed MCP servers. ``None`` keeps the 'discovering' state."""
         self._info.mcp_servers = list(servers) if servers is not None else None
+        self._refresh_info()
+
+    def refresh_capabilities(self) -> None:
+        """Re-discover skills and subagents and refresh the info panel."""
+        self._info.skills = _collect_skills()
+        self._info.subagents = _collect_subagents()
         self._refresh_info()
 
     def update_user(self, user: str = "", tier: str = "") -> None:

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Thread history, fork/resume, compaction, and selector controller extracted from `TalkOpsApp`."""
 
 from __future__ import annotations
@@ -7,6 +21,8 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages.utils import convert_to_messages
 from textual.css.query import NoMatches
 
 from talkops.ui.widgets.messages import (
@@ -68,11 +84,11 @@ class ThreadController:
     """Manages thread history rehydration, resume, fork, compaction, and selector modal."""
 
     def __init__(self, app: TalkOpsApp) -> None:
+        """Initialize ThreadController."""
         self._app = app
 
     async def load_thread_history(self, thread_id: str) -> None:
         """Fetch and mount stored message history for a thread."""
-        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
         from talkops.middleware.goal_state_notice import is_internal_message
 
         app = self._app
@@ -85,7 +101,6 @@ class ThreadController:
             return
 
         if any(isinstance(m, dict) for m in raw_messages):
-            from langchain_core.messages.utils import convert_to_messages
             raw_messages = convert_to_messages(raw_messages)
 
         pending_tools: dict[str, dict[str, Any]] = {}
@@ -481,7 +496,20 @@ class ThreadController:
     async def resume_thread(self, thread_id: str, *, is_new: bool = False) -> None:
         """Resume conversation from specified checkpoint thread ID and restore history."""
         app = self._app
+        old_tid = getattr(app, "_agent_thread_id", None)
         app._agent_thread_id = thread_id
+        try:
+            from talkops.state.session import (
+                acquire_thread_presence,
+                release_thread_presence,
+            )
+
+            if old_tid and old_tid != thread_id:
+                release_thread_presence(old_tid)
+            if thread_id:
+                acquire_thread_presence(thread_id)
+        except Exception:
+            pass
         bind_logging_to_thread(thread_id)
         session_state = getattr(app, "_session_state", None)
         if session_state:
@@ -496,21 +524,22 @@ class ThreadController:
             messages.clear()
         except NoMatches:
             pass
+        if hasattr(app, "_ensure_welcome_banner"):
+            app._ensure_welcome_banner()
 
         if is_new:
             app._restore_goal_rubric_state({})
             app._reset_thread_usage(0.0, 0)
+            app.notify(f"Started new thread ({thread_id[:8]})", severity="information")
         else:
             await app._load_thread_history(thread_id)
             if hasattr(app, "_sync_goal_state_from_checkpoint"):
                 await app._sync_goal_state_from_checkpoint(force=True)
             if hasattr(app, "_sync_agent_session_state_from_checkpoint"):
                 await app._sync_agent_session_state_from_checkpoint()
-
-        label = "Created new thread" if is_new else "Resumed thread"
-        await app._mount_message(
-            SystemMessage(f"{label}: `{thread_id}`")
-        )
+            await app._mount_message(
+                SystemMessage(f"Resumed thread: `{thread_id}`")
+            )
 
     async def fork_thread(self, *, source_thread_id: str | None = None) -> tuple[str, str]:
         """Fork the active conversation thread into a new branch and switch to it in-place."""
@@ -542,6 +571,18 @@ class ThreadController:
 
         app._previous_thread_id = prev_id
         app._agent_thread_id = new_thread_id
+        try:
+            from talkops.state.session import (
+                acquire_thread_presence,
+                release_thread_presence,
+            )
+
+            if prev_id and prev_id != new_thread_id:
+                release_thread_presence(prev_id)
+            if new_thread_id:
+                acquire_thread_presence(new_thread_id)
+        except Exception:
+            pass
         bind_logging_to_thread(new_thread_id)
 
         session_state = getattr(app, "_session_state", None)

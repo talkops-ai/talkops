@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Rich-rendered help screens for TalkOps CLI commands and subcommands."""
 
 from __future__ import annotations
@@ -90,6 +104,7 @@ def show_help() -> None:
 
 
 def show_agents_help() -> None:
+    """Display agents help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops agents <command> [OPTIONS]", style=PRIMARY)
     console.print()
@@ -104,6 +119,7 @@ def show_agents_help() -> None:
 
 
 def show_list_help() -> None:
+    """Display list help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops agents list [OPTIONS]", style=PRIMARY)
     console.print()
@@ -116,6 +132,7 @@ def show_list_help() -> None:
 
 
 def show_reset_help() -> None:
+    """Display reset help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops agents reset --agent NAME [OPTIONS]", style=PRIMARY)
     console.print()
@@ -131,6 +148,7 @@ def show_reset_help() -> None:
 
 
 def show_skills_help() -> None:
+    """Display skills help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops skills <command> [OPTIONS]", style=PRIMARY)
     console.print()
@@ -148,6 +166,7 @@ def show_skills_help() -> None:
 
 
 def show_skills_list_help() -> None:
+    """Display skills list help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops skills list [OPTIONS]", style=PRIMARY)
     console.print()
@@ -162,6 +181,7 @@ def show_skills_list_help() -> None:
 
 
 def show_skills_create_help() -> None:
+    """Display skills create help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops skills create NAME [OPTIONS]", style=PRIMARY)
     console.print()
@@ -176,6 +196,7 @@ def show_skills_create_help() -> None:
 
 
 def show_skills_info_help() -> None:
+    """Display skills info help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops skills info NAME [OPTIONS]", style=PRIMARY)
     console.print()
@@ -190,6 +211,7 @@ def show_skills_info_help() -> None:
 
 
 def show_skills_delete_help() -> None:
+    """Display skills delete help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops skills delete NAME [OPTIONS]", style=PRIMARY)
     console.print()
@@ -206,6 +228,7 @@ def show_skills_delete_help() -> None:
 
 
 def show_skills_trust_help() -> None:
+    """Display skills trust help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops skills trust <command> [OPTIONS]", style=PRIMARY)
     console.print()
@@ -223,6 +246,7 @@ def show_skills_trust_help() -> None:
 
 
 def show_plugins_help() -> None:
+    """Display plugins help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops plugin <command> [OPTIONS]", style=PRIMARY)
     console.print()
@@ -241,6 +265,7 @@ def show_plugins_help() -> None:
 
 
 def show_config_help() -> None:
+    """Display config help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops config [get <key>|set <key> <value>|path] [OPTIONS]", style=PRIMARY)
     console.print()
@@ -259,6 +284,7 @@ def show_config_help() -> None:
 
 
 def show_auth_help() -> None:
+    """Display auth help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops auth <command> [OPTIONS]", style=PRIMARY)
     console.print()
@@ -279,6 +305,7 @@ def show_auth_help() -> None:
 
 
 def show_threads_help() -> None:
+    """Display threads help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops threads <command> [OPTIONS]", style=PRIMARY)
     console.print()
@@ -295,6 +322,7 @@ def show_threads_help() -> None:
 
 
 def show_threads_list_help() -> None:
+    """Display threads list help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops threads list [OPTIONS]", style=PRIMARY)
     console.print()
@@ -312,6 +340,7 @@ def show_threads_list_help() -> None:
 
 
 def show_threads_delete_help() -> None:
+    """Display threads delete help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops threads delete <thread_id> [OPTIONS]", style=PRIMARY)
     console.print()
@@ -323,6 +352,7 @@ def show_threads_delete_help() -> None:
 
 
 def show_doctor_help() -> None:
+    """Display doctor help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops doctor [OPTIONS]", style=PRIMARY)
     console.print()
@@ -335,6 +365,7 @@ def show_doctor_help() -> None:
 
 
 def show_tools_help() -> None:
+    """Display tools help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops tools <command> [OPTIONS]", style=PRIMARY)
     console.print()
@@ -351,6 +382,7 @@ def show_tools_help() -> None:
 
 
 def show_tools_list_help() -> None:
+    """Display tools list help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops tools list [OPTIONS]", style=PRIMARY)
     console.print()
@@ -363,6 +395,7 @@ def show_tools_list_help() -> None:
 
 
 def show_tools_install_help() -> None:
+    """Display tools install help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops tools install [OPTIONS]", style=PRIMARY)
     console.print()
@@ -375,6 +408,7 @@ def show_tools_install_help() -> None:
 
 
 def show_mcp_help() -> None:
+    """Display mcp help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops mcp <command> [OPTIONS]", style=PRIMARY)
     console.print()
@@ -392,6 +426,7 @@ def show_mcp_help() -> None:
 
 
 def show_mcp_config_help() -> None:
+    """Display mcp config help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops mcp config [OPTIONS]", style=PRIMARY)
     console.print()
@@ -404,6 +439,7 @@ def show_mcp_config_help() -> None:
 
 
 def show_mcp_login_help() -> None:
+    """Display mcp login help."""
     console.print()
     console.print("[bold]Usage:[/bold] talkops mcp login <server> [OPTIONS]", style=PRIMARY)
     console.print()

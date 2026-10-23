@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Plugin discovery, install, and enablement helpers for TalkOps."""
 
 from __future__ import annotations
@@ -8,8 +22,6 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from talkops.utils.logger import get_logger
-
 from talkops.config.plugins import (
     get_default_marketplace_names,
     get_primary_default_marketplace_name,
@@ -17,6 +29,7 @@ from talkops.config.plugins import (
 from talkops.plugins.manifest import (
     PluginManifestError,
     build_inventory,
+    find_manifest_path,
     load_manifest,
 )
 from talkops.plugins.marketplace import (
@@ -40,24 +53,29 @@ from talkops.plugins.models import (
     split_plugin_id,
 )
 from talkops.plugins.store import (
+    PluginNotFoundError,
     cache_and_register_plugin,
     ensure_marketplace_cache_dir,
     ensure_plugin_data_dir,
     get_primary_install_entry,
+    load_all_disabled_plugin_ids,
     load_all_enabled_plugin_ids,
     load_enabled_plugin_ids,
-    load_local_enabled_plugin_ids,
-    load_project_enabled_plugin_ids,
-    PluginNotFoundError,
+    load_installed_plugin_entries,
     load_installed_plugins,
+    load_local_enabled_plugin_ids,
     load_marketplace_records,
+    load_project_enabled_plugin_ids,
     plugin_data_dir,
     plugin_mutation_lock,
     remove_marketplace_record,
     save_marketplace_record,
     set_plugin_enabled_for_scope,
+)
+from talkops.plugins.store import (
     uninstall_plugin as uninstall_plugin_record,
 )
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -215,6 +233,15 @@ def _require_installed_plugin(
     canonical_id = _resolve_installed_plugin_id(plugin_id)
     if canonical_id in load_installed_plugins(strict=True, project_root=project_root):
         return
+    if isinstance(project_root, Path):
+        bare_name = canonical_id.partition("@")[0]
+        for cand in (
+            project_root / ".talkops" / "plugins" / bare_name,
+            project_root / ".agents" / "plugins" / bare_name,
+            project_root / "plugins" / bare_name,
+        ):
+            if cand.is_dir():
+                return
     records = load_marketplace_records(project_root=project_root)
     for mp_name, rec in records.items():
         if getattr(rec, "is_project", False) and canonical_id.endswith(f"@{mp_name}"):
@@ -238,16 +265,43 @@ def set_installed_plugin_enabled(
     project_root: Path | None = None,
 ) -> None:
     """Set the enabled state of an installed plugin at the given scope."""
+    from talkops.config.settings import settings
+
     canonical_id = _resolve_installed_plugin_id(plugin_id)
-    if scope != "project":
-        _require_installed_plugin(canonical_id, project_root=project_root)
+    effective_root = (
+        project_root if isinstance(project_root, Path) else settings.effective_project_root
+    )
+    target_scope: InstallScope = scope
+    target_root: Path | None = (
+        project_root if isinstance(project_root, Path) else effective_root
+    )
+
+    if scope in {"user", "global"} and isinstance(effective_root, Path):
+        entries = load_installed_plugin_entries().get(canonical_id, [])
+        has_user_install = any(e.scope in {"user", "global"} for e in entries)
+        if not has_user_install:
+            if canonical_id in load_local_enabled_plugin_ids(effective_root) or any(
+                e.scope == "local" and e.project_path == str(effective_root)
+                for e in entries
+            ):
+                target_scope = "local"
+                target_root = effective_root
+            elif canonical_id in load_project_enabled_plugin_ids(effective_root) or any(
+                e.scope == "project" and e.project_path == str(effective_root)
+                for e in entries
+            ):
+                target_scope = "project"
+                target_root = effective_root
+
+    if target_scope != "project":
+        _require_installed_plugin(canonical_id, project_root=target_root)
     else:
         try:
-            _require_installed_plugin(canonical_id, project_root=project_root)
+            _require_installed_plugin(canonical_id, project_root=target_root)
         except MarketplaceError:
             _resolve_marketplace_and_entry(canonical_id)
     set_plugin_enabled_for_scope(
-        canonical_id, enabled, scope=scope, project_root=project_root
+        canonical_id, enabled, scope=target_scope, project_root=target_root
     )
     if enabled:
         ensure_plugin_data_dir(canonical_id)
@@ -416,36 +470,117 @@ def _plugin_from_install_path(
     return instance, inventory.warnings
 
 
+def _is_likely_plugin_dir(path: Path) -> bool:
+    """Return True if ``path`` contains a plugin manifest or standard plugin components."""
+    if find_manifest_path(path) is not None:
+        return True
+    for marker in ("skills", "agents", "commands", ".mcp.json", "SKILL.md"):
+        try:
+            if (path / marker).exists():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _iter_workspace_plugin_dirs(root: Path) -> list[Path]:
+    """Return ordered workspace-local plugin directories for ``root``."""
+    import json
+
+    discovered: list[Path] = []
+    seen_paths: set[Path] = set()
+
+    for cand_parent in (
+        root / ".talkops" / "plugins",
+        root / ".agents" / "plugins",
+        root / "plugins",
+    ):
+        if not cand_parent.is_dir():
+            continue
+        try:
+            children = sorted(cand_parent.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if not _is_likely_plugin_dir(child):
+                continue
+            try:
+                resolved = child.resolve()
+            except OSError:
+                resolved = child
+            if resolved not in seen_paths:
+                seen_paths.add(resolved)
+                discovered.append(child)
+
+    for dot_dir in (".talkops", ".agents"):
+        manifest_file = root / dot_dir / "plugins.json"
+        if not manifest_file.is_file():
+            continue
+        try:
+            data = json.loads(manifest_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        entries = data.get("entries")
+        if not isinstance(entries, list):
+            continue
+        for raw_entry in entries:
+            if not isinstance(raw_entry, str) or not raw_entry.strip():
+                continue
+            rel = raw_entry.strip()
+            for base in (manifest_file.parent, root):
+                cand = base / rel
+                if cand.is_dir() and _is_likely_plugin_dir(cand):
+                    try:
+                        resolved = cand.resolve()
+                        if not resolved.is_relative_to(root.resolve()):
+                            continue
+                    except OSError:
+                        continue
+                    if resolved not in seen_paths:
+                        seen_paths.add(resolved)
+                        discovered.append(cand)
+                    break
+
+    return discovered
+
+
 def discover_plugins(
     project_root: Path | None = None,
     store: Any = None,
 ) -> PluginDiscoveryResult:
-    """Discover enabled marketplace plugins from their install cache paths.
+    """Discover enabled marketplace and workspace-local plugins.
 
     Uses merged enablement across user + project + local scopes.
     """
     enabled = load_all_enabled_plugin_ids(project_root=project_root)
+    disabled = load_all_disabled_plugin_ids(project_root=project_root)
     plugins: list[PluginInstance] = []
     warnings: list[str] = []
     seen_plugin_ids: set[str] = set()
 
-    # 1. Local filesystem discovery (e.g. project plugins directory)
+    # 1. Local workspace discovery (.talkops/plugins, .agents/plugins, plugins, plugins.json)
     if project_root:
-        proj_plugins = Path(project_root) / "plugins"
-        if proj_plugins.is_dir():
-            for p in sorted(proj_plugins.iterdir()):
-                if p.is_dir() and not p.name.startswith("."):
-                    p_id = f"{p.name}@project"
-                    inst, p_warns = _plugin_from_install_path(
-                        plugin_id=p_id,
-                        root=p,
-                        marketplace_name="project",
-                        fallback_name=p.name,
-                    )
-                    warnings.extend(p_warns)
-                    if inst:
-                        plugins.append(inst)
-                        seen_plugin_ids.add(p_id)
+        root_path = Path(project_root)
+        for p in _iter_workspace_plugin_dirs(root_path):
+            p_id = f"{p.name}@project"
+            if p_id in seen_plugin_ids or p_id in disabled or p.name in disabled:
+                continue
+            inst, p_warns = _plugin_from_install_path(
+                plugin_id=p_id,
+                root=p,
+                marketplace_name="project",
+                fallback_name=p.name,
+            )
+            warnings.extend(p_warns)
+            if inst:
+                if f"{inst.name}@project" in disabled or inst.name in disabled:
+                    continue
+                plugins.append(inst)
+                seen_plugin_ids.add(p_id)
 
     enabled = load_all_enabled_plugin_ids(project_root=project_root)
 

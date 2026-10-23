@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Adapter from discovered plugins to TalkOps slash commands."""
 
 from __future__ import annotations
@@ -28,6 +42,7 @@ class PluginCommandHandler(BaseCommandHandler):
         plugin_id: str,
         aliases: tuple[str, ...] = (),
     ) -> None:
+        """Initialize PluginCommandHandler."""
         self._name = command_name if command_name.startswith("/") else f"/{command_name}"
         self._description = description
         self._instructions = instructions
@@ -36,30 +51,37 @@ class PluginCommandHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return self._name
 
     @property
     def aliases(self) -> tuple[str, ...]:
+        """Return alternative slash command aliases."""
         return self._aliases
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.AUTOMATION
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.READ_ONLY
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     @property
     def description(self) -> str:
+        """Return the human-readable command description."""
         return self._description
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
         # Build prompt message combining plugin command instructions and user arguments
+        """Execute the command handler with the provided command context."""
         user_input = ctx.args.strip()
         combined_prompt = (
             f"### Plugin Command Execution: {self._name} (from {self._plugin_id})\n\n"

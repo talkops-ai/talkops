@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for multimodal media input (clipboard paste, dropped paths, @mentions) and status bar prompt-cache tracking."""
 
 from __future__ import annotations
@@ -47,6 +61,7 @@ _TINY_PNG_BYTES = base64.b64decode(
 
 
 def test_image_and_video_data_to_message_content() -> None:
+    """Verify image and video data to message content."""
     img = ImageData(base64_data="YWJj", format="png", placeholder="[image 1]")
     assert img.to_message_content() == {
         "type": "image_url",
@@ -63,6 +78,7 @@ def test_image_and_video_data_to_message_content() -> None:
 
 
 def test_get_media_from_path_loads_image_and_video(tmp_path: Path) -> None:
+    """Verify get media from path loads image and video."""
     png_file = tmp_path / "screenshot.png"
     png_file.write_bytes(_TINY_PNG_BYTES)
 
@@ -91,6 +107,7 @@ def test_get_media_from_path_loads_image_and_video(tmp_path: Path) -> None:
 
 
 def test_strip_media_placeholders_and_create_multimodal_content() -> None:
+    """Verify strip media placeholders and create multimodal content."""
     raw = "Please inspect [image 1] and [video 1] for errors"
     cleaned = strip_media_placeholders(raw)
     assert "[image 1]" not in cleaned
@@ -112,6 +129,7 @@ def test_strip_media_placeholders_and_create_multimodal_content() -> None:
 
 
 def test_media_tracker_lifecycle_and_sync() -> None:
+    """Verify media tracker lifecycle and sync."""
     tracker = MediaTracker()
     img1 = ImageData(base64_data="a1", format="png", placeholder="")
     img2 = ImageData(base64_data="a2", format="png", placeholder="")
@@ -143,6 +161,7 @@ def test_media_tracker_lifecycle_and_sync() -> None:
 def test_parse_pasted_file_paths_handles_spaces_quotes_and_file_urls(
     tmp_path: Path,
 ) -> None:
+    """Verify parse pasted file paths handles spaces quotes and file urls."""
     f1 = tmp_path / "my image.png"
     f1.write_bytes(_TINY_PNG_BYTES)
     f2 = tmp_path / "second.png"
@@ -171,6 +190,7 @@ def test_parse_pasted_file_paths_handles_spaces_quotes_and_file_urls(
 
 @pytest.mark.asyncio
 async def test_chat_input_paste_clipboard_image_and_attachment_bar() -> None:
+    """Verify chat input paste clipboard image and attachment bar."""
     from talkops.ui.widgets.chat_input import MediaAttachmentBar
 
     app = TalkOpsApp(defer_server_start=True)
@@ -199,7 +219,7 @@ async def test_chat_input_paste_clipboard_image_and_attachment_bar() -> None:
         assert chat_input.value == ""
         assert len(tracker.get_images()) == 1
 
-        # Collapsed Antigravity CLI-style media bar above input
+        # Collapsed media attachment bar above input
         collapsed_text = media_bar.render().plain
         assert "▸ 📎 1 media attached (clipboard, 134 KB, image/png)" in collapsed_text
         assert "(ctrl+o to expand)" in collapsed_text
@@ -223,6 +243,7 @@ async def test_chat_input_paste_clipboard_image_and_attachment_bar() -> None:
 async def test_chat_input_dropped_image_path_attaches_to_media_bar(
     tmp_path: Path,
 ) -> None:
+    """Verify chat input dropped image path attaches to media bar."""
     from talkops.ui.widgets.chat_input import MediaAttachmentBar
 
     img_path = tmp_path / "arch.png"
@@ -252,6 +273,7 @@ async def test_chat_input_dropped_image_path_attaches_to_media_bar(
 def test_textual_adapter_prepare_stream_input_with_tracked_and_mentioned_media(
     tmp_path: Path,
 ) -> None:
+    """Verify textual adapter prepare stream input with tracked and mentioned media."""
     tracker = MediaTracker()
     pasted_img = ImageData(
         base64_data="cGFzdGVk", format="png", placeholder="[image 1]"
@@ -298,6 +320,7 @@ def test_textual_adapter_prepare_stream_input_with_tracked_and_mentioned_media(
 
 
 def test_status_bar_cache_segment_rendering_and_thresholds() -> None:
+    """Verify status bar cache segment rendering and thresholds."""
     assert cache_hit_style(10) == "$error"
     assert cache_hit_style(CACHE_WARNING_PERCENT) == "$warning"
     assert cache_hit_style(CACHE_GOOD_PERCENT) == "dim"
@@ -332,6 +355,7 @@ def test_status_bar_cache_segment_rendering_and_thresholds() -> None:
 
 
 def test_cost_tracking_cache_token_counts_and_adapter_stream_sync() -> None:
+    """Verify cost tracking cache token counts and adapter stream sync."""
     usage = {
         "input_tokens": 12_000,
         "output_tokens": 500,
@@ -380,6 +404,7 @@ def test_cost_tracking_cache_token_counts_and_adapter_stream_sync() -> None:
 
 @pytest.mark.asyncio
 async def test_thread_controller_restores_multimodal_placeholders_and_cache_tokens() -> None:
+    """Verify thread controller restores multimodal placeholders and cache tokens."""
     mounted = []
     fake_container = MagicMock()
     fake_container.children = []

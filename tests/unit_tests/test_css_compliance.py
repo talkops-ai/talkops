@@ -1,14 +1,29 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Step 9: CSS compliance and modal styling standards."""
 
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any
-import pytest
 
+import pytest
 from textual.app import App, ComposeResult
+
 from talkops.config.settings import (
     get_glyphs,
     is_ascii_mode,
@@ -24,15 +39,18 @@ class _TestHarnessApp(App[None]):
     """Test app harness for mounting modal screens."""
 
     def __init__(self, screen_instance: Any) -> None:
+        """Initialize _TestHarnessApp."""
         super().__init__()
         self._test_screen = screen_instance
         register_app_themes(self)
         self.theme = "talkops-dark"
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 

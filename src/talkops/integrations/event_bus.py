@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unix-domain-socket event bus for talkops.
 
 Allows external CLI tools, background runners, watchdogs, or CI/CD pipelines
@@ -22,17 +36,18 @@ Wire protocol
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 import contextlib
-from dataclasses import dataclass
-from enum import IntEnum
 import json
-from talkops.utils.logger import get_logger
 import os
-from pathlib import Path
 import stat
 import tempfile
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from enum import IntEnum
+from pathlib import Path
 from typing import Any, Literal, cast, get_args
+
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

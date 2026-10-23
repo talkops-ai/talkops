@@ -1,13 +1,27 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Security verification, signature validation, SSRF protection, and alert storm deduplication."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import hashlib
 import hmac
 import re
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from urllib.parse import urlparse
 
 _SNS_HOST_PATTERN = re.compile(
@@ -155,6 +169,7 @@ class DeduplicationCache:
     """Thread-safe TTL cache to suppress duplicate webhook retries and alert storms."""
 
     def __init__(self, ttl_seconds: float = 60.0, max_entries: int = 4096) -> None:
+        """Initialize DeduplicationCache."""
         self.ttl_seconds = ttl_seconds
         self.max_entries = max_entries
         self._store: dict[str, float] = {}

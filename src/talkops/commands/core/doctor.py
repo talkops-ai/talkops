@@ -1,6 +1,20 @@
-"""Diagnostic health-check command handler for OpsCode.
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-Inspired by `claude doctor`, reports install health and diagnostics in a
+"""Diagnostic health-check command handler for TalkOps.
+
+Reports installation health and runtime diagnostics in a
 tree-style grouped report. Covers: version/platform, active model, configuration
 paths, API keys, MCP server connectivity, DevOps tool availability, agent
 definitions, skills discovery, and workspace info.
@@ -8,16 +22,18 @@ definitions, skills discovery, and workspace info.
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -39,13 +55,14 @@ class DiagnosticSection:
 
     @property
     def ok(self) -> bool:
+        """Return the ok property."""
         return all(item.ok for item in self.items)
 
 
 class DoctorHandler(BaseCommandHandler):
     """Handler for /doctor — comprehensive environment health check.
 
-    Sections (matching claude doctor structure):
+    Diagnostic sections:
     1. Diagnostics — version, platform, Python, install method, path
     2. Active Model — model name, provider, effort, context limit
     3. Configuration — data directory, config file existence
@@ -59,21 +76,26 @@ class DoctorHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/doctor"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.CORE
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.READ_ONLY
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         sections: list[DiagnosticSection] = []
         sections.append(self._collect_diagnostics(ctx))
         sections.append(self._collect_active_model(ctx))
@@ -166,7 +188,7 @@ class DoctorHandler(BaseCommandHandler):
     def _collect_configuration(self, ctx: CommandContext) -> DiagnosticSection:
         """Check data directory and config file existence."""
         from talkops.config import paths as config_paths
-        from talkops.config.paths import classify_path, PathState
+        from talkops.config.paths import PathState, classify_path
 
         items: list[DiagnosticItem] = []
 
@@ -333,7 +355,7 @@ class DoctorHandler(BaseCommandHandler):
             items.append(DiagnosticItem("Settings", "not loaded", ok=False))
             return DiagnosticSection(title="Agent Definitions", items=items)
 
-        from talkops.config.paths import user_agent_md, DEFAULT_AGENT_NAME
+        from talkops.config.paths import DEFAULT_AGENT_NAME, user_agent_md
         global_md = user_agent_md(DEFAULT_AGENT_NAME)
         items.append(DiagnosticItem(
             "Global AGENTS.md",
@@ -401,7 +423,6 @@ class DoctorHandler(BaseCommandHandler):
         # Git status
         git = shutil.which("git")
         if git:
-            import subprocess
             try:
                 result = subprocess.run(
                     [git, "rev-parse", "--is-inside-work-tree"],
@@ -443,8 +464,6 @@ class DoctorHandler(BaseCommandHandler):
     @staticmethod
     def _detect_editable_install() -> bool:
         """Check if talkops is installed in editable/dev mode."""
-        from importlib.metadata import PackageNotFoundError, distribution
-
         for pkg_name in ("talkops-ai", "talkops"):
             try:
                 dist = distribution(pkg_name)
@@ -462,7 +481,6 @@ class DoctorHandler(BaseCommandHandler):
         git = shutil.which("git")
         if not git:
             return None
-        import subprocess
         try:
             repo_root = Path.cwd()
             for p in [Path.cwd(), *Path(__file__).resolve().parents]:

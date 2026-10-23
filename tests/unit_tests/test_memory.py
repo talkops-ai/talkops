@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TalkOps memory registry, branch memory store, and guard middleware."""
 
 from __future__ import annotations
@@ -17,6 +31,7 @@ from talkops.memory.registry import MemoryRegistry
 
 
 def test_branch_memory_store(tmp_path: Path):
+    """Verify branch memory store."""
     store = BranchMemoryStore("eks-diagnostics", run_id="run-1234", project_root=tmp_path)
     assert store.subagent_name == "eks-diagnostics"
     assert store.run_id == "run-1234"
@@ -30,6 +45,7 @@ def test_branch_memory_store(tmp_path: Path):
 
 
 def test_memory_registry_scopes(tmp_path: Path):
+    """Verify memory registry scopes."""
     registry = MemoryRegistry.get_instance()
     paths = registry.get_memory_paths_for_scope("auto", project_root=tmp_path)
     assert len(paths) >= 1
@@ -40,8 +56,7 @@ def test_memory_registry_scopes(tmp_path: Path):
 
 
 def test_managed_memory_guard(tmp_path: Path):
-    from typing import Any
-
+    """Verify managed memory guard."""
     guarded_file = tmp_path / "AGENTS.md"
     guarded_file.touch()
 
@@ -121,6 +136,7 @@ def test_memory_guard_middleware(tmp_path: Path) -> None:
     }
 
     def simulate_add_memory(req: Any) -> ToolMessage:
+        """Provide simulate add memory test helper or fixture."""
         content = guarded_file.read_text(encoding="utf-8")
         updated = content.replace(
             "- Primary region: us-west-2",
@@ -146,6 +162,7 @@ def test_memory_guard_middleware(tmp_path: Path) -> None:
     }
 
     def simulate_clobber(req: Any) -> ToolMessage:
+        """Provide simulate clobber test helper or fixture."""
         guarded_file.write_text("completely replaced memory", encoding="utf-8")
         return ToolMessage(content="Wrote 25 bytes", tool_call_id=req.tool_call["id"])
 

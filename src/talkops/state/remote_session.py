@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Remote HTTP session client backend for TalkOps TUI and CLI in Central Server Mode.
 
 When an operator connects to a central TalkOps server (`talkops --server-url https://...`),
@@ -9,12 +23,13 @@ the operator's Bearer token / API key and user identity headers.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Generator
 import asyncio
 import base64
 import json
 import os
 import time
+from collections.abc import AsyncGenerator, Generator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -167,7 +182,6 @@ def _can_use_disk_auth_session() -> bool:
     """
     if "PYTEST_CURRENT_TEST" not in os.environ:
         return True
-    from pathlib import Path
     from talkops.config import paths as paths_mod
 
     default_home_auth = Path.home() / ".talkops" / ".state" / "auth.json"
@@ -334,6 +348,9 @@ async def exchange_api_key_for_temporary_token(
     }
     if eff_user:
         req_headers["X-TalkOps-User"] = eff_user
+    service_key = os.environ.get("TALKOPS_CONTROL_PLANE_SERVICE_KEY", "").strip()
+    if service_key:
+        req_headers["X-Control-Plane-Key"] = service_key
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -363,7 +380,11 @@ async def exchange_api_key_for_temporary_token(
                     # Persist the temporary JWT lease in CompositeCredentialStorage (`auth.json`)
                     if _can_use_disk_auth_session():
                         try:
-                            from talkops.auth.models import StoredSession, hash_api_key, mask_api_key
+                            from talkops.auth.models import (
+                                StoredSession,
+                                hash_api_key,
+                                mask_api_key,
+                            )
                             from talkops.auth.storage import get_credential_storage
 
                             storage = get_credential_storage()
@@ -501,12 +522,14 @@ class TalkOpsClientAuth(httpx.Auth):
         user_id: str | None = None,
         control_plane_url: str | None = None,
     ) -> None:
+        """Initialize TalkOpsClientAuth."""
         self.server_url = server_url
         self.api_key = api_key
         self.user_id = user_id
         self.control_plane_url = control_plane_url
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        """Execute auth flow on TalkOpsClientAuth."""
         headers = build_remote_auth_headers(api_key=self.api_key, user_id=self.user_id)
         for k, v in headers.items():
             request.headers[k] = v
@@ -515,6 +538,7 @@ class TalkOpsClientAuth(httpx.Auth):
     async def async_auth_flow(
         self, request: httpx.Request
     ) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        """Execute async auth flow on TalkOpsClientAuth."""
         temp_token = await exchange_api_key_for_temporary_token(
             self.server_url,
             api_key=self.api_key,
@@ -603,6 +627,7 @@ class RemoteSessionBackend:
         user_id: str | None = None,
         timeout: float = 15.0,
     ) -> None:
+        """Initialize RemoteSessionBackend."""
         cfg_url, cfg_key, cfg_user = get_remote_client_config()
         self.server_url = (server_url or cfg_url or "").rstrip("/")
         if not self.server_url:
@@ -634,6 +659,7 @@ class RemoteSessionBackend:
         branch: str | None = None,
         cwd: str | None = None,
     ) -> list[ThreadInfo]:
+        """List threads."""
         params: dict[str, Any] = {
             "limit": limit,
             "include_message_count": str(include_message_count).lower(),
@@ -670,6 +696,7 @@ class RemoteSessionBackend:
         branch: str | None = None,
         cwd: str | None = None,
     ) -> ThreadInfo | None:
+        """Retrieve most recent."""
         threads = await self.list_threads(
             agent_name=agent_name,
             limit=1,
@@ -680,6 +707,7 @@ class RemoteSessionBackend:
         return threads[0] if threads else None
 
     async def find_similar_threads(self, prefix: str, limit: int = 3) -> list[str]:
+        """Find and return similar threads."""
         try:
             headers = await self._async_headers()
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -698,6 +726,7 @@ class RemoteSessionBackend:
         return []
 
     async def thread_exists(self, thread_id: str) -> bool:
+        """Execute thread exists on RemoteSessionBackend."""
         if not thread_id:
             return False
         safe_tid = quote(thread_id, safe="")
@@ -716,6 +745,7 @@ class RemoteSessionBackend:
         return False
 
     async def get_thread_title(self, thread_id: str) -> str | None:
+        """Retrieve thread title."""
         if not thread_id:
             return None
         safe_tid = quote(thread_id, safe="")
@@ -743,6 +773,7 @@ class RemoteSessionBackend:
         preview: str | None = None,
         only_if_empty: bool = True,
     ) -> bool:
+        """Set thread title."""
         if not thread_id or not title:
             return False
         safe_tid = quote(thread_id, safe="")
@@ -769,6 +800,7 @@ class RemoteSessionBackend:
         source_thread_id: str,
         target_thread_id: str | None = None,
     ) -> str:
+        """Execute fork thread on RemoteSessionBackend."""
         from talkops.state.session import generate_thread_id
 
         fallback_id = target_thread_id or generate_thread_id()
@@ -796,6 +828,7 @@ class RemoteSessionBackend:
         strategy: str = "keep_latest",
         turn_completed: bool = False,
     ) -> None:
+        """Execute prune thread on RemoteSessionBackend."""
         if not thread_id:
             return
         safe_tid = quote(thread_id, safe="")
@@ -811,6 +844,7 @@ class RemoteSessionBackend:
             logger.debug("RemoteSessionBackend.prune_thread failed for %s: %s", thread_id, exc)
 
     async def delete_thread(self, thread_id: str) -> bool:
+        """Delete thread."""
         if not thread_id:
             return False
         safe_tid = quote(thread_id, safe="")

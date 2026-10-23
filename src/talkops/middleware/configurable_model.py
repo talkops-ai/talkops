@@ -1,8 +1,21 @@
-"""Middleware for runtime model selection via LangGraph runtime context."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Middleware for runtime model selection via LangGraph runtime context."""
+import asyncio
 from typing import Any, Awaitable, Callable
 
-from talkops.utils.logger import get_logger
 from deepagents._models import (
     get_model_identifier,
     model_matches_spec,
@@ -16,6 +29,7 @@ from langchain.agents.middleware.types import (
 from langgraph.types import Command
 
 from talkops.middleware.registry import register_middleware
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -46,6 +60,7 @@ class ConfigurableModelMiddleware(AgentMiddleware):
     """Swap the model or per-call settings from runtime.context."""
 
     def __init__(self, *, persist_model_state: bool = True) -> None:
+        """Initialize ConfigurableModelMiddleware."""
         self._persist_model_state = persist_model_state
 
     def wrap_model_call(
@@ -53,6 +68,7 @@ class ConfigurableModelMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse | ExtendedModelResponse:
+        """Intercept and wrap synchronous model invocation."""
         resolved_req, resolved_spec, resolved_params = self._apply_overrides(request)
         response = handler(resolved_req)
 
@@ -70,6 +86,7 @@ class ConfigurableModelMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse | ExtendedModelResponse:
+        """Intercept and wrap asynchronous model invocation."""
         resolved_req, resolved_spec, resolved_params = (
             await self._apply_overrides_async(request)
         )
@@ -96,8 +113,8 @@ class ConfigurableModelMiddleware(AgentMiddleware):
 
         model_result = None
         if model_spec and model_spec not in {"auto", "dynamic"} and not model_matches_spec(request.model, model_spec):
-            from talkops.model.factory import create_model
             from talkops.exceptions import ModelConfigError
+            from talkops.model.factory import create_model
 
             try:
                 model_result = create_model(model_spec)
@@ -116,7 +133,6 @@ class ConfigurableModelMiddleware(AgentMiddleware):
     async def _apply_overrides_async(
         self, request: ModelRequest
     ) -> tuple[ModelRequest, str | None, dict[str, Any] | None]:
-        import asyncio
 
         ctx = self._get_context(request)
         if ctx is None:
@@ -127,8 +143,8 @@ class ConfigurableModelMiddleware(AgentMiddleware):
 
         model_result = None
         if model_spec and model_spec not in {"auto", "dynamic"} and not model_matches_spec(request.model, model_spec):
-            from talkops.model.factory import create_model
             from talkops.exceptions import ModelConfigError
+            from talkops.model.factory import create_model
 
             try:
                 model_result = await asyncio.to_thread(create_model, model_spec)
@@ -206,6 +222,13 @@ class ConfigurableModelMiddleware(AgentMiddleware):
                     "identity was not updated for model '%s'.",
                     model_result.model_name,
                 )
+
+        # Sanitize cross-provider AIMessage content blocks for effective_model
+        from talkops.middleware.unified_system_message import sanitize_messages_for_model
+
+        sanitized_msgs = sanitize_messages_for_model(request.messages, effective_model)
+        if sanitized_msgs is not None:
+            overrides["messages"] = sanitized_msgs
 
         if not overrides:
             return request

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """CLI AST Safety Evaluator — deterministic safety classification for shell commands.
 
 Parses composite bash commands, subshells, pipelines, and process substitutions using
@@ -7,6 +21,7 @@ Parses composite bash commands, subshells, pipelines, and process substitutions 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import bashlex
@@ -201,6 +216,7 @@ class SecurityASTVisitor(bashlex.ast.nodevisitor):
     """Traverses bashlex AST nodes inspecting words, commands, and substitutions."""
 
     def __init__(self) -> None:
+        """Initialize SecurityASTVisitor."""
         self.found_verbs: list[str] = []
         self.found_flags: list[str] = []
         self.found_commands: list[str] = []
@@ -208,6 +224,7 @@ class SecurityASTVisitor(bashlex.ast.nodevisitor):
         self.is_readonly: bool = True
 
     def visitcommand(self, n: Any, parts: list[Any]) -> None:
+        """Execute visitcommand on SecurityASTVisitor."""
         words: list[str] = []
         for part in parts:
             if getattr(part, "kind", None) == "word":
@@ -391,9 +408,11 @@ class SecurityASTVisitor(bashlex.ast.nodevisitor):
             self.is_readonly = False
 
     def visitprocesssubstitution(self, n: Any, command: Any) -> None:
+        """Execute visitprocesssubstitution on SecurityASTVisitor."""
         self.visit(command)
 
     def visitcommandsubstitution(self, n: Any, command: Any) -> None:
+        """Execute visitcommandsubstitution on SecurityASTVisitor."""
         self.visit(command)
 
 
@@ -498,11 +517,9 @@ def evaluate_cli_safety(command_string: str) -> dict[str, Any]:
     return res
 
 
-from dataclasses import dataclass
-
-
 @dataclass(frozen=True)
 class AstEvaluationResult:
+    """Represent ast evaluation result."""
     is_safe: bool
     is_destructive: bool
     is_readonly: bool
@@ -514,6 +531,7 @@ class CliAstEvaluator:
     """Evaluates shell commands against allow lists and AST safety criteria."""
 
     def evaluate(self, command: str, allow_list: list[str] | None = None) -> AstEvaluationResult:
+        """Execute evaluate on CliAstEvaluator."""
         if allow_list:
             from talkops.security.shell_safety import is_shell_command_allowed
 

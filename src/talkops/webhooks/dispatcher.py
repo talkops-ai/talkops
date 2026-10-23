@@ -1,14 +1,29 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Central webhook dispatcher coordinating verification, normalization, thread mapping, and background runs."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
 import contextlib
 import hmac
+import os
 import time
-from typing import Any
 import uuid
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any
 
 from talkops.integrations.hooks import dispatch_hook_fire_and_forget
 from talkops.integrations.identity import IdentityMapper
@@ -36,6 +51,7 @@ from talkops.webhooks.sinks import (
     WebhookRunResult,
     confirm_sns_subscription,
     dispatch_completion_sinks,
+    dispatch_outbound_channel_received,
 )
 
 logger = get_logger(__name__)
@@ -195,8 +211,8 @@ async def default_langgraph_run_executor(
     config: WebhookConfig,
 ) -> WebhookRunResult:
     """Execute an autonomous background agent run via the LangGraph SDK (in-process or loopback)."""
-    import os
     from langgraph_sdk import get_client
+
     from talkops.server.auth import get_internal_webhook_token
     from talkops.state.session import set_thread_title
 
@@ -477,7 +493,9 @@ class WebhookDispatcher:
         gateway: Any | None = None,
         event_bus: Any | None = None,
     ) -> None:
+        """Initialize WebhookDispatcher."""
         self.registry = registry or create_default_registry()
+        self._has_explicit_config = config is not None
         self.config = config or WebhookConfig.from_settings()
         self.thread_store = thread_store or ThreadStore()
         self.identity_mapper = identity_mapper or IdentityMapper()
@@ -657,12 +675,14 @@ class WebhookDispatcher:
             self._recent_deliveries.pop(0)
 
         # 5. Publish `webhook.received` on HookEventBus for marketplace channel addons
+        active_routes = self._resolve_active_outbound_channels()
+        matching_received_routes = [
+            r.to_dict()
+            for r in active_routes
+            if r.matches(event, stage="received")
+        ]
+        external_received = self._has_external_channel_listener("webhook.received")
         if self._event_bus is not None and hasattr(self._event_bus, "publish"):
-            matching_received_routes = [
-                r.to_dict()
-                for r in self.config.outbound_channels
-                if r.matches(event, stage="received")
-            ]
             with contextlib.suppress(Exception):
                 await self._event_bus.publish(
                     "webhook.received",
@@ -687,7 +707,13 @@ class WebhookDispatcher:
 
         # 6. Schedule background run and return 202 Accepted immediately
         bg_task = asyncio.create_task(
-            self._execute_and_notify(event, lg_thread_id, delivery_id, delivery_record)
+            self._execute_and_notify(
+                event,
+                lg_thread_id,
+                delivery_id,
+                delivery_record,
+                received_routes=matching_received_routes if not external_received else None,
+            )
         )
         self._background_tasks.add(bg_task)
         bg_task.add_done_callback(self._background_tasks.discard)
@@ -703,14 +729,56 @@ class WebhookDispatcher:
             "title": event.title,
         }
 
+    def _resolve_active_outbound_channels(self) -> list[Any]:
+        """Return configured `outbound_channels` (re-checking env if default config is empty)."""
+        if self.config.outbound_channels or self._has_explicit_config:
+            return self.config.outbound_channels
+        with contextlib.suppress(Exception):
+            from talkops.config.settings import resolve_env_var
+            from talkops.webhooks.models import parse_outbound_channel_routes
+
+            raw = resolve_env_var(
+                "WEBHOOK_NOTIFY_CHANNELS",
+                fallback_names=("WEBHOOK_NOTIFY_CHANNEL", "TALKOPS_WEBHOOK_NOTIFY_CHANNELS"),
+            )
+            if raw:
+                self.config.outbound_channels = parse_outbound_channel_routes(raw)
+        return self.config.outbound_channels
+
+    def _has_external_channel_listener(self, event_type: str) -> bool:
+        """Return True if an external `channels` addon is subscribed to handle outbound routes."""
+        if self._outbound_sinks:
+            return True
+        if self._event_bus is not None:
+            checker = getattr(self._event_bus, "has_subscribers", None)
+            if callable(checker):
+                return bool(checker(event_type))
+            subs = getattr(self._event_bus, "_subscribers", None)
+            if isinstance(subs, dict) and (
+                subs.get(event_type) or subs.get("*") or subs.get("addon.*")
+            ):
+                return True
+        return False
+
     async def _execute_and_notify(
         self,
         event: NormalizedWebhookEvent,
         lg_thread_id: str,
         delivery_id: str,
         delivery_record: dict[str, Any] | None = None,
+        *,
+        received_routes: list[dict[str, Any]] | None = None,
     ) -> None:
         """Run the agent investigation in the background and trigger outbound write-back sinks."""
+        incident_thread_refs: dict[tuple[str, str], dict[str, str]] = {}
+        if received_routes:
+            with contextlib.suppress(Exception):
+                incident_thread_refs = await dispatch_outbound_channel_received(
+                    event,
+                    lg_thread_id=lg_thread_id,
+                    routes=received_routes,
+                )
+
         try:
             async with self._concurrency_semaphore:
                 logger.info(
@@ -743,14 +811,22 @@ class WebhookDispatcher:
             if result.error:
                 delivery_record["error"] = result.error
 
-        await dispatch_completion_sinks(event, result, self.config)
-
-        # Publish `webhook.completed` on HookEventBus and invoke registered marketplace channel sinks
         matching_completed_routes = [
             r.to_dict()
-            for r in self.config.outbound_channels
+            for r in self._resolve_active_outbound_channels()
             if r.matches(event, stage="completed")
         ]
+        external_completed = self._has_external_channel_listener("webhook.completed")
+
+        await dispatch_completion_sinks(
+            event,
+            result,
+            self.config,
+            outbound_routes=matching_completed_routes if not external_completed else None,
+            incident_thread_refs=incident_thread_refs,
+        )
+
+        # Publish `webhook.completed` on HookEventBus and invoke registered marketplace channel sinks
         if self._event_bus is not None and hasattr(self._event_bus, "publish"):
             with contextlib.suppress(Exception):
                 await self._event_bus.publish(

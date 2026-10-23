@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """AddonManager — discovery, validation, lifecycle orchestration, and ASGI assembly.
 
 Supports hooking in addons from completely separate repositories (TalkOps official
@@ -16,15 +30,15 @@ TalkOps core code:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import asynccontextmanager
 import importlib
 import importlib.metadata
 import importlib.util
 import inspect
 import os
-from pathlib import Path
 import sys
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
@@ -331,6 +345,7 @@ class AddonManager:
         extra_addons: Sequence[Any] | None = None,
         strict_dependencies: bool = False,
     ) -> None:
+        """Initialize AddonManager."""
         self._requested_profile = profile
         self._enabled_addons_override = enabled_addons
         self._disabled_addons_override = disabled_addons
@@ -358,26 +373,32 @@ class AddonManager:
 
     @property
     def profile(self) -> str:
+        """Return the profile property."""
         return self._resolved_profile
 
     @property
     def gateway(self) -> AgentRunGateway:
+        """Return the gateway property."""
         return self._gateway
 
     @property
     def event_bus(self) -> HookEventBus:
+        """Return the event bus property."""
         return self._event_bus
 
     @property
     def discovered_addons(self) -> dict[str, ServerAddon]:
+        """Return the discovered addons property."""
         return dict(self._discovered)
 
     @property
     def active_addons(self) -> list[ServerAddon]:
+        """Return the active addons property."""
         return list(self._active_addons)
 
     @property
     def context(self) -> AddonContext | None:
+        """Return the context property."""
         return self._context
 
     def discover_addons(self) -> dict[str, ServerAddon]:

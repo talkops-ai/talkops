@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Ask User middleware for interactive clarification during agent execution."""
 
 from __future__ import annotations
@@ -5,7 +19,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
-from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware.types import (
+    AgentMiddleware,
+    ModelRequest,
+    ModelResponse,
+)
 from langchain.tools import InjectedToolCallId
 from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -100,6 +118,7 @@ class AskUserMiddleware(AgentMiddleware[Any, Any]):
         system_prompt: str = ASK_USER_SYSTEM_PROMPT,
         tool_description: str = ASK_USER_TOOL_DESCRIPTION,
     ) -> None:
+        """Initialize AskUserMiddleware."""
         super().__init__()
         self.system_prompt = system_prompt
         self.tool_description = tool_description
@@ -126,6 +145,7 @@ class AskUserMiddleware(AgentMiddleware[Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any]:
+        """Intercept and wrap synchronous model invocation."""
         prompt = self.system_prompt
         new_prompt = f"{request.system_prompt or ''}\n\n{prompt}"
         updated_request = request.override(system_message=SystemMessage(content=new_prompt))
@@ -136,6 +156,7 @@ class AskUserMiddleware(AgentMiddleware[Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
+        """Intercept and wrap asynchronous model invocation."""
         prompt = self.system_prompt
         new_prompt = f"{request.system_prompt or ''}\n\n{prompt}"
         updated_request = request.override(system_message=SystemMessage(content=new_prompt))

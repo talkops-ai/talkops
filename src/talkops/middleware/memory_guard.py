@@ -1,11 +1,25 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Protect machine-managed memory blocks from agent edits while allowing user memory updates."""
 
 from __future__ import annotations
 
 import asyncio
+import os
 from difflib import SequenceMatcher
 from enum import Enum
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -40,19 +54,13 @@ ONBOARDING_NAME_MEMORY_END = "<!-- talkops:onboarding-name:end -->"
 _MANAGED_START_MARKERS = (
     "<!-- talkops:onboarding-name:start -->",
     "<!-- talkops:managed-memory:start -->",
-    "<!-- k8s_autopilot:onboarding-name:start -->",
-    "<!-- k8s_autopilot:managed-memory:start -->",
     "<!-- deepagents:onboarding-name:start -->",
-    "<!-- opscode:onboarding-name:start -->",
     "<!-- managed:start -->",
 )
 _MANAGED_END_MARKERS = (
     "<!-- talkops:onboarding-name:end -->",
     "<!-- talkops:managed-memory:end -->",
-    "<!-- k8s_autopilot:onboarding-name:end -->",
-    "<!-- k8s_autopilot:managed-memory:end -->",
     "<!-- deepagents:onboarding-name:end -->",
-    "<!-- opscode:onboarding-name:end -->",
     "<!-- managed:end -->",
 )
 
@@ -128,6 +136,7 @@ class ManagedMemoryGuardMiddleware(AgentMiddleware[Any, Any]):
     """Protects managed onboarding blocks and memory files from deletion while allowing user edits."""
 
     def __init__(self, guarded_paths: Iterable[str | Path] = ()) -> None:
+        """Initialize ManagedMemoryGuardMiddleware."""
         super().__init__()
         requested = list(guarded_paths)
         resolved: set[Path] = set()
@@ -357,6 +366,7 @@ class ManagedMemoryGuardMiddleware(AgentMiddleware[Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
+        """Intercept and wrap synchronous tool execution."""
         path = self._guarded_path(request)
         if path is None:
             return handler(request)
@@ -377,6 +387,7 @@ class ManagedMemoryGuardMiddleware(AgentMiddleware[Any, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
+        """Intercept and wrap asynchronous tool execution."""
         path = await asyncio.to_thread(self._guarded_path, request)
         if path is None:
             return await handler(request)

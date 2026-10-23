@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Utilities for handling image and video paste, clipboard detection, and multimodal content."""
 
 from __future__ import annotations
@@ -86,6 +100,7 @@ class ImageData:
     size_bytes: int = 0
 
     def __post_init__(self) -> None:
+        """Validate and normalize fields after dataclass initialization."""
         if self.size_bytes <= 0 and self.base64_data:
             self.size_bytes = max(1, (len(self.base64_data.rstrip("=")) * 3) // 4)
 
@@ -123,6 +138,7 @@ class VideoData:
     size_bytes: int = 0
 
     def __post_init__(self) -> None:
+        """Validate and normalize fields after dataclass initialization."""
         if self.size_bytes <= 0 and self.base64_data:
             self.size_bytes = max(1, (len(self.base64_data.rstrip("=")) * 3) // 4)
 

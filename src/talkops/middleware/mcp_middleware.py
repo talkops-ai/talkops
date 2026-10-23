@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Agent middleware for MCP tools execution, argument normalization, and auth resilience.
 
 Normalizes model-generated arguments before they hit MCP tools (e.g., dropping empty
@@ -7,8 +21,8 @@ unauthenticated MCP sessions.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import AgentMiddleware
@@ -67,8 +81,10 @@ def normalize_mcp_arguments(
 
 @register_middleware(name="mcp_tool")
 class MCPToolMiddleware(AgentMiddleware):
-    """Wraps MCP tool calls to normalize arguments, dynamically bind background-probed
-    MCP tools, and handle authentication failures.
+    """Middleware wrapping MCP tool calls and dynamic tool binding.
+
+    Normalizes arguments, dynamically binds background-probed MCP tools,
+    and handles authentication failures.
     """
 
     def __init__(
@@ -76,6 +92,7 @@ class MCPToolMiddleware(AgentMiddleware):
         mcp_config: Any = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize MCPToolMiddleware."""
         super().__init__()
         raw_servers = (
             (
@@ -92,11 +109,13 @@ class MCPToolMiddleware(AgentMiddleware):
             else {}
         )
         self._dynamic_tools_by_name: dict[str, Any] = {}
+        self._lazy_tool_aliases: dict[str, Any] = {}
         self._built_fingerprint: tuple[tuple[str, int], ...] = ()
 
     def _get_dynamic_mcp_tools(self) -> dict[str, Any]:
-        """Build and cache StructuredTool wrappers for configured MCP servers
-        whose metadata has been populated in the shared preload cache.
+        """Build and cache StructuredTool wrappers for configured MCP servers.
+
+        Uses server metadata populated in the shared preload cache.
         """
         if not self._configs:
             return self._dynamic_tools_by_name
@@ -133,7 +152,15 @@ class MCPToolMiddleware(AgentMiddleware):
                     mgr,
                     configs=self._configs,
                 )
-                self._dynamic_tools_by_name = {t.name: t for t in built}
+                # Preserve any previously resolved lazy tools keyed by their canonical tool.name
+                preserved = {
+                    getattr(t, "name", k): t
+                    for k, t in self._dynamic_tools_by_name.items()
+                    if getattr(t, "name", k)
+                }
+                for t in built:
+                    preserved[t.name] = t
+                self._dynamic_tools_by_name = preserved
                 self._built_fingerprint = fp
         except Exception as exc:
             logger.debug("Dynamic MCP tool hydration skipped: %s", exc)
@@ -144,24 +171,36 @@ class MCPToolMiddleware(AgentMiddleware):
         if not dynamic_tools:
             return request
         existing_tools = list(getattr(request, "tools", None) or ())
-        existing_names = {
-            getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else None)
-            for t in existing_tools
-        }
-        added = [
-            tool_obj
-            for name, tool_obj in dynamic_tools.items()
-            if name not in existing_names
-        ]
-        if not added:
+        existing_names: set[str] = set()
+        deduped_existing: list[Any] = []
+        for t in existing_tools:
+            t_name = getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else None)
+            if t_name:
+                if t_name in existing_names:
+                    continue
+                existing_names.add(str(t_name))
+            deduped_existing.append(t)
+
+        added: list[Any] = []
+        for key_name, tool_obj in dynamic_tools.items():
+            actual_name = (
+                getattr(tool_obj, "name", None)
+                or (tool_obj.get("name") if isinstance(tool_obj, dict) else None)
+                or key_name
+            )
+            if actual_name not in existing_names:
+                existing_names.add(str(actual_name))
+                added.append(tool_obj)
+        if not added and len(deduped_existing) == len(existing_tools):
             return request
-        return request.override(tools=[*existing_tools, *added])
+        return request.override(tools=[*deduped_existing, *added])
 
     def wrap_model_call(
         self,
         request: Any,
         handler: Callable[[Any], Any],
     ) -> Any:
+        """Intercept and wrap synchronous model invocation."""
         return handler(self._inject_dynamic_tools(request))
 
     async def awrap_model_call(
@@ -169,6 +208,7 @@ class MCPToolMiddleware(AgentMiddleware):
         request: Any,
         handler: Callable[[Any], Awaitable[Any]],
     ) -> Any:
+        """Intercept and wrap asynchronous model invocation."""
         return await handler(self._inject_dynamic_tools(request))
 
     def _is_mcp_call(self, request: ToolCallRequest) -> bool:
@@ -183,9 +223,64 @@ class MCPToolMiddleware(AgentMiddleware):
             or tool_name.startswith(("mcp__", "plugin__", "subagent__"))
         ):
             return True
-        if getattr(request, "tool", None) is None and tool_name in self._get_dynamic_mcp_tools():
+        if getattr(request, "tool", None) is None and (
+            tool_name in self._get_dynamic_mcp_tools() or tool_name in self._lazy_tool_aliases
+        ):
+            return True
+        if isinstance(getattr(getattr(request, "tool", None), "metadata", None), dict) and getattr(
+            request.tool, "metadata", {}
+        ).get("_talkops_mcp"):
             return True
         return False
+
+    def _resolve_lazy_mcp_tool(self, tool_name: str) -> Any | None:
+        """Resolve a direct call to a lazy MCP tool (by original name, server:tool, or hashed name)."""
+        if not tool_name or not self._configs:
+            return None
+        cached_alias = self._lazy_tool_aliases.get(tool_name)
+        if cached_alias is not None:
+            return cached_alias
+        try:
+            from talkops.mcp.preload import get_cached_mcp_server_infos
+            from talkops.mcp.session_manager import (
+                MCPSessionManager,
+                _build_cached_mcp_tool,
+            )
+
+            req_srv, req_tool = (tool_name.split(":", 1) if ":" in tool_name else ("", tool_name))
+            for s in get_cached_mcp_server_infos():
+                if s.name not in self._configs or not s.enabled or s.status != "ok":
+                    continue
+                base_srv = s.name.rsplit("__", 1)[-1] if "__" in s.name else s.name
+                if req_srv and req_srv not in (s.name, base_srv):
+                    continue
+                for t in s.tools:
+                    orig = getattr(t, "original_name", "") or ""
+                    full = getattr(t, "name", "") or ""
+                    if req_tool in (orig, full) or tool_name in (orig, full):
+                        mgr = MCPSessionManager.get_instance(self._configs)
+                        mgr.register_servers(self._configs)
+                        built = _build_cached_mcp_tool(
+                            mcp_tool=t,
+                            server_name=s.name,
+                            session_manager=mgr,
+                            name_prefix_sep=":",
+                        )
+                        canonical_name = str(getattr(built, "name", "") or full or tool_name)
+                        existing = self._dynamic_tools_by_name.get(canonical_name)
+                        if existing is not None:
+                            built = existing
+                        else:
+                            self._dynamic_tools_by_name[canonical_name] = built
+                        self._lazy_tool_aliases[tool_name] = built
+                        if orig:
+                            self._lazy_tool_aliases.setdefault(orig, built)
+                        if full:
+                            self._lazy_tool_aliases.setdefault(full, built)
+                        return built
+        except Exception as exc:
+            logger.debug("Lazy MCP tool resolution skipped for %s: %s", tool_name, exc)
+        return None
 
     def _preprocess_request(self, request: ToolCallRequest) -> ToolCallRequest:
         if getattr(request, "tool", None) is None:
@@ -194,7 +289,11 @@ class MCPToolMiddleware(AgentMiddleware):
                 if getattr(request, "tool_call", None) and isinstance(request.tool_call, dict)
                 else ""
             )
-            dyn_tool = self._get_dynamic_mcp_tools().get(tool_name)
+            dyn_tool = (
+                self._get_dynamic_mcp_tools().get(tool_name)
+                or self._lazy_tool_aliases.get(tool_name)
+                or self._resolve_lazy_mcp_tool(tool_name)
+            )
             if dyn_tool is not None:
                 request = request.override(tool=dyn_tool)
 
@@ -236,6 +335,7 @@ class MCPToolMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ) -> Any:
+        """Intercept and wrap synchronous tool execution."""
         preprocessed = self._preprocess_request(request)
         try:
             return handler(preprocessed)
@@ -250,6 +350,7 @@ class MCPToolMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[Any]],
     ) -> Any:
+        """Intercept and wrap asynchronous tool execution."""
         preprocessed = self._preprocess_request(request)
         try:
             return await handler(preprocessed)

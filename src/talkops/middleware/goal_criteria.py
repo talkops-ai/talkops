@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Server-side helpers for drafting acceptance criteria from goal objectives.
 
 ``GoalCriteriaMiddleware`` runs before the normal agent loop: when
@@ -15,13 +29,21 @@ middleware to the nested criteria agent graphs.
 
 from __future__ import annotations
 
-from collections import OrderedDict
 import inspect
 import json
 import threading
-from typing import TYPE_CHECKING, Annotated, Any, Literal, NotRequired, Self, cast, override
+from collections import OrderedDict
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Literal,
+    NotRequired,
+    Self,
+    cast,
+    override,
+)
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from deepagents.middleware.skills import SkillsState
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -38,7 +60,10 @@ from langchain_core.messages import (
     ToolMessage,
     get_buffer_string,
 )
+from langchain_core.tools import BaseTool as _BaseTool
+from langchain_core.tools import StructuredTool
 from langgraph.errors import GraphRecursionError
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
@@ -47,7 +72,11 @@ if TYPE_CHECKING:
 from talkops.agent.config import CLIContextSchema
 from talkops.middleware._repository_bounds import (
     REPOSITORY_TOOL_CALL_LIMIT as _REPOSITORY_TOOL_CALL_LIMIT,
+)
+from talkops.middleware._repository_bounds import (
     REPOSITORY_TOOL_NAMES as _REPOSITORY_TOOL_NAMES,
+)
+from talkops.middleware._repository_bounds import (
     RepositoryBounds,
 )
 from talkops.middleware.goal_state_notice import is_conversation_control_message
@@ -1218,7 +1247,6 @@ def create_goal_criteria_agent(
     from deepagents.middleware import FilesystemMiddleware
     from langchain.agents import create_agent
     from langchain.agents.structured_output import ToolStrategy
-    from langchain_core.tools import BaseTool as _BaseTool, StructuredTool
 
     from talkops.middleware.configurable_model import ConfigurableModelMiddleware
     from talkops.middleware.skills import PluginSkillsMiddleware

@@ -1,10 +1,24 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Skills middleware adapter supporting namespaced plugin skills."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 import fnmatch
+from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, cast
 
@@ -12,6 +26,7 @@ from deepagents.backends.protocol import FileInfo, LsResult
 from deepagents.backends.utils import to_posix_path
 from deepagents.middleware import skills as sdk_skills
 from deepagents.middleware.skills import SkillsMiddleware
+from langchain_core.messages import AIMessage
 
 from talkops.middleware.registry import register_middleware
 from talkops.plugins.adapters.skills import (
@@ -23,6 +38,7 @@ if TYPE_CHECKING:
     from deepagents.backends.protocol import BackendProtocol
     from langchain_core.runnables import RunnableConfig
     from langgraph.runtime import Runtime
+
     from talkops.skills.registry import SkillSourceTuple
     from talkops.skills.sources import CodeSkillSource
 
@@ -156,6 +172,56 @@ TalkOps operates with a skills library providing domain knowledge and specialize
 
 {skills_list}"""
 
+_COMPACT_SKILLS_THRESHOLD = 0
+_MAX_INLINE_SKILL_DESC_CHARS = 200
+
+
+def _compact_skill_description(description: str, max_chars: int = _MAX_INLINE_SKILL_DESC_CHARS) -> str:
+    """Return a concise progressive-disclosure summary of a skill description."""
+    desc = " ".join(description.strip().split())
+    if len(desc) <= max_chars:
+        return desc
+    first_sentence = desc.split(". ", 1)[0]
+    if not first_sentence.endswith("."):
+        first_sentence += "."
+    if len(first_sentence) <= max_chars:
+        return first_sentence
+    return desc[: max_chars - 3].rstrip() + "..."
+
+
+TALKOPS_SKILLS_SYSTEM_PROMPT = """## Skills System
+
+You have access to a skills library that provides verified cloud operations playbooks, IaC procedures, and domain knowledge.
+
+{skills_locations}{skills_load_warnings}
+
+**Available Skills:**
+
+{skills_list}
+
+**Cost-Hierarchy of Levers & Progressive Disclosure:**
+
+Follow a strict **Cost-Hierarchy of Levers** — prefer the cheapest, most deterministic lever that resolves the task:
+
+1. **Skill Playbooks First (Progressive Disclosure)**: Check if the operator's task matches a skill above. Read its `SKILL.md` with `read_file(..., limit=1000)` before guessing CLI flags, IAM condition keys, or writing ad-hoc scripts. Reading a skill also unlocks any skill-gated tools declared in `metadata.include_tools`.
+2. **Persistent Memory & Experience (`AGENTS.md`)**: Consult recorded environment conventions and prior causal lessons (`Cue -> Lesson -> Evidence`) before repeating past failure modes.
+3. **Deterministic Read-Only Inspection**: Use `read_file`, `glob`, `grep`, and read-only cloud/MCP queries to verify live state on disk or in the cloud before mutating resources.
+4. **Specialized Subagent Delegation (`task` / `js_eval`)**: When a task spans multiple cloud regions, accounts, or requires a domain-specific plugin subagent, fan out work via `task` or `js_eval` (`Promise.all`) and pass file paths/ARNs as locators rather than pasting large payloads."""
+
+TALKOPS_SUBAGENT_SKILLS_SYSTEM_PROMPT = """## Skills System
+
+You have access to a skills library that provides verified cloud operations playbooks, IaC procedures, and domain knowledge.
+
+{skills_locations}{skills_load_warnings}
+
+**Available Skills:**
+
+{skills_list}
+
+**Cost-Hierarchy of Levers & Progressive Disclosure:**
+1. **Skill Playbooks First (Progressive Disclosure)**: When your task matches a skill above, read its `SKILL.md` with `read_file(..., limit=1000)` before guessing CLI flags, IAM condition keys, or writing ad-hoc scripts. Reading a skill also unlocks any skill-gated tools declared in `metadata.include_tools`.
+2. **Deterministic Read-Only Inspection**: Use `read_file`, `glob`, `grep`, and read-only cloud/MCP queries to verify live state on disk or in the cloud before mutating resources."""
+
 
 @register_middleware(name="skills")
 class PluginSkillsMiddleware(SkillsMiddleware):
@@ -172,7 +238,9 @@ class PluginSkillsMiddleware(SkillsMiddleware):
         include_subagent_skills: bool = False,
         subagents: Sequence[Any] | None = None,
         planning_mode: bool = False,
+        is_subagent: bool = False,
         project_root: Path | str | None = None,
+        tools: Sequence[Any] | Callable[..., Any] | None = None,
     ) -> None:
         """Initialize PluginSkillsMiddleware with backend, sources, and filtering options.
 
@@ -185,12 +253,21 @@ class PluginSkillsMiddleware(SkillsMiddleware):
             include_subagent_skills: Whether to inherit subagent-specific skills.
             subagents: Sequence of subagents whose skills to discover.
             planning_mode: Whether planning mode is active.
+            is_subagent: Whether this middleware is attached to an isolated subagent.
             project_root: Optional project root path for skill discovery.
+            tools: Optional skill-gated tools or SkillToolResolver callable
+                disclosed when a skill with `metadata.include_tools` is read or pinned.
         """
         self._planning_mode = planning_mode
+        self._is_subagent = is_subagent
         self._project_root = Path(project_root) if project_root else None
         if system_prompt is None:
-            system_prompt = CRITERIA_SKILLS_SYSTEM_PROMPT if planning_mode else sdk_skills.SKILLS_SYSTEM_PROMPT
+            if planning_mode:
+                system_prompt = CRITERIA_SKILLS_SYSTEM_PROMPT
+            elif is_subagent:
+                system_prompt = TALKOPS_SUBAGENT_SKILLS_SYSTEM_PROMPT
+            else:
+                system_prompt = TALKOPS_SKILLS_SYSTEM_PROMPT
 
         if backend is None:
             from deepagents.backends.filesystem import FilesystemBackend
@@ -217,6 +294,7 @@ class PluginSkillsMiddleware(SkillsMiddleware):
             backend=backend,
             sources=sdk_sources,
             system_prompt=system_prompt,
+            tools=tools,
         )
         self._namespaces = tuple(
             source[2] if len(source) == _PLUGIN_SKILL_SOURCE_LENGTH else None for source in sources
@@ -237,16 +315,39 @@ class PluginSkillsMiddleware(SkillsMiddleware):
         return super()._format_skills_load_warnings(errors)
 
     def _format_skills_list(self, skills: list[sdk_skills.SkillMetadata]) -> str:
-        """Format skills metadata cleanly when in planning mode without filesystem paths."""
+        """Format skills metadata cleanly with progressive-disclosure summaries."""
         if self._planning_mode:
             if not skills:
                 return "(No specialized skills currently loaded.)"
             lines: list[str] = []
             for skill in skills:
                 name = skill.get("name", "")
-                desc = skill.get("description", "").strip()
+                desc = _compact_skill_description(skill.get("description", ""))
                 lines.append(f"- **{name}**: {desc}")
             return "\n".join(lines)
+
+        if len(skills) > _COMPACT_SKILLS_THRESHOLD:
+            single_root = self.sources[0].rstrip("/") if len(self.sources) == 1 and self.sources[0] else None
+            all_under_single_root = bool(
+                single_root
+                and all(str(s.get("path", "")).startswith(f"{single_root}/") for s in skills)
+            )
+            lines = []
+            if all_under_single_root:
+                lines.append(
+                    f"*(Read `{single_root}/<skill-name>/SKILL.md` with `read_file` for full instructions)*\n"
+                )
+            for skill in skills:
+                name = skill.get("name", "")
+                desc = _compact_skill_description(skill.get("description", ""))
+                lines.append(f"- **{name}**: {desc}")
+                allowed_tools = skill.get("allowed_tools")
+                if allowed_tools:
+                    lines.append(f"  -> Allowed tools: {', '.join(allowed_tools)}")
+                if not all_under_single_root:
+                    lines.append(f"  -> Read `{skill.get('path', '')}` for full instructions")
+            return "\n".join(lines)
+
         return super()._format_skills_list(skills)
 
     def _is_skill_allowed(self, skill_name: str) -> bool:
@@ -257,7 +358,23 @@ class PluginSkillsMiddleware(SkillsMiddleware):
                 return True
             if ":" in pattern:
                 prefix, base_pat = pattern.split(":", 1)
-                if base_pat == "*" or fnmatch.fnmatch(skill_name, base_pat) or fnmatch.fnmatch(skill_name.lower(), base_pat.lower()):
+                if ":" in skill_name:
+                    skill_prefix, skill_base = skill_name.split(":", 1)
+                    short_prefix = prefix.split("@", 1)[0]
+                    short_skill_prefix = skill_prefix.split("@", 1)[0]
+                    if (
+                        skill_prefix.lower() != prefix.lower()
+                        and short_skill_prefix.lower() != short_prefix.lower()
+                    ):
+                        continue
+                    target_name = skill_base
+                else:
+                    target_name = skill_name
+                if (
+                    base_pat == "*"
+                    or fnmatch.fnmatch(target_name, base_pat)
+                    or fnmatch.fnmatch(target_name.lower(), base_pat.lower())
+                ):
                     return True
         return False
 
@@ -383,9 +500,38 @@ class PluginSkillsMiddleware(SkillsMiddleware):
 
         return super().modify_request(request)
 
+    def after_agent(
+        self,
+        state: sdk_skills.SkillsState,
+        runtime: Runtime,
+    ) -> dict[str, Any] | None:
+        """Reset cached `skills_metadata` when the agent creates or edits a SKILL.md file."""
+        messages = state.get("messages") or []
+        for msg in reversed(messages):
+            if not isinstance(msg, AIMessage):
+                continue
+            for tc in getattr(msg, "tool_calls", None) or ():
+                if tc.get("name") in ("write_file", "edit_file", "delete_file"):
+                    args = tc.get("args") or {}
+                    target = str(args.get("file_path") or args.get("path") or "")
+                    if "/skills/" in target or target.endswith("SKILL.md"):
+                        self._cached_live_skills = None
+                        return {"skills_metadata": None}
+            break
+        return None
+
+    async def aafter_agent(
+        self,
+        state: sdk_skills.SkillsState,
+        runtime: Runtime,
+    ) -> dict[str, Any] | None:
+        """Async reset of cached `skills_metadata` when a skill file is created or edited."""
+        return self.after_agent(state, runtime)
+
 
 __all__ = [
     "PluginSkillsMiddleware",
+    "TALKOPS_SKILLS_SYSTEM_PROMPT",
     "discover_skill_dirs",
     "load_namespaced_skills",
 ]

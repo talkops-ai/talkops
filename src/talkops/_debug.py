@@ -1,6 +1,20 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Shared debug-logging configuration for verbose file-based tracing.
 
-When the `OPSCODE_DEBUG` environment variable is set, modules that handle
+When the `TALKOPS_DEBUG` environment variable is set, modules that handle
 streaming or remote communication can enable detailed file-based logging. This
 helper centralizes the setup so the env-var name, file path, and format are
 defined in one place.
@@ -20,6 +34,7 @@ from talkops.config.env_vars import (
     LOG_LEVEL,
     is_env_truthy,
 )
+from talkops.utils.logger import get_logger
 
 _DEBUG_HANDLER_ATTR = "_talkops_debug_handler"
 LOG_LEVELS = {
@@ -36,8 +51,6 @@ the Debug Console's level filter so severity ordering is never re-derived from
 hardcoded integers.
 """
 
-from talkops.utils.logger import get_logger
-
 logger = get_logger(__name__)
 
 
@@ -45,7 +58,7 @@ def resolve_log_level(*, debug_enabled: bool | None = None) -> int:
     """Resolve the configured runtime logging level.
 
     Args:
-        debug_enabled: Whether `OPSCODE_DEBUG` is truthy. When omitted,
+        debug_enabled: Whether `TALKOPS_DEBUG` is truthy. When omitted,
             the current environment is checked.
 
     Returns:
@@ -71,20 +84,20 @@ def resolve_log_level(*, debug_enabled: bool | None = None) -> int:
 
 
 def configure_debug_logging(target: logging.Logger) -> None:
-    """Attach a file handler to *target* when `OPSCODE_DEBUG` is set.
+    """Attach a file handler to *target* when `TALKOPS_DEBUG` is set.
 
     Intended to be called once on the `talkops` package logger; child
     module loggers reach the same file via propagation, so individual modules do
     not configure logging themselves.
 
     The log file defaults to `DEFAULT_DEBUG_FILE` but can be overridden with
-    `OPSCODE_DEBUG_FILE`. The handler appends (`mode='a'`) so logs
+    `TALKOPS_DEBUG_FILE`. The handler appends (`mode='a'`) so logs
     are preserved across separate process runs. Calling this again with the same
     resolved path is a no-op: the existing tagged handler is reused rather than
     stacking duplicates. If the resolved path changes, the stale handler is
     closed and replaced.
 
-    Does nothing when `OPSCODE_DEBUG` is not truthy (see `is_env_truthy`).
+    Does nothing when `TALKOPS_DEBUG` is not truthy (see `is_env_truthy`).
 
     Args:
         target: Logger to configure.
@@ -130,7 +143,7 @@ def installed_debug_log_path() -> Path | None:
     """Return the path of the active debug log file, or `None` if not logging.
 
     Reflects the file handler actually attached by `configure_debug_logging`,
-    not the current `OPSCODE_DEBUG` env value. The two diverge when the
+    not the current `TALKOPS_DEBUG` env value. The two diverge when the
     variable is set after import — e.g. via a project/global `.env` loaded during
     settings bootstrap — in which case the variable reads truthy but no handler
     was installed and no log file exists. Callers that surface "full error in

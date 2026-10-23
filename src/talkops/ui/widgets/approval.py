@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Approval widget for HITL - using standard Textual patterns."""
 
 from __future__ import annotations
@@ -5,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from talkops.utils.logger import get_logger
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual import events, on
@@ -15,20 +28,19 @@ from textual.content import Content
 from textual.message import Message
 from textual.widgets import Button, Input, Static, TextArea
 
-from talkops.ui.widgets.modal_base import OpsModalScreen, escape_markup as escape
+from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.ui.widgets.modal_base import escape_markup as escape
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
 import uuid
 
-from talkops.ui import theme
 from talkops.config.settings import (
     get_glyphs,
     is_ascii_mode,
 )
-from talkops.ui.widgets.tool_renderers import get_renderer, render_tool_approval
-from talkops.ui.widgets.diff import compose_diff_lines
 from talkops.security.unicode_security import (
     check_url_safety,
     detect_dangerous_unicode,
@@ -39,6 +51,9 @@ from talkops.security.unicode_security import (
     strip_dangerous_unicode,
     summarize_issues,
 )
+from talkops.ui import theme
+from talkops.ui.widgets.diff import compose_diff_lines
+from talkops.ui.widgets.tool_renderers import get_renderer, render_tool_approval
 
 logger = get_logger(__name__)
 
@@ -239,6 +254,7 @@ class ApprovalMenu(Container):
             call_id: str = "",
             comment: str = "",
         ) -> None:
+            """Initialize Decided."""
             super().__init__()
             self.decision = decision
             # For backwards compatibility with legacy callers
@@ -261,6 +277,7 @@ class ApprovalMenu(Container):
         is_prod: bool | None = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize ApprovalMenu."""
         menu_id = id if (id and id != "approval-menu") else f"approval-menu-{uuid.uuid4().hex[:8]}"
         super().__init__(id=menu_id, classes="approval-menu", **kwargs)
 
@@ -934,6 +951,7 @@ class ApprovalDecided(Message):
         call_id: str,
         comment: str = "",
     ) -> None:
+        """Initialize ApprovalDecided."""
         super().__init__()
         self.approved = approved
         self.tool_name = tool_name
@@ -990,12 +1008,14 @@ class ApprovalModalScreen(OpsModalScreen[ApprovalDecided]):
         args: dict[str, Any],
         **kwargs: Any,
     ) -> None:
+        """Initialize ApprovalModalScreen."""
         super().__init__(**kwargs)
         self._tool_name = tool_name
         self._call_id = call_id
         self._args = args
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         self.set_modal_title("Tool Execution Approval")
         self.set_modal_subtitle([
@@ -1005,6 +1025,7 @@ class ApprovalModalScreen(OpsModalScreen[ApprovalDecided]):
         ])
 
     def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on ApprovalModalScreen."""
         rendered = render_tool_approval(self._tool_name, self._args)
         yield Static(
             Content.from_markup(
@@ -1035,6 +1056,7 @@ class ApprovalModalScreen(OpsModalScreen[ApprovalDecided]):
 
     @on(Button.Pressed, "#btn-modal-approve")
     def action_approve(self) -> None:
+        """Execute the approve action."""
         comment = ""
         try:
             comment = self.query_one("#modal-comment", TextArea).text
@@ -1044,6 +1066,7 @@ class ApprovalModalScreen(OpsModalScreen[ApprovalDecided]):
 
     @on(Button.Pressed, "#btn-modal-reject")
     def action_reject(self) -> None:
+        """Execute the reject action."""
         comment = ""
         try:
             comment = self.query_one("#modal-comment", TextArea).text

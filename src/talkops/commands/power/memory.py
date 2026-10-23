@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """``/memory`` (``/remember``) — Conversation learning extraction and memory management.
 
 ``/remember`` is an alias for ``/skill:remember`` which extracts learnings
@@ -6,12 +20,12 @@ from conversation history into persistent memory (AGENTS.md) or skills.
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from talkops.memory.store import MemoryStore
@@ -36,26 +50,32 @@ class MemoryHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/memory"
 
     @property
     def aliases(self) -> tuple[str, ...]:
+        """Return alternative slash command aliases."""
         return ()
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     @property
     def model_facing_description(self) -> str | None:
+        """Return the description exposed to the LLM for command recommendations."""
         return (
             "Recommend this when the user has corrected the agent, established "
             "project conventions, or solved a complex setup and wants to persist "
@@ -63,6 +83,7 @@ class MemoryHandler(BaseCommandHandler):
         )
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         from talkops.memory.store import MemoryStore
 
         args = ctx.args.strip()
@@ -300,21 +321,26 @@ class RememberHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/remember"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         memory_handler = MemoryHandler()
         return await memory_handler._handle_skill_remember(ctx, ctx.args.strip())
 

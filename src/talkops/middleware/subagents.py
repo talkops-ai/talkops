@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Middleware that manages subagent metadata, delegation rules, and system-prompt injection."""
 
 from __future__ import annotations
@@ -41,6 +55,7 @@ class SubagentsMiddleware(AgentMiddleware):
         *,
         planning_mode: bool = False,
     ) -> None:
+        """Initialize SubagentsMiddleware."""
         super().__init__()
         self.planning_mode = planning_mode
         self._registry: dict[str, SubagentMetadata] = {}
@@ -123,7 +138,8 @@ class SubagentsMiddleware(AgentMiddleware):
             for meta in builtin_agents:
                 name = meta.get("name", "")
                 desc = meta.get("description", "No description provided.")
-                lines.append(f"- **`{name}`**: {desc}")
+                mode_note = " *(mode: `fork` — inherits parent conversation)*" if meta.get("mode") == "fork" else ""
+                lines.append(f"- **`{name}`**: {desc}{mode_note}")
             lines.append("\n*Invocation Format:*")
             lines.append('`task(description="...", subagent_type="<subagent_name>")`')
 
@@ -134,27 +150,19 @@ class SubagentsMiddleware(AgentMiddleware):
             lines.append(
                 "Plugin-provided subagents MUST be triggered through the `js_eval` Code Interpreter "
                 "tool using the embedded `task()` JavaScript primitive. This enables programmatic fan-out, "
-                "batching, structured JSON schema verification, and memory isolation.\n"
+                "batching, multi-stage filtering, and memory isolation.\n"
             )
             for meta in plugin_agents:
                 name = meta.get("name", "")
                 desc = meta.get("description", "No description provided.")
-                source = meta.get("source", "")
-                skills = meta.get("skills")
-
-                lines.append(f"- **`{name}`**: {desc}")
-                if source:
-                    lines.append(f"  - Source: `{source}`")
-                if skills:
-                    skill_str = ", ".join(f"`{s}`" for s in skills)
-                    lines.append(f"  - Skills: {skill_str}")
+                mode_note = " *(mode: `fork` — inherits parent conversation)*" if meta.get("mode") == "fork" else ""
+                lines.append(f"- **`{name}`**: {desc}{mode_note}")
 
             lines.append("\n*Invocation Format (via `js_eval`):*")
             lines.append("```javascript")
             lines.append("const result = await task({")
             lines.append('  description: "...",')
-            lines.append('  subagentType: "<subagent_name>",')
-            lines.append("  responseSchema: { ... }")
+            lines.append('  subagentType: "<subagent_name>"')
             lines.append("});")
             lines.append("result;")
             lines.append("```")
@@ -164,10 +172,16 @@ class SubagentsMiddleware(AgentMiddleware):
         lines.append("1. **Direct Built-in Call**: For Built-in subagents, invoke `task(...)` directly.")
         lines.append("2. **Plugin Parallelization**: For multiple resources or files, prefer `js_eval` with `Promise.all`.")
         lines.append(
-            "3. **Synthesize Before Delegating (No Lazy Delegation)**: Subagents do not share your conversation history. "
+            "3. **Synthesize Before Delegating (No Lazy Delegation)**: Isolated subagents do not share your conversation history. "
             "NEVER write `'based on your findings'` or `'look at the research above'`. Read prior outputs, synthesize the root cause, "
             "and write a self-contained delegation brief containing exact file paths, line numbers, cloud resource ARNs/IDs, "
-            "account/region/namespace context, and the specific verification or remediation objective.\n"
+            "account/region/namespace context, and the specific verification or remediation objective."
+        )
+        lines.append(
+            "4. **Adversarial Propose-Probe Verification**: Before recommending high-blast-radius production mutations "
+            "(e.g., IAM policy rewrites, VPC route changes, database failovers, or cluster-wide rollouts), use a 2-pass "
+            "verification pattern in `js_eval` when appropriate: have a specialist subagent propose the plan/root cause, "
+            "and a second pass verify the evidence and check for blast-radius regressions.\n"
         )
 
         lines.append("\n---\n")
@@ -205,6 +219,7 @@ class SubagentsMiddleware(AgentMiddleware):
                     "name": meta.get("name", ""),
                     "description": meta.get("description", ""),
                     "source": meta.get("source", ""),
+                    "mode": meta.get("mode", "isolated"),
                     "skills": meta.get("skills"),
                     "tools": meta.get("tools"),
                     "is_plugin": self._is_plugin_subagent(meta),
@@ -218,6 +233,7 @@ class SubagentsMiddleware(AgentMiddleware):
         state: AgentState,
         runtime: Runtime,
     ) -> dict[str, Any] | None:
+        """Execute asynchronous pre-agent lifecycle hook."""
         return self.before_agent(state, runtime)
 
     def wrap_model_call(
@@ -225,6 +241,7 @@ class SubagentsMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse | ExtendedModelResponse:
+        """Intercept and wrap synchronous model invocation."""
         if self._is_disabled_in_runtime(getattr(request, "runtime", None)):
             return handler(request)
         block = self._build_prompt_block()
@@ -244,6 +261,7 @@ class SubagentsMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse | ExtendedModelResponse:
+        """Intercept and wrap asynchronous model invocation."""
         if self._is_disabled_in_runtime(getattr(request, "runtime", None)):
             return await handler(request)
         block = self._build_prompt_block()

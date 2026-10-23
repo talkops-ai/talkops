@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Enhanced diff widget for displaying unified diffs with line numbers and CSS-driven background highlights."""
 
 from __future__ import annotations
@@ -10,8 +24,8 @@ from textual.containers import Vertical
 from textual.content import Content
 from textual.widgets import Static
 
-from talkops.ui import theme
 from talkops.config.settings import get_glyphs, is_ascii_mode
+from talkops.ui import theme
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -28,13 +42,13 @@ DEFAULT_DIFF_PREVIEW_LINES = 33
 DEFAULT_DIFF_LINE_WIDTH = 104
 """Default character width for full-row diff background tint padding."""
 
-_DIFF_ADD_FG = "#86efac"
-_DIFF_ADD_SIGN = "#4ade80"
-_DIFF_ADD_BG = "#0e340f"
+_DIFF_ADD_FG = "#6ee7b7"
+_DIFF_ADD_SIGN = "#34d399"
+_DIFF_ADD_BG = "#06281e"
 
-_DIFF_DEL_FG = "#fca5a5"
-_DIFF_DEL_SIGN = "#f87171"
-_DIFF_DEL_BG = "#350d0e"
+_DIFF_DEL_FG = "#fda4af"
+_DIFF_DEL_SIGN = "#fb7185"
+_DIFF_DEL_BG = "#2d1219"
 
 
 def compute_line_diff(

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive agent selector screen for the ``/agents`` command.
 
 Modal dialog for selecting agents discovered from ``~/.talkops/``, supports
@@ -11,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from talkops.utils.logger import get_logger
 from typing import ClassVar
 
 from textual.binding import Binding, BindingType
@@ -26,9 +39,9 @@ from talkops.agent.config import (
     clear_default_agent,
     save_default_agent,
 )
-
 from talkops.config.settings import get_glyphs
 from talkops.ui.widgets.modal_base import OpsModalScreen, format_modal_option_row
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -65,7 +78,7 @@ class AgentSelectorScreen(OpsModalScreen[str | None]):
     AgentSelectorScreen OptionList {
         height: auto;
         max-height: 16;
-        background: $background;
+        background: transparent;
         border: solid $primary 20%;
     }
 
@@ -108,6 +121,7 @@ class AgentSelectorScreen(OpsModalScreen[str | None]):
         self._default_agent = default_agent
 
     def compose_modal(self):
+        """Execute compose modal on AgentSelectorScreen."""
         yield Static("Select Agent", classes="agent-selector-title")
         if self._agent_names:
             yield Static(
@@ -134,6 +148,7 @@ class AgentSelectorScreen(OpsModalScreen[str | None]):
         yield Static(help_text, classes="agent-selector-help", id="agent-help")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         glyphs = get_glyphs()
         if self._agent_names:
@@ -154,6 +169,7 @@ class AgentSelectorScreen(OpsModalScreen[str | None]):
             self.set_modal_subtitle([("esc", "close")])
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         self.call_after_refresh(self._reformat_options)
 
     def _row_width(self) -> int:

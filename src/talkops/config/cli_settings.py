@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Structured CLI settings and workspace trust manager for TalkOps.
 
 Provides persistent configuration and workspace trust management:
@@ -24,17 +38,17 @@ Provides persistent configuration and workspace trust management:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import contextlib
 import copy
-from dataclasses import dataclass, field
 import json
 import os
-from pathlib import Path
 import threading
 import time
-from typing import Any
 import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 from talkops.config import paths
 from talkops.utils.logger import get_logger
@@ -72,6 +86,7 @@ class SettingsValidationError(SettingsError):
     """Raised when ``settings.json`` contains invalid field types or values."""
 
     def __init__(self, errors: Sequence[str]) -> None:
+        """Initialize SettingsValidationError."""
         self.errors = list(errors)
         joined = "; ".join(self.errors)
         super().__init__(f"invalid settings: {joined}")
@@ -142,9 +157,11 @@ class PermissionsSetting:
     ask: list[str] = field(default_factory=list)
 
     def is_empty(self) -> bool:
+        """Return whether empty."""
         return not (self.allow or self.deny or self.ask)
 
     def to_sparse_dict(self) -> dict[str, Any]:
+        """Convert instance to sparse dict."""
         out: dict[str, Any] = {}
         if self.allow:
             out["allow"] = list(self.allow)
@@ -156,6 +173,7 @@ class PermissionsSetting:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any] | dict[str, Any]) -> tuple[PermissionsSetting, list[str]]:
+        """Construct instance from dict."""
         errors: list[str] = []
         allow: list[str] = []
         deny: list[str] = []
@@ -870,6 +888,7 @@ class CliSettingsManager:
     """
 
     def __init__(self, settings_path: Path | None = None) -> None:
+        """Initialize CliSettingsManager."""
         self._explicit_path = settings_path
         self._lock = threading.RLock()
         self.settings: CliSetting = default_cli_settings()
@@ -881,6 +900,7 @@ class CliSettingsManager:
 
     @property
     def settings_path(self) -> Path:
+        """Return the settings path property."""
         return self._explicit_path if self._explicit_path is not None else resolve_cli_settings_path()
 
     def init_cli_settings(self) -> CliSetting:

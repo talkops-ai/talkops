@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Canonical internal messages for goal state and work continuation.
 
 Provides the goal-state notice system used by ``GoalToolsMiddleware`` to keep
@@ -21,13 +35,15 @@ Key concepts:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import hashlib
 import html
 import json
 import re
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, TypedDict, cast
 import uuid
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, TypedDict, cast
+
+from langchain_core.messages import HumanMessage
 
 from talkops._constants import SYSTEM_MESSAGE_PREFIX
 from talkops.state.goal_state_limits import (
@@ -275,8 +291,6 @@ def build_goal_continuation(
         ValueError: If unsaved text is supplied for a non-creation transition, or
             if criteria are supplied without an objective.
     """
-    from langchain_core.messages import HumanMessage
-
     if unsaved_objective is not None and transition != "created":
         msg = "unsaved objective fallback is only valid for goal creation"
         raise ValueError(msg)
@@ -524,8 +538,6 @@ def build_goal_state_notice(
         identity metadata. Embeds objective, criteria, and status notes with
         clear data tags and bounds.
     """
-    from langchain_core.messages import HumanMessage
-
     projected = project_goal_state(state)
     status = projected["goal_status"] or "not set"
     is_actionable = projected["goal_actionable"]
@@ -715,8 +727,6 @@ def is_oversized_goal_state_message(message: object) -> bool:
 
 def superseded_goal_state_placeholder(message: object) -> HumanMessage:
     """Build a bounded same-index stand-in for an oversized prior notice."""
-    from langchain_core.messages import HumanMessage
-
     return HumanMessage(
         content=(
             f"{SYSTEM_MESSAGE_PREFIX} An oversized superseded goal/rubric state "
@@ -740,8 +750,6 @@ def build_fork_notice_message(
     and that any prior subagents or background tasks in the inherited history
     belong to the source conversation.
     """
-    from langchain_core.messages import HumanMessage
-
     resolved_id = event_id or f"fork-notice-{uuid.uuid4().hex}"
     content = (
         "<fork_notice>\n"

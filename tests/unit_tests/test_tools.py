@@ -1,13 +1,31 @@
-"""Unit tests for tool catalog and goal tools."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for tool catalog and goal tools."""
 import json
+import sys
+from typing import Any
+
 import pytest
-from talkops.tools.registry import ToolRegistry
+
 from talkops.tools.catalog import register_all_tools
 from talkops.tools.goal_tools import _goal_snapshot, _rubric_snapshot
+from talkops.tools.registry import ToolRegistry
 
 
 def test_tool_registry():
+    """Verify tool registry."""
     register_all_tools()
     registry = ToolRegistry.get_instance()
     tool = registry.build_tool("get_current_thread_id")
@@ -15,6 +33,7 @@ def test_tool_registry():
 
 
 def test_goal_and_rubric_snapshots():
+    """Verify goal and rubric snapshots."""
     state = {
         "_goal_objective": "Configure AWS CloudFront CDN",
         "_goal_status": "active",
@@ -33,7 +52,7 @@ def test_goal_and_rubric_snapshots():
 
 @pytest.mark.asyncio
 async def test_goal_tools_middleware_notice_generation_and_deduplication():
-    from typing import Any
+    """Verify goal tools middleware notice generation and deduplication."""
     from talkops.middleware.goal_tools import GoalToolsMiddleware
 
     middleware = GoalToolsMiddleware()
@@ -103,7 +122,6 @@ def test_web_search_marker_and_factory(monkeypatch):
     assert is_web_search_tool(fetch_url) is False
 
     # Calling web_search without Tavily key returns helpful error dictionary
-    import sys
 
     ws_mod = sys.modules["talkops.tools.web_search"]
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)

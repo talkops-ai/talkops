@@ -1,9 +1,25 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Root pytest configuration — markers, environment sandboxing, and path-based marker injection."""
 
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
+
 import pytest
 
 
@@ -15,7 +31,6 @@ def clean_environment(monkeypatch, tmp_path):
 
     # Sandbox configuration file and state directory in isolated temp location
     # (avoid placing .talkops in tmp_path directly to prevent project root marker collisions)
-    import tempfile
     test_temp_obj = tempfile.TemporaryDirectory(prefix="talkops_test_data_")
     test_data_dir = Path(test_temp_obj.name) / ".talkops"
     test_data_dir.mkdir(parents=True, exist_ok=True)
@@ -36,6 +51,8 @@ def clean_environment(monkeypatch, tmp_path):
     monkeypatch.setattr("talkops.config.toml_config._RECENT_PROFILES_FILE", test_state_dir / "recent_cloud_profiles.json")
     for k in (
         "TALKOPS_CONTROL_PLANE_URL",
+        "TALKOPS_CONTROL_PLANE_SERVICE_KEY",
+        "TALKOPS_CONTROL_PLANE_JWKS_URL",
         "TALKOPS_API_KEY",
         "TALKOPS_SERVER_API_KEY",
         "TALKOPS_SERVER_URL",

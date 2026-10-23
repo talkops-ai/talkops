@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Middleware for injecting local environment, cloud context, and workspace status into system prompt.
 
 Detects OS, git state, project structure, package managers, runtimes,
@@ -11,9 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import os
 import json
 import logging
+import os
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -196,12 +210,16 @@ _build_aws_context = _build_cloud_context
 
 @runtime_checkable
 class _ExecutableBackend(Protocol):
-    def execute(self, command: str, *, timeout: int | None = None) -> Any: ...
+    def execute(self, command: str, *, timeout: int | None = None) -> Any: 
+        """Execute the command handler with the provided command context."""
+        ...
 
 
 @runtime_checkable
 class _AsyncExecutableBackend(Protocol):
-    async def aexecute(self, command: str, *, timeout: int | None = None) -> Any: ...
+    async def aexecute(self, command: str, *, timeout: int | None = None) -> Any: 
+        """Execute aexecute on _AsyncExecutableBackend."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +352,7 @@ class LocalContextMiddleware(AgentMiddleware):
         mcp_servers: Sequence[Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize LocalContextMiddleware."""
         super().__init__()
         self.backend = backend
         self.working_dir = working_dir
@@ -402,6 +421,7 @@ class LocalContextMiddleware(AgentMiddleware):
         state: AgentState,
         runtime: Runtime,
     ) -> dict[str, Any] | None:
+        """Execute synchronous pre-agent lifecycle hook."""
         raw_event = state.get("_summarization_event")
         if raw_event is not None:
             event = cast("SummarizationEvent", raw_event)
@@ -429,6 +449,7 @@ class LocalContextMiddleware(AgentMiddleware):
         state: AgentState,
         runtime: Runtime,
     ) -> dict[str, Any] | None:
+        """Execute asynchronous pre-agent lifecycle hook."""
         raw_event = state.get("_summarization_event")
         if raw_event is not None:
             event = cast("SummarizationEvent", raw_event)
@@ -469,6 +490,7 @@ class LocalContextMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
+        """Intercept and wrap synchronous model invocation."""
         modified_request = self._get_modified_request(request)
         return handler(modified_request or request)
 
@@ -477,6 +499,7 @@ class LocalContextMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
+        """Intercept and wrap asynchronous model invocation."""
         modified_request = self._get_modified_request(request)
         return await handler(modified_request or request)
 

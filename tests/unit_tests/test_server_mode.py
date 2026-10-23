@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit and integration tests for TalkOps Central Server Mode.
 
 Covers:
@@ -18,21 +32,23 @@ Covers:
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from langchain_core.messages import HumanMessage
 from langgraph_sdk import Auth
 
 from talkops.cli.main import build_parser, main
 from talkops.server._server_config import ServerConfig
-from talkops.server.server import generate_langgraph_json
 from talkops.server.auth import (
     PlaceholderTokenAuthProvider,
-    authenticate_request,
     auth,
+    authenticate_request,
     clear_auth_caches,
     exchange_api_key_for_temp_token,
     issue_temporary_jwt,
@@ -43,7 +59,9 @@ from talkops.server.auth import (
     verify_jwt_token,
     verify_token_with_control_plane,
 )
-from talkops.server.webhooks_app import app as full_server_app, create_webhooks_only_app
+from talkops.server.server import generate_langgraph_json
+from talkops.server.webhooks_app import app as full_server_app
+from talkops.server.webhooks_app import create_webhooks_only_app
 from talkops.state import session as session_mod
 from talkops.state.postgres_session import get_postgres_session_uri
 from talkops.state.remote_session import (
@@ -53,7 +71,6 @@ from talkops.state.remote_session import (
     set_remote_client_context,
 )
 
-
 # ── 1. LangGraph Custom Auth & Multi-User Isolation Tests ─────────────────
 
 
@@ -61,6 +78,7 @@ class TestLangGraphCustomAuth:
     """Verify LangGraph custom auth handlers and PlaceholderTokenAuthProvider."""
 
     def test_auth_covers_all_langgraph_handler_paths(self) -> None:
+        """Verify auth covers all langgraph handler paths."""
         assert auth._authenticate_handler is not None
         expected_resources = {
             ("threads", "create"),
@@ -77,6 +95,7 @@ class TestLangGraphCustomAuth:
 
     @pytest.mark.asyncio
     async def test_placeholder_auth_bearer_token_and_explicit_user(self) -> None:
+        """Verify placeholder auth bearer token and explicit user."""
         provider = PlaceholderTokenAuthProvider()
         headers = {
             "authorization": "Bearer sk-ops-secret-token-12345",
@@ -89,6 +108,7 @@ class TestLangGraphCustomAuth:
 
     @pytest.mark.asyncio
     async def test_placeholder_auth_derives_deterministic_user_from_token(self) -> None:
+        """Verify placeholder auth derives deterministic user from token."""
         provider = PlaceholderTokenAuthProvider()
         u1 = await provider.authenticate(
             headers={"authorization": "Bearer token-alpha-long-secret-string-1234567890"},
@@ -108,6 +128,7 @@ class TestLangGraphCustomAuth:
 
     @pytest.mark.asyncio
     async def test_placeholder_auth_static_api_keys_map(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify placeholder auth static api keys map."""
         monkeypatch.setenv(
             "TALKOPS_SERVER_API_KEYS",
             json.dumps({"alice": "sk-alice", "bob": "sk-bob"}),
@@ -130,6 +151,7 @@ class TestLangGraphCustomAuth:
     async def test_placeholder_auth_token_mode_rejects_anonymous(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify placeholder auth token mode rejects anonymous."""
         monkeypatch.delenv("TALKOPS_AUTH_MODE", raising=False)
         provider = PlaceholderTokenAuthProvider()
         with pytest.raises(Auth.exceptions.HTTPException) as exc_info:
@@ -142,6 +164,7 @@ class TestLangGraphCustomAuth:
 
     @pytest.mark.asyncio
     async def test_webhooks_endpoint_bypasses_operator_bearer_auth(self) -> None:
+        """Verify webhooks endpoint bypasses operator bearer auth."""
         user = await authenticate_request(
             path="/webhooks/pagerduty",
             headers={"x-pagerduty-signature": "v1=deadbeef"},
@@ -153,6 +176,7 @@ class TestLangGraphCustomAuth:
     async def test_internal_webhook_header_authenticates_with_matching_token(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify internal webhook header authenticates with matching token."""
         monkeypatch.setenv("TALKOPS_INTERNAL_WEBHOOK_TOKEN", "top-secret-internal")
         monkeypatch.setenv("TALKOPS_AUTH_MODE", "token")
         user = await authenticate_request(
@@ -173,6 +197,7 @@ class TestLangGraphCustomAuth:
     async def test_thread_handlers_stamp_owner_and_search_filter(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify thread handlers stamp owner and search filter."""
         monkeypatch.setenv("TALKOPS_AUTH_MODE", "token")
         mock_ctx = MagicMock()
         mock_ctx.user.identity = "alice"
@@ -195,6 +220,7 @@ class TestLangGraphCustomAuth:
 
     @pytest.mark.asyncio
     async def test_store_handler_isolates_user_namespaces_and_preserves_system_namespaces(self) -> None:
+        """Verify store handler isolates user namespaces and preserves system namespaces."""
         mock_ctx = MagicMock()
         mock_ctx.user.identity = "alice"
 
@@ -217,6 +243,7 @@ class TestLangGraphCustomAuth:
     async def test_temporary_jwt_issuance_and_verification(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify temporary jwt issuance and verification."""
         monkeypatch.setenv("TALKOPS_JWT_SECRET", "test-super-secret-hmac-key-for-talkops-32bytes")
         token_resp = issue_temporary_jwt(
             user_id="alice@company.com",
@@ -257,6 +284,7 @@ class TestLangGraphCustomAuth:
     async def test_control_plane_token_introspection_with_ttl_cache(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify control plane token introspection with ttl cache."""
         clear_auth_caches()
         monkeypatch.setenv("TALKOPS_CONTROL_PLANE_URL", "https://cp.talkops.internal")
         monkeypatch.setenv("TALKOPS_CONTROL_PLANE_SERVICE_KEY", "cp-svc-secret")
@@ -341,8 +369,6 @@ async def _seed_checkpoint_thread(
     cwd: str = "/srv/ops",
 ) -> None:
     """Seed a realistic LangGraph checkpoint + thread summary row in SQLite."""
-    from datetime import UTC, datetime
-    from langchain_core.messages import HumanMessage
     from langgraph.checkpoint.base import empty_checkpoint
 
     now_iso = datetime.now(UTC).isoformat()
@@ -380,6 +406,7 @@ class TestMultiUserSessionIsolation:
         self, isolated_sqlite_db: Path
     ) -> None:
         # Create threads for alice, bob, and webhook
+        """Verify multi user threads isolated and webhook threads shared."""
         await _seed_checkpoint_thread(
             "thread-alice-1",
             title="Alice EKS Investigation",
@@ -432,6 +459,7 @@ class TestServerRestApiAndRemoteBackend:
         self, isolated_sqlite_db: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Seed threads in the server's DB
+        """Verify server threads rest api and remote session backend."""
         await _seed_checkpoint_thread(
             "srv-alice-100",
             title="Alice Prod Outage",
@@ -509,6 +537,7 @@ class TestServerRestApiAndRemoteBackend:
 
     @pytest.mark.asyncio
     async def test_webhooks_only_app_isolates_webhook_routes(self) -> None:
+        """Verify webhooks only app isolates webhook routes."""
         webhook_app = create_webhooks_only_app()
         transport = httpx.ASGITransport(app=webhook_app)
         async with httpx.AsyncClient(transport=transport, base_url="http://webhook-listener") as client:
@@ -528,6 +557,7 @@ class TestServerConfigAndLifecycle:
     """Verify langgraph.json generation, server scaffolding, and dual-port support."""
 
     def test_generate_langgraph_json_includes_store_and_auth(self, tmp_path: Path) -> None:
+        """Verify generate langgraph json includes store and auth."""
         lg_path = generate_langgraph_json(
             tmp_path,
             enable_store=True,
@@ -541,6 +571,7 @@ class TestServerConfigAndLifecycle:
     def test_postgres_uri_resolved_from_discrete_env_vars(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify postgres uri resolved from discrete env vars."""
         monkeypatch.delenv("TALKOPS_POSTGRES_URI", raising=False)
         monkeypatch.delenv("POSTGRES_URI", raising=False)
         monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -561,6 +592,7 @@ class TestServerConfigAndLifecycle:
     async def test_start_server_and_get_agent_remote_mode_skips_local_subprocess(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify start server and get agent remote mode skips local subprocess."""
         from talkops.cli.server_manager import start_server_and_get_agent
 
         clear_remote_client_context()
@@ -587,6 +619,7 @@ class TestCliServerAndClientFlags:
     """Verify CLI parser and command routing for central server and remote client."""
 
     def test_serve_parser_accepts_webhook_port_postgres_and_auth_flags(self) -> None:
+        """Verify serve parser accepts webhook port postgres and auth flags."""
         parser = build_parser()
         args = parser.parse_args(
             [
@@ -613,6 +646,7 @@ class TestCliServerAndClientFlags:
     def test_client_flags_forwarded_to_non_interactive_without_local_model(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify client flags forwarded to non interactive without local model."""
         mock_run = MagicMock(return_value=0)
         monkeypatch.setattr("talkops.cli.main.run_non_interactive", mock_run)
         # Simulate missing local model credentials — remote server owns the model
@@ -644,6 +678,7 @@ class TestCliServerAndClientFlags:
     def test_client_flags_forwarded_to_interactive(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify client flags forwarded to interactive."""
         mock_interactive = MagicMock(return_value=0)
         monkeypatch.setattr("talkops.cli.main.run_interactive", mock_interactive)
 
@@ -674,6 +709,7 @@ class TestClientAuthStorageAndCliCommands:
     def test_keyring_bypass_detectors_and_timeout_memoization(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify keyring bypass detectors and timeout memoization."""
         from talkops.auth.storage import (
             memoize_keyring_timeout,
             should_bypass_keyring,
@@ -699,6 +735,7 @@ class TestClientAuthStorageAndCliCommands:
     def test_composite_storage_session_and_provider_keys_0600(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Verify composite storage session and provider keys 0600."""
         from talkops.auth.models import StoredSession, mask_api_key
         from talkops.auth.storage import CompositeCredentialStorage
 
@@ -752,6 +789,7 @@ class TestClientAuthStorageAndCliCommands:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        """Verify cli auth login status token set list remove logout."""
         from talkops.auth import storage as storage_mod
         from talkops.config import paths as paths_mod
 
@@ -845,7 +883,7 @@ class TestClientAuthStorageAndCliCommands:
 
     @pytest.mark.asyncio
     async def test_browser_and_paste_token_acquirer_loopback_and_paste_race(self) -> None:
-        from urllib.parse import parse_qs, urlparse
+        """Verify browser and paste token acquirer loopback and paste race."""
         from talkops.auth.oauth_acquirer import (
             BrowserAndPasteTokenAcquirer,
             extract_code_from_paste,

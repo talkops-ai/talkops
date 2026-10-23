@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Comprehensive unit tests for the TalkOps Server Addon Framework.
 
 Covers:
@@ -60,6 +74,7 @@ def _clean_programmatic_addons() -> Any:
 
 @pytest.mark.asyncio
 async def test_default_profile_enables_builtin_oss_addons_and_preserves_routes() -> None:
+    """Verify default profile enables builtin oss addons and preserves routes."""
     mgr = AddonManager()
     active = mgr.resolve_and_validate()
     active_names = [a.name for a in active]
@@ -107,6 +122,7 @@ async def test_external_repository_addon_discovery_via_entry_points() -> None:
     """Verify addons from a separate repository / wheel load via `entry_points(group='talkops.addons')`."""
 
     class ExternalRepoPagerAddon(BaseServerAddon):
+        """Test suite or helper class for external repo pager addon."""
         name = "external-pager"
         tier = "enterprise"
         version = "2.1.0"
@@ -115,6 +131,7 @@ async def test_external_repository_addon_discovery_via_entry_points() -> None:
         enabled_by_default = False
 
         def get_routes(self) -> list[BaseRoute]:
+            """Provide get routes test helper or fixture."""
             async def _ping(_req: Request) -> JSONResponse:
                 return JSONResponse({"addon": "external-pager", "from": "external-repo"})
 
@@ -389,14 +406,17 @@ class JiraSyncAddon(BaseServerAddon):
 
 @pytest.mark.asyncio
 async def test_programmatic_register_addon_decorator_and_mount_prefix() -> None:
+    """Verify programmatic register addon decorator and mount prefix."""
     @register_addon
     class CustomEchoAddon(BaseServerAddon):
+        """Test suite or helper class for custom echo addon."""
         name = "custom-echo"
         tier = "custom"
         description = "Programmatically registered echo addon"
         capabilities = AddonCapabilities(routes=True)
 
         def get_routes(self) -> list[BaseRoute]:
+            """Provide get routes test helper or fixture."""
             async def _echo(_req: Request) -> JSONResponse:
                 return JSONResponse({"echo": "ok"})
 
@@ -426,6 +446,7 @@ def test_four_tier_configuration_precedence_and_profiles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify four tier configuration precedence and profiles."""
     mgr = AddonManager(project_root=tmp_path)
     discovered = mgr.discover_addons()
 
@@ -471,6 +492,7 @@ class _FakePregelGraph:
     """Fake in-memory compiled LangGraph `Pregel` instance for testing `AgentRunGateway`."""
 
     def __init__(self) -> None:
+        """Initialize _FakePregelGraph."""
         self.states: dict[str, dict[str, Any]] = {}
         self.should_interrupt: bool = False
 
@@ -484,6 +506,7 @@ class _FakePregelGraph:
         context: Any = None,
         **kwargs: Any,
     ) -> Any:
+        """Provide astream test helper or fixture."""
         del stream_mode, subgraphs, context, kwargs
         tid = (config or {}).get("configurable", {}).get("thread_id", "default")
         resume_val = getattr(input_payload, "resume", None)
@@ -522,6 +545,7 @@ class _FakePregelGraph:
         yield ((), "updates", {"agent": {"messages": [msg]}})
 
     async def aget_state(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Provide aget state test helper or fixture."""
         tid = config.get("configurable", {}).get("thread_id", "default")
         return self.states.get(tid, {"values": {"messages": []}})
 
@@ -532,6 +556,7 @@ class _FakePregelGraph:
         *,
         as_node: str | None = None,
     ) -> dict[str, Any]:
+        """Provide aupdate state test helper or fixture."""
         del as_node
         tid = config.get("configurable", {}).get("thread_id", "default")
         self.states[tid] = {"values": dict(values)}
@@ -580,15 +605,18 @@ async def test_agent_run_gateway_zero_loopback_webhook_and_external_hitl_resume(
     # 2. Simulate an external ChatOps addon submitting a run that hits HITL interrupt, then resuming it
     @register_addon
     class ExternalChatOpsAddon(BaseServerAddon):
+        """Test suite or helper class for external chat ops addon."""
         name = "external-chatops"
         tier = "enterprise"
         capabilities = AddonCapabilities(routes=True, gateway_runner=True, event_subscriber=True)
 
         def __init__(self) -> None:
+            """Initialize ExternalChatOpsAddon."""
             super().__init__()
             self.interrupted_threads: list[str] = []
 
         async def on_startup(self, ctx: AddonContext) -> None:
+            """Provide on startup test helper or fixture."""
             await super().on_startup(ctx)
 
             async def _on_interrupt(ev: HookEvent) -> None:
@@ -598,6 +626,7 @@ async def test_agent_run_gateway_zero_loopback_webhook_and_external_hitl_resume(
             ctx.event_bus.subscribe("addon.run.interrupted", _on_interrupt)
 
         def get_routes(self) -> list[BaseRoute]:
+            """Provide get routes test helper or fixture."""
             async def _trigger(req: Request) -> JSONResponse:
                 body = await req.json()
                 assert self._ctx is not None
@@ -670,6 +699,7 @@ def test_cli_serve_addons_json_and_addons_config_flag(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # 1. Default profile addons listing
+    """Verify cli serve addons json and addons config flag."""
     code1 = cli_main(["serve", "addons", "--output-format", "json"])
     assert code1 == 0
     out1 = json.loads(capsys.readouterr().out)

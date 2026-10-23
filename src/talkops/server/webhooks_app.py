@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Starlette custom routes application (`http.app`) mounted into the LangGraph Agent Server.
 
 Exposes:
@@ -29,11 +43,17 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
+from talkops.addons.builtin.webhooks import (
+    get_webhook_dispatcher as _addon_get_webhook_dispatcher,
+)
+from talkops.addons.builtin.webhooks import (
+    set_webhook_dispatcher as _addon_set_webhook_dispatcher,
+)
 from talkops.server.auth import get_auth_mode, resolve_user_from_headers
-from talkops.tasks.manager import get_background_task_manager
 from talkops.state.postgres_session import get_postgres_session_uri
 from talkops.state.session import (
-     bind_user_context,
+    SessionManager,
+    bind_user_context,
     delete_thread,
     find_similar_threads,
     fork_thread,
@@ -42,12 +62,8 @@ from talkops.state.session import (
     list_threads,
     set_thread_title,
     thread_exists,
-    SessionManager,
 )
-from talkops.addons.builtin.webhooks import (
-    get_webhook_dispatcher as _addon_get_webhook_dispatcher,
-    set_webhook_dispatcher as _addon_set_webhook_dispatcher,
-)
+from talkops.tasks.manager import get_background_task_manager
 from talkops.webhooks.dispatcher import WebhookDispatcher
 
 

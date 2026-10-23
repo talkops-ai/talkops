@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for the autocomplete card: match highlighting, aligned rows, selection."""
 
 from __future__ import annotations
@@ -9,6 +23,7 @@ from rich.cells import cell_len
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.content import Content
+from textual.events import Key
 
 from talkops.ui.widgets.chat_input import (
     ChatInput,
@@ -28,6 +43,7 @@ class _ThemedApp(App):
     """Minimal app carrying the TalkOps theme variables ChatInput's CSS uses."""
 
     def __init__(self) -> None:
+        """Initialize _ThemedApp."""
         super().__init__()
         from talkops.ui.theme import register_app_themes
 
@@ -35,11 +51,13 @@ class _ThemedApp(App):
         self.theme = "talkops-dark"
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
+        """Provide get theme variable defaults test helper or fixture."""
         from talkops.ui.theme import get_css_variable_defaults, get_theme_colors
 
         return get_css_variable_defaults(colors=get_theme_colors(self))
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield ChatInput(id="ci")
 
 
@@ -51,6 +69,7 @@ def unicode_glyphs(monkeypatch):
 
 @pytest.fixture
 def ascii_glyphs(monkeypatch):
+    """Provide ascii glyphs test helper or fixture."""
     monkeypatch.setattr(settings, "_glyphs_cache", settings.ASCII_GLYPHS)
 
 
@@ -63,28 +82,34 @@ def _styled(content: Content) -> dict[str, str]:
 
 
 def test_match_prefix():
+    """Verify match prefix."""
     assert _match_spans("pl", "plugins") == [0, 1]
 
 
 def test_match_prefers_contiguous_run():
     # "pl" appears contiguously late in the word; prefer it over p…l.
+    """Verify match prefers contiguous run."""
     assert _match_spans("pl", "apple") == [2, 3]
 
 
 def test_match_subsequence():
+    """Verify match subsequence."""
     assert _match_spans("pg", "plugins") == [0, 3]
 
 
 def test_match_falls_back_when_run_strands_a_char():
     # Run-first takes the "ab" at 4 and strands "c"; a…b…c still matches.
+    """Verify match falls back when run strands a char."""
     assert _match_spans("abc", "axbcab") == [0, 2, 3]
 
 
 def test_match_is_case_insensitive():
+    """Verify match is case insensitive."""
     assert _match_spans("PL", "Plugins") == [0, 1]
 
 
 def test_no_match_or_empty_query():
+    """Verify no match or empty query."""
     assert _match_spans("zz", "plugins") == []
     assert _match_spans("", "plugins") == []
 
@@ -93,17 +118,20 @@ def test_no_match_or_empty_query():
 
 
 def test_label_width_is_longest_label():
+    """Verify label width is longest label."""
     rows = [("/plan", "a"), ("/plugins", "b"), ("/pool", "c")]
     assert completion_label_width(rows, kind="command", width=100) == len("plugins")
 
 
 def test_label_width_counts_argument_hint():
+    """Verify label width counts argument hint."""
     rows = [("/model", "a"), ("/plugins", "b")]
     width = completion_label_width(rows, ["<name>", ""], kind="command", width=100)
     assert width == len("model <name>")
 
 
 def test_label_width_ignores_hints_when_descriptions_would_starve():
+    """Verify label width ignores hints when descriptions would starve."""
     rows = [("/workflow", "a"), ("/plugins", "b")]
     hints = ["[<name> [params]]", ""]
     # 52 - 2 prefix - 22 column - 2 gap = 26 >= 24: hints still count.
@@ -113,11 +141,13 @@ def test_label_width_ignores_hints_when_descriptions_would_starve():
 
 
 def test_label_width_caps_commands_at_48():
+    """Verify label width caps commands at 48."""
     rows = [("/" + "x" * 60, "desc")]
     assert completion_label_width(rows, kind="command", width=200) == 48
 
 
 def test_label_width_fits_plugin_skill_names_without_truncation():
+    """Verify label width fits plugin skill names without truncation."""
     rows = [
         ("/chrome-devtools-plugin:memory-leak-debugging", "Diagnoses memory leaks"),
         ("/aws-core:signing-in-to-aws", "Guides AWS sign-in"),
@@ -128,12 +158,14 @@ def test_label_width_fits_plugin_skill_names_without_truncation():
 
 
 def test_label_width_lets_files_use_free_space():
+    """Verify label width lets files use free space."""
     path = "@src/talkops/ui/widgets/chat_input.py"
     width = completion_label_width([(path, "py")], kind="file", width=100)
     assert width == len(path) - 1  # "@" dropped, no cap at 22
 
 
 def test_completion_kind():
+    """Verify completion kind."""
     assert completion_kind([("@src/app.py", "py")]) == "file"
     assert completion_kind([("/plugins", "x")]) == "command"
 
@@ -142,6 +174,7 @@ def test_completion_kind():
 
 
 def test_rows_align_descriptions(unicode_glyphs):
+    """Verify rows align descriptions."""
     rows = [("/plan", "Plan it"), ("/plugins", "Manage plugins")]
     column = completion_label_width(rows, kind="command", width=80)
     plains = [
@@ -155,6 +188,7 @@ def test_rows_align_descriptions(unicode_glyphs):
 
 
 def test_long_label_gets_ellipsis(unicode_glyphs):
+    """Verify long label gets ellipsis."""
     content = format_completion_row(
         "/" + "a" * 30, "desc", query="", label_width=22, width=80, selected=False
     )
@@ -164,6 +198,7 @@ def test_long_label_gets_ellipsis(unicode_glyphs):
 
 
 def test_long_description_gets_ellipsis_and_fits_width(unicode_glyphs):
+    """Verify long description gets ellipsis and fits width."""
     content = format_completion_row(
         "/plugins", "word " * 40, query="", label_width=7, width=40, selected=False
     )
@@ -173,6 +208,7 @@ def test_long_description_gets_ellipsis_and_fits_width(unicode_glyphs):
 
 
 def test_highlight_spans_are_bold_primary(unicode_glyphs):
+    """Verify highlight spans are bold primary."""
     content = format_completion_row(
         "/plugins", "Manage", query="pl", label_width=7, width=60, selected=False
     )
@@ -180,6 +216,7 @@ def test_highlight_spans_are_bold_primary(unicode_glyphs):
 
 
 def test_selected_row_starts_with_accent_bar(unicode_glyphs):
+    """Verify selected row starts with accent bar."""
     selected = format_completion_row(
         "/plugins", "Manage", query="", label_width=7, width=60, selected=True
     )
@@ -193,6 +230,7 @@ def test_selected_row_starts_with_accent_bar(unicode_glyphs):
 
 
 def test_selected_row_uses_ascii_bar(ascii_glyphs):
+    """Verify selected row uses ascii bar."""
     content = format_completion_row(
         "/plugins", "Manage", query="", label_width=7, width=60, selected=True
     )
@@ -200,6 +238,7 @@ def test_selected_row_uses_ascii_bar(ascii_glyphs):
 
 
 def test_file_row_dims_directory(unicode_glyphs):
+    """Verify file row dims directory."""
     content = format_completion_row(
         "@src/talkops/ui/app.py",
         "py",
@@ -216,6 +255,7 @@ def test_file_row_dims_directory(unicode_glyphs):
 
 
 def test_file_row_highlights_match_over_dim(unicode_glyphs):
+    """Verify file row highlights match over dim."""
     content = format_completion_row(
         "@src/talkops/ui/app.py",
         "py",
@@ -229,6 +269,7 @@ def test_file_row_highlights_match_over_dim(unicode_glyphs):
 
 
 def test_long_file_path_keeps_basename(unicode_glyphs):
+    """Verify long file path keeps basename."""
     content = format_completion_row(
         "@src/talkops/ui/widgets/chat_input.py",
         "py",
@@ -244,6 +285,7 @@ def test_long_file_path_keeps_basename(unicode_glyphs):
 
 
 def test_argument_hint_is_dim_after_label(unicode_glyphs):
+    """Verify argument hint is dim after label."""
     content = format_completion_row(
         "/model",
         "Switch model",
@@ -270,6 +312,7 @@ async def _type_slash_pl(pilot, ci: ChatInput) -> CompletionPopup:
 
 @pytest.mark.asyncio
 async def test_typing_slash_query_shows_card_with_first_selected():
+    """Verify typing slash query shows card with first selected."""
     app = _ThemedApp()
     async with app.run_test(size=(110, 20)) as pilot:
         ci = app.query_one(ChatInput)
@@ -283,6 +326,7 @@ async def test_typing_slash_query_shows_card_with_first_selected():
 
 @pytest.mark.asyncio
 async def test_down_arrow_moves_selection():
+    """Verify down arrow moves selection."""
     app = _ThemedApp()
     async with app.run_test(size=(110, 20)) as pilot:
         ci = app.query_one(ChatInput)
@@ -298,6 +342,7 @@ async def test_down_arrow_moves_selection():
 
 @pytest.mark.asyncio
 async def test_rows_are_one_line_at_narrow_width():
+    """Verify rows are one line at narrow width."""
     app = _ThemedApp()
     async with app.run_test(size=(56, 20)) as pilot:
         ci = app.query_one(ChatInput)
@@ -316,6 +361,7 @@ class _RecordingCompletionView:
     """Minimal CompletionView double for testing FuzzyFileController."""
 
     def __init__(self) -> None:
+        """Initialize _RecordingCompletionView."""
         self.suggestions: list[tuple[str, str]] = []
         self.selected_index: int = 0
         self.text: str = ""
@@ -324,14 +370,17 @@ class _RecordingCompletionView:
     def render_completion_suggestions(
         self, suggestions: list[tuple[str, str]], selected_index: int
     ) -> None:
+        """Provide render completion suggestions test helper or fixture."""
         self.suggestions = list(suggestions)
         self.selected_index = selected_index
 
     def clear_completion_suggestions(self) -> None:
+        """Provide clear completion suggestions test helper or fixture."""
         self.suggestions = []
         self.selected_index = 0
 
     def replace_completion_range(self, start: int, end: int, replacement: str) -> None:
+        """Provide replace completion range test helper or fixture."""
         insertion = replacement if replacement.endswith("/") else f"{replacement} "
         self.text = f"{self.text[:start]}{insertion}{self.text[end:]}"
         self.cursor = start + len(insertion)
@@ -375,7 +424,6 @@ async def test_at_mention_picks_up_newly_created_files_and_dirs(tmp_path):
 
 def test_selecting_directory_drills_down_without_closing_popup(tmp_path):
     """Selecting a directory (@src/) replaces without trailing space and drills into src/."""
-    from textual.events import Key
     from talkops.ui.widgets.autocomplete import CompletionResult, FuzzyFileController
 
     src_dir = tmp_path / "src"

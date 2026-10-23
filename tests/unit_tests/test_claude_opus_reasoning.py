@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Claude Opus 5 adaptive thinking and multi-level reasoning effort.
 
 Validates that:
@@ -14,6 +28,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+
 from talkops.model.factory import clear_model_cache, create_model
 from talkops.model.pool import DynamicModelPoolManager
 from talkops.model.reasoning import (
@@ -38,8 +53,14 @@ def _get_payload(model: Any, prompt: str = "test prompt") -> dict[str, Any]:
 @pytest.fixture(autouse=True)
 def _mock_provider_keys(monkeypatch):
     """Ensure baseline mock keys exist for Anthropic and OpenAI in offline unit tests."""
+    from talkops.config.settings import get_settings
+
+    get_settings()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "mock-test-key-anthropic")
     monkeypatch.setenv("OPENAI_API_KEY", "mock-test-key-openai")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("TALKOPS_DISABLE_RESPONSES_API", raising=False)
 
 
 

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Skill loader for CLI commands and agent runtime.
 
 This module provides filesystem-based skill discovery across built-in, plugin,
@@ -10,16 +24,18 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+import yaml
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware.skills import (
     SkillMetadata,
+)
+from deepagents.middleware.skills import (
     _list_skills as list_skills_from_backend,
 )
-import yaml
 
 from talkops._version import __version__ as _cli_version
 from talkops.config import paths
@@ -175,7 +191,9 @@ def list_skills(
         plugin_sources = list(plugin_skill_sources)
         if not plugin_sources and include_plugins:
             try:
-                from talkops.plugins.adapters.skills import discover_plugin_skill_sources_and_roots
+                from talkops.plugins.adapters.skills import (
+                    discover_plugin_skill_sources_and_roots,
+                )
 
                 p_srcs, _ = discover_plugin_skill_sources_and_roots(
                     project_root=effective_root,

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Built-in WebhookAddon (`webhooks`) for TalkOps Server Mode.
 
 Wraps the 9+ built-in webhook provider adapters (AWS SNS/CloudWatch/EventBridge,
@@ -124,15 +138,18 @@ class WebhookAddon(BaseServerAddon):
     enabled_by_default = True
 
     def __init__(self, dispatcher: WebhookDispatcher | None = None) -> None:
+        """Initialize WebhookAddon."""
         super().__init__()
         if dispatcher is not None:
             set_webhook_dispatcher(dispatcher)
 
     @property
     def dispatcher(self) -> WebhookDispatcher:
+        """Return the dispatcher property."""
         return get_webhook_dispatcher()
 
     async def on_startup(self, ctx: AddonContext) -> None:
+        """Handle startup events."""
         await super().on_startup(ctx)
         dispatcher = get_webhook_dispatcher()
         dispatcher.bind_event_bus(ctx.event_bus)
@@ -163,11 +180,13 @@ class WebhookAddon(BaseServerAddon):
             dispatcher.run_executor = create_gateway_run_executor(ctx.gateway)
 
     async def on_shutdown(self, ctx: AddonContext) -> None:
+        """Handle shutdown events."""
         dispatcher = get_webhook_dispatcher()
         await dispatcher.drain_background_tasks()
         await super().on_shutdown(ctx)
 
     def get_routes(self) -> list[BaseRoute]:
+        """Retrieve routes."""
         return [
             Route("/webhooks", endpoint=list_webhooks_endpoint, methods=["GET"]),
             Route("/webhooks/health", endpoint=webhook_health_endpoint, methods=["GET"]),
@@ -176,6 +195,7 @@ class WebhookAddon(BaseServerAddon):
         ]
 
     async def health_check(self) -> AddonHealthStatus:
+        """Execute health check on WebhookAddon."""
         dispatcher = get_webhook_dispatcher()
         port = getattr(self._config, "port", None) if self._config is not None else None
         return AddonHealthStatus(

@@ -1,20 +1,34 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Preload MCP server metadata and eagerly probe tools with diagnostics."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
-from contextlib import AsyncExitStack, nullcontext
 import contextvars
 import fnmatch
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import tempfile
 import threading
 import time
+from collections.abc import Callable, Mapping
+from contextlib import AsyncExitStack, nullcontext
+from pathlib import Path
 from typing import Any
 
 try:
@@ -219,7 +233,25 @@ def _clean_mcp_schema(schema: Any, max_ref_depth: int = 3) -> dict[str, Any]:
             for k, v in node.items():
                 if k in ("$schema", "$id", "additionalProperties", "$defs", "definitions"):
                     continue
-                res[k] = _resolve(v, ref_depth, seen_refs)
+                if k == "default" and v is None:
+                    continue
+                if k == "properties" and isinstance(v, dict):
+                    res[k] = {
+                        pk: _resolve(pv, ref_depth, seen_refs)
+                        for pk, pv in v.items()
+                    }
+                else:
+                    res[k] = _resolve(v, ref_depth, seen_refs)
+
+            any_of = res.get("anyOf")
+            if isinstance(any_of, list):
+                non_null = [item for item in any_of if item != {"type": "null"}]
+                if len(non_null) == 1 and isinstance(non_null[0], dict):
+                    res.pop("anyOf", None)
+                    for bk, bv in non_null[0].items():
+                        res.setdefault(bk, bv)
+                elif non_null and len(non_null) < len(any_of):
+                    res["anyOf"] = non_null
             return res
 
         if isinstance(node, list):
@@ -404,14 +436,17 @@ def write_mcp_server_state(
             filename = f"{safe_tool}.json"
             expected_files.add(filename)
             target = server_dir / filename
-            schema_dict = dict(tool.input_schema) if isinstance(tool.input_schema, Mapping) else {}
+            schema_dict = (
+                _clean_mcp_schema(dict(tool.input_schema))
+                if isinstance(tool.input_schema, Mapping)
+                else {}
+            )
             payload = {
                 "name": raw_name,
                 "qualified_name": tool.name,
                 "server_name": info.name,
                 "description": tool.description,
                 "inputSchema": schema_dict,
-                "parameters": schema_dict,
             }
             temp_path: Path | None = None
             try:
@@ -533,8 +568,9 @@ def _project_server_info(
     name: str,
     srv_config: Mapping[str, Any],
 ) -> MCPServerInfo:
-    """Project an already-probed ``MCPServerInfo`` onto another scoped server entry
-    that shares the same underlying MCP connection fingerprint.
+    """Project an already-probed ``MCPServerInfo`` onto another scoped server entry.
+
+    Used when multiple scoped entries share the same underlying MCP connection fingerprint.
     """
     if source_info.name == name:
         return source_info
@@ -770,7 +806,7 @@ def _persistent_file_lock() -> Any:
     """Return an inter-process lock for cache read/merge/write operations."""
     if FileLock is None:
         return nullcontext()
-    return FileLock(f"{_metadata_cache_path()}.lock", timeout=5)
+    return FileLock(f"{_metadata_cache_path()}.lock", timeout=0.5)
 
 
 def _ensure_persistent_cache_loaded() -> None:
@@ -854,7 +890,7 @@ def _server_info_from_persisted(
                 MCPToolInfo(
                     name=tool_name,
                     description=str(raw_tool.get("description") or ""),
-                    input_schema=dict(schema) if isinstance(schema, Mapping) else {},
+                    input_schema=_clean_mcp_schema(dict(schema)) if isinstance(schema, Mapping) else {},
                     original_name=orig_name or raw_name,
                 )
             )
@@ -1153,8 +1189,6 @@ async def preload_mcp_server_info(
     if no_mcp:
         return []
 
-    import json
-    from pathlib import Path
     from talkops.mcp.discovery import MCPDiscovery
 
     discovery = MCPDiscovery()

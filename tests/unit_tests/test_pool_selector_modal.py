@@ -1,13 +1,27 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for PoolSelectorScreen (/pool) modal geometry and dropdown interaction."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 from textual.app import App
 from textual.widgets import Select
 from textual.widgets._select import SelectOverlay
-
-from pathlib import Path
 
 from talkops.config.toml_config import clear_agent_pool
 from talkops.ui.theme import register_app_themes
@@ -23,12 +37,14 @@ class _ThemedPoolApp(App[None]):
     CSS_PATH = [str(_MODAL_TCSS_PATH)]
 
     def __init__(self, screen_to_mount: OpsModalScreen | None = None) -> None:
+        """Initialize _ThemedPoolApp."""
         super().__init__()
         register_app_themes(self)
         self.theme = "talkops-dark"
         self._screen_to_mount = screen_to_mount
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         if self._screen_to_mount is not None:
             await self.push_screen(self._screen_to_mount)
 

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive theme selector modal screen for `/theme` command."""
 
 from __future__ import annotations
@@ -45,7 +59,7 @@ class ThemeSelectorScreen(OpsModalScreen[str | None]):
     ThemeSelectorScreen OptionList {
         height: auto;
         max-height: 18;
-        background: $background;
+        background: transparent;
         border: solid $primary 20%;
     }
 
@@ -61,6 +75,7 @@ class ThemeSelectorScreen(OpsModalScreen[str | None]):
     """
 
     def __init__(self, current_theme: str, terminal_default: str | None = None) -> None:
+        """Initialize ThemeSelectorScreen."""
         super().__init__()
         self._current_theme = current_theme
         self._original_theme = current_theme
@@ -131,6 +146,7 @@ class ThemeSelectorScreen(OpsModalScreen[str | None]):
         return options
 
     def compose_modal(self):
+        """Execute compose modal on ThemeSelectorScreen."""
         yield Static("Select Theme", classes="theme-selector-title")
         option_list = OptionList(*self._build_options(), id="theme-options")
         option_list.highlighted = self._current_index()
@@ -140,6 +156,7 @@ class ThemeSelectorScreen(OpsModalScreen[str | None]):
         yield Static(f"{nav_line}\n{action_line}", classes="theme-selector-help")
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         glyphs = get_glyphs()
         registry = get_registry()
@@ -158,6 +175,7 @@ class ThemeSelectorScreen(OpsModalScreen[str | None]):
         self.call_after_refresh(self._reformat_options)
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         width = self._option_content_width("#theme-options", fallback=58)
         if width != self._last_row_width:
             self._last_row_width = width
@@ -242,16 +260,20 @@ class ThemeSelectorScreen(OpsModalScreen[str | None]):
         self.dismiss(None)
 
     def action_cursor_down(self) -> None:
+        """Execute the cursor down action."""
         self.query_one(OptionList).action_cursor_down()
 
     def action_cursor_up(self) -> None:
+        """Execute the cursor up action."""
         self.query_one(OptionList).action_cursor_up()
 
     def action_toggle_names(self) -> None:
+        """Execute the toggle names action."""
         self._show_keys = not self._show_keys
         self._rerender_options()
 
     def action_set_for_terminal(self) -> None:
+        """Execute the set for terminal action."""
         term_program = os.environ.get("TERM_PROGRAM", "").strip()
         if not term_program:
             self.app.notify(

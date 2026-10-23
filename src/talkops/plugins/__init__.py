@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """TalkOps Plugin System.
 
 Provides plugin discovery, marketplace management, and plugin protocol
@@ -10,8 +24,13 @@ from __future__ import annotations
 import importlib.metadata
 from typing import Any, Protocol
 
-from talkops.utils.logger import get_logger
-
+from talkops.config import (
+    DEFAULT_MARKETPLACE_CONFIGS,
+    DefaultMarketplaceConfig,
+    fetch_marketplace_manifest,
+    get_default_marketplace_config,
+    is_default_marketplace,
+)
 from talkops.plugins.adapters.skills import (
     namespaced_skill_name,
     plugin_skill_roots,
@@ -21,17 +40,9 @@ from talkops.plugins.commands_cli import (
     execute_plugin_command,
     setup_plugin_parser,
 )
-from talkops.config import (
-    DEFAULT_MARKETPLACE_CONFIGS,
-    DefaultMarketplaceConfig,
-    fetch_marketplace_manifest,
-    get_default_marketplace_config,
-    is_default_marketplace,
-)
 from talkops.plugins.discovery import (
     add_local_marketplace,
     add_marketplace_source,
-    discover_plugins as discover_marketplace_plugins,
     install_plugin,
     list_available_plugins,
     list_installed_plugin_ids,
@@ -40,6 +51,9 @@ from talkops.plugins.discovery import (
     remove_marketplace,
     set_installed_plugin_enabled,
     uninstall_plugin,
+)
+from talkops.plugins.discovery import (
+    discover_plugins as discover_marketplace_plugins,
 )
 from talkops.plugins.manifest import (
     PluginManifestError,
@@ -77,6 +91,7 @@ from talkops.plugins.store import (
     remove_plugin_enabled_for_scope,
     versioned_cache_path,
 )
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -109,15 +124,19 @@ class TerraformPlugin:
     name = "terraform"
 
     def register_commands(self) -> list[Any]:
+        """Register commands."""
         return []
 
     def register_tools(self) -> list[Any]:
+        """Register tools."""
         return []
 
     def register_renderers(self) -> dict[str, Any]:
+        """Register renderers."""
         return {}
 
     def get_theme_overrides(self) -> dict[str, str] | None:
+        """Retrieve theme overrides."""
         return None
 
 

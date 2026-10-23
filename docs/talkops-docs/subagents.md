@@ -1,60 +1,58 @@
 # Subagents
 
-> Dynamic domain subagents with isolated memory, scoped tools, and real-time telemetry
+Subagents in TalkOps (`src/talkops/subagents/loader.py` and `src/talkops/middleware/subagents.py`) allow the orchestrator to delegate specialized DevOps, cloud, SRE, security, and coding workflows to isolated worker agents.
 
-OpsCloud delegates specialized, heavy, or multi-domain tasks to dynamic subagents. Rather than bundling rigid, hardcoded subagents in the binary, OpsCloud utilizes a fully extensible **dynamic subagent architecture**. Subagents are loaded on demand from agent plugins, project directories, user home configurations, and remote services.
+Each subagent runs with its own system prompt, isolated memory branch (`SubagentMemoryStore`), scoped tool permissions (`permission_tier`), domain skills, and optional dedicated MCP servers (`mcp_config` / `mcp_files`). Verbose cloud telemetry, `kubectl describe` dumps, and multi-file searches remain confined to the subagent's execution branch—only the final structured synthesis returns to your main conversation thread.
 
-Each subagent operates with its own domain prompt, isolated memory sandbox (`SubagentMemoryStore`), scoped tool permissions, and domain skills. Intermediate searches, raw cloud telemetry, and diagnostic iterations remain confined to the subagent's execution branch—only the final, structured deliverable returns to the orchestrator.
+> [!NOTE]
+> 📸 **Image Placeholder — `docs/assets/talkops-subagents-panel.png`**
+> **What to capture:** Screenshot of the live **Subagent Panel** in the `talkops` TUI showing parallel spawned subagents (e.g., `aws-sre-agent`, `k8s-cluster-operator`, `finops-auditor`), active tool calls, Jev Smart Mode tier badges (`Tier 0 Fast [effort=off]` vs. `Tier 1 Standard`), elapsed duration, and token usage.
 
 ---
 
-## Dynamic Subagent Architecture
+## Dynamic discovery and precedence
+
+TalkOps resolves subagents dynamically from four sources in order of precedence (`src/talkops/subagents/loader.py`):
 
 ```text
-                    ┌───────────────────────────────┐
-                    │    Root Orchestration Agent    │
-                    │   (Context, Router & State)   │
-                    └───────────────┬───────────────┘
-                                    │
-        ┌──────────────┬────────────┼────────────┬──────────────┐
-        ▼              ▼            ▼            ▼              ▼
-  ┌───────────┐  ┌───────────┐┌───────────┐┌───────────┐  ┌───────────┐
-  │  Project  │  │  Plugin   ││   User    ││   Async   │  │ Dynamic   │
-  │ Subagent  │  │ Subagent  ││ Subagent  ││  Remote   │  │ Fan-Out   │
-  └─────┬─────┘  └─────┬─────┘└─────┬─────┘└─────┬─────┘  └─────┬─────┘
-        │              │            │            │              │
-        └──────────────┴────────────┼────────────┴──────────────┘
-                                    ▼
-                      ┌───────────────────────────┐
-                      │    SubagentMemoryStore    │
-                      │ (Isolated Memory & State) │
-                      └───────────────────────────┘
+1. Installed Agent Plugins    ~/.talkops/plugins/<plugin>/agents/{name}.md
+2. Project Subagents          .talkops/agents/{name}.md  (or .talkops/agents/{name}/AGENTS.md, .agents/)
+3. User Subagents             ~/.talkops/agents/{name}.md (or ~/.agents/)
+4. Async Remote Subagents     Declared in config.toml under [async_subagents]
 ```
 
-### Discovery & Precedence
-
-Subagents are resolved in order of priority:
-
-1. **Agent Plugins** (Marketplace and local manifests): Plugins providing an `agents/` directory bundle domain definitions, scoped skills, and isolated MCP servers (e.g. `aws-sre-agent`, `aws-finops-agent`).
-2. **Project Subagents**: `.opscloud/agents/` or `.agents/` inside the active worktree (committed to Git, takes precedence over user subagents).
-3. **User Subagents**: `~/.opscloud/agents/` or `~/.agents/` on the local machine (workstation-wide).
-4. **Async Remote Subagents**: Background agents declared in `config.toml` under `[async_subagents]`.
+1. **Dynamic Plugin Subagents**: Agent plugins installed via `talkops plugin install` (or `/plugins`) bundle domain-specific subagent Markdown files alongside scoped `skills/` and isolated `.mcp.json` servers.
+2. **Project Subagents**: Checked into version control under `.talkops/agents/` or `.agents/` so your entire team shares repo-specific operational specialists.
+3. **User Subagents**: Personal subagent definitions stored in `~/.talkops/agents/`.
+4. **Async Remote Subagents**: Long-running remote LangGraph subagents configured under `[async_subagents]` in `config.toml`.
 
 ---
 
-## Subagent Definition Format
+## How Smart Mode optimizes subagent cost, latency & safety
 
-Subagents are authored as Markdown files with YAML frontmatter:
-- `.opscloud/agents/{name}.md`
-- `.opscloud/agents/{name}/AGENTS.md`
+When **Jev Smart Mode** (`--smart` or `/smart`) is active, subagents benefit from two dedicated TypeSafe AI Jev optimizations:
 
-### Example Definition
+### 1. Independent subagent model routing (`SUBAGENT_ROUTE_CRITERIA`)
+
+Unless a subagent hardcodes a `model:` in its YAML frontmatter, `JevDynamicModelRouterMiddleware` (`src/talkops/middleware/jev_model_router.py`) sets `routing_state["agent_role"] = "subagent"` and routes every subagent turn in `<70ms` across your 3-tier model pool:
+- **Tier 0 (`fast` + `effort="off"`)**: Subagent turns performing routine log grep, single-file inspection, or status output parsing run on lightweight models (`haiku`, `mini`, `flash-lite`) with reasoning disabled—cutting subagent fan-out token costs by **80–90%**.
+- **Tier 1 (`standard` + `effort="medium"`)**: Subagent turns performing standard single-domain analysis (e.g., inspecting an EKS deployment or drafting a Terraform diff) run on balanced models.
+- **Tier 2 (`powerful` + `effort="max"`)**: Subagent turns performing deep root-cause correlation across multi-service failure modes or FinOps/security audits automatically route to frontier reasoning models.
+
+### 2. Subagent dispatch safety classification (`<100ms`)
+
+When the orchestrator invokes the `task` tool to dispatch a subagent, `JevSecurityClassifier` inspects the target subagent's `capabilities`, `permission_tier` (`read-only`, `controlled`, `full`), and task prompt in `<100ms` to verify `intent_alignment` and `blast_radius` before execution begins.
+
+---
+
+## Defining a custom subagent
+
+Subagent files use YAML frontmatter followed by a Markdown body that serves as the subagent's system prompt:
 
 ```markdown
 ---
 name: eks-cluster-operator
 description: Specialist in Kubernetes cluster health diagnostics, node group capacity, and add-on upgrades
-model: anthropic:claude-3-5-sonnet-latest
 skills:
   - aws-eks-autopilot
   - kubernetes-diagnostics
@@ -63,62 +61,59 @@ tools:
   - read_file
   - edit_file
 permission_tier: controlled
+capabilities:
+  - kubernetes
+  - aws-eks
 ---
 
-You are an expert EKS operations subagent. Analyze cluster health, node group capacity, and add-on versions before recommending or applying changes.
+You are an EKS operations subagent. Analyze cluster health, node group capacity, and add-on versions before recommending or applying changes.
 
-Always inspect live cluster state with `kubectl get` and `aws eks describe-cluster` before proposing any node group or manifest changes. Produce structured audit tables and actionable commands.
+## Your Process
+1. Inspect live cluster state with `kubectl get` and `aws eks describe-cluster`.
+2. Summarize findings in a structured table before proposing manifest or node group changes.
 ```
 
-### Frontmatter Schema
+### Frontmatter reference (`src/talkops/subagents/loader.py`)
 
 | Field | Required | Description |
-|---|---|---|
-| `name` | Yes | Unique identifier for the subagent |
-| `description` | Yes | High-level summary of capabilities used by the orchestrator for autonomous delegation |
-| `model` | No | Dedicated model override in `provider:model-name` format |
-| `skills` | No | List of skill names to pre-load for this subagent |
-| `tools` | No | Tool allowlist patterns (e.g. `read_file, execute, glob, grep_search`) |
-| `permission_tier` | No | Permission level (`read-only`, `controlled`, `full`) |
-| `mcp_config` | No | Embedded dictionary of MCP server configurations for isolated toolsets |
-| `capabilities` | No | Explicit capability tags used for dynamic task matching |
+| :--- | :--- | :--- |
+| `name` | Yes *(or filename)* | Unique identifier for the subagent (invoked via `/agent:<name>` or `talkops -a <name>`). |
+| `description` | Yes | Summary of capabilities used by the orchestrator when deciding which specialist to dispatch. |
+| `model` | No | Optional fixed `provider:model` override. Omit this field to let **Jev Smart Mode** dynamically route each turn across `fast`, `standard`, and `powerful`. |
+| `skills` | No | List (or comma-separated string) of `SKILL.md` runbooks to pre-load for this subagent. |
+| `tools` | No | Explicit tool allowlist (`execute`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`). |
+| `permission_tier` | No | Execution boundary: `read-only`, `controlled`, or `full`. |
+| `capabilities` | No | Domain capability tags passed to Jev `routing_state` and `JevSecurityClassifier`. |
+| `mcp_config` | No | Inline dictionary of MCP servers scoped exclusively to this subagent. |
+| `mcp_files` | No | List of `.mcp.json` file paths loaded exclusively for this subagent. |
 
 ---
 
-## Memory Isolation (`SubagentMemoryStore`)
+## Invoking and managing subagents
 
-Each subagent runs within an isolated `SubagentMemoryStore`. Verbose tool logs, massive API payloads, and temporary reasoning remain isolated to the subagent's execution branch:
-- **No context contamination**: The main orchestrator thread remains clean and focused.
-- **Budget preservation**: Subagent turns do not inflate the root conversation token count.
-- **Structured deliverables**: Subagent audit findings, data tables, and actionable CLI commands are returned intact to the operator.
+### From the CLI (`-a` / `--agent`)
 
----
-
-## Dual-Level Context Compaction
-
-When subagent tasks involve long investigations or hundreds of command iterations, `CLICompactionMiddleware` triggers compaction independently:
-- **Root Compaction**: Automatically summarizes and offloads old conversation turns in the main thread.
-- **Subagent Compaction**: Summarizes deep investigative tool turns inside the subagent so it can continue operating without context exhaustion.
-
----
-
-## Launching Subagents
-
-### Direct Launch via CLI
-
-Launch OpsCloud directly into a subagent:
+Launch TalkOps directly into a named subagent profile:
 
 ```bash
-opscloud -a aws-finops-agent "Audit unattached EBS volumes in us-west-2"
+talkops -a eks-cluster-operator --smart -p "Audit node group capacity in prod-eks"
 ```
 
-### Interactive Switching
-
-Inside an active TUI session:
+### From the interactive TUI (`/agent` & `/agent:<name>`)
 
 ```text
-/agents           # Open the interactive subagent picker
-/agents reset     # Reset the active subagent's conversation branch
+/agent                                                   # Open the interactive subagent selector & inspector
+/agent:eks-cluster-operator Check failing kube-system pods # Dispatch a specific subagent directly
 ```
 
-The TUI includes a dedicated **Subagent Panel** dock displaying running subagents, active tools, turn timing, and cumulative token costs.
+### Webhook RBAC subagent scoping (`IdentityMapper`)
+
+When `talkops serve` processes an inbound webhook (`/webhooks/{provider}`), `IdentityMapper` (`src/talkops/webhooks/dispatcher.py`) maps the webhook source and severity to an RBAC role and injects `allowed_subagents` into the LangGraph configurable context, ensuring automated webhook investigations only dispatch authorized specialists.
+
+---
+
+## Next steps
+
+- **[Plugins](plugins.md)** — Install pre-packaged DevOps agent bundles (`talkops plugin install`)
+- **[Memory & Skills](memory-and-skills.md)** — Author reusable `SKILL.md` runbooks attached to your subagents
+- **[Approval Modes & Jev Smart Mode](approval-mode.md)** — Learn how `SUBAGENT_ROUTE_CRITERIA` and System One safety govern subagents

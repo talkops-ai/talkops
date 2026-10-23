@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Auth manager screen — multi-provider credential management.
 
 Opened via /login or /auth. Lists providers with status, delegates to
@@ -6,7 +20,6 @@ AuthPromptScreen for individual key entry.
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 import os
 from typing import TYPE_CHECKING, ClassVar
 
@@ -16,21 +29,25 @@ from textual.message import Message
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
+from talkops.utils.logger import get_logger
+
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
 from talkops.config.settings import get_glyphs
-from talkops.model.config import get_credential_env_var
-from talkops.ui.widgets.auth import AuthPromptScreen, AuthResult, PROVIDER_DISPLAY_NAMES
+from talkops.model.config import get_credential_env_var, get_provider_auth_status
+from talkops.ui.widgets.auth import PROVIDER_DISPLAY_NAMES, AuthPromptScreen, AuthResult
 from talkops.ui.widgets.modal_base import OpsModalScreen, format_modal_option_row
 
 logger = get_logger(__name__)
 
 # Providers to list in the manager
 _KNOWN_PROVIDERS: tuple[str, ...] = (
-    "talkops", "google_genai", "openai", "openrouter", "anthropic", "azure_openai",
+    "talkops", "google_genai", "openai", "openai_codex", "openrouter", "anthropic", "azure_openai",
+    "bedrock", "google_vertexai", "google_anthropic_vertex", "ollama",
     "langsmith", "typesafe", "groq", "deepseek", "mistralai", "fireworks", "together",
-    "xai", "cohere", "perplexity", "nvidia", "huggingface",
+    "xai", "cohere", "perplexity", "nvidia", "huggingface", "ibm", "baseten",
+    "litellm", "meta", "cerebras", "sambanova",
 )
 
 
@@ -44,12 +61,14 @@ class AuthManagerScreen(OpsModalScreen[None]):
     class CredentialSaved(Message):
         """Posted when a key is successfully persisted."""
         def __init__(self, provider: str) -> None:
+            """Initialize CredentialSaved."""
             super().__init__()
             self.provider = provider
 
     class CredentialDeleted(Message):
         """Posted when a credential is removed."""
         def __init__(self, provider: str) -> None:
+            """Initialize CredentialDeleted."""
             super().__init__()
             self.provider = provider
 
@@ -74,7 +93,7 @@ class AuthManagerScreen(OpsModalScreen[None]):
     AuthManagerScreen OptionList {
         height: 1fr;
         min-height: 3;
-        background: $background;
+        background: transparent;
         border: solid $primary 20%;
     }
 
@@ -90,10 +109,12 @@ class AuthManagerScreen(OpsModalScreen[None]):
     """
 
     def __init__(self, *, initial_provider: str | None = None) -> None:
+        """Initialize AuthManagerScreen."""
         super().__init__()
         self._initial_provider = initial_provider
 
     def compose_modal(self):
+        """Execute compose modal on AuthManagerScreen."""
         options = self._build_options()
         yield Static("Manage API Keys", classes="auth-mgr-title")
         yield Static(
@@ -108,6 +129,7 @@ class AuthManagerScreen(OpsModalScreen[None]):
         )
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         glyphs = get_glyphs()
         self.set_modal_title("API Key Manager", counter=f"{len(_KNOWN_PROVIDERS)} providers")
@@ -126,6 +148,7 @@ class AuthManagerScreen(OpsModalScreen[None]):
         self.call_after_refresh(self._reformat_options)
 
     def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
         width = self._option_content_width("#auth-mgr-options", fallback=70)
         if width != getattr(self, "_last_row_width", None):
             self._last_row_width = width
@@ -193,6 +216,11 @@ class AuthManagerScreen(OpsModalScreen[None]):
                         has_key = bool(get_credential_storage().get_provider_key(provider))
                     except Exception:
                         pass
+                if not has_key and provider != "ollama":
+                    try:
+                        has_key = bool(get_provider_auth_status(provider).as_legacy_bool())
+                    except Exception:
+                        pass
 
             if has_key:
                 badges: list[tuple[str, str]] = [("STORED", "bold $success")]
@@ -213,6 +241,7 @@ class AuthManagerScreen(OpsModalScreen[None]):
         return options
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Handle option list option selected events."""
         provider = event.option.id
         if not provider:
             return
@@ -281,6 +310,7 @@ class AuthManagerScreen(OpsModalScreen[None]):
             pass
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         self.dismiss(None)
 
 

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Trace metadata generation for LangSmith and telemetry correlation.
 
 Provides:
@@ -12,8 +26,9 @@ store (``ConfigStore``).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import os
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +55,6 @@ def _get_version() -> str:
 
 def _get_git_branch(cwd_str: str) -> str | None:
     """Resolve the current git branch."""
-    import subprocess
-
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -60,8 +73,6 @@ def _get_git_branch(cwd_str: str) -> str | None:
 
 def _get_git_commit_sha(cwd_str: str) -> str | None:
     """Resolve the current git commit SHA."""
-    import subprocess
-
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],

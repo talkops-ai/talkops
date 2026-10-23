@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """``/loop`` — Periodic instruction execution.
 
 Runs a prompt or instruction repeatedly at a specified interval.
@@ -8,7 +22,6 @@ Session-scoped — loops stop when the session ends.
 from __future__ import annotations
 
 import asyncio
-from talkops.utils.logger import get_logger
 import re
 import time
 import uuid
@@ -17,6 +30,7 @@ from typing import Any
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -39,10 +53,12 @@ class LoopInstance:
 
     @property
     def is_running(self) -> bool:
+        """Return the is running property."""
         return self.task is not None and not self.task.done()
 
     @property
     def interval_human(self) -> str:
+        """Return the interval human property."""
         s = self.interval_seconds
         if s >= 86400 and s % 86400 == 0:
             return f"{s // 86400}d"
@@ -60,6 +76,7 @@ class LoopManager:
     """
 
     def __init__(self) -> None:
+        """Initialize LoopManager."""
         self._loops: dict[str, LoopInstance] = {}
 
     async def start(
@@ -123,10 +140,12 @@ class LoopManager:
 
     @property
     def active(self) -> list[LoopInstance]:
+        """Return the active property."""
         return [l for l in self._loops.values() if l.is_running]
 
     @property
     def all(self) -> list[LoopInstance]:
+        """Return the all property."""
         return list(self._loops.values())
 
     async def _run_loop(self, instance: LoopInstance, *, app: Any = None) -> None:
@@ -185,28 +204,34 @@ class LoopHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/loop"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.IMMEDIATE
 
     @property
     def model_facing_description(self) -> str | None:
+        """Return the description exposed to the LLM for command recommendations."""
         return (
             "Recommend this when the user wants to run an instruction or health "
             "check repeatedly on a recurring interval (e.g., `/loop 5m check pod status`)."
         )
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         manager = get_loop_manager(ctx.app)
         args = ctx.args.strip()
 

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TalkOps enhanced CLI capabilities.
 
 Covers:
@@ -16,6 +30,7 @@ import asyncio
 import io
 import json
 import sys
+import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -34,16 +49,17 @@ from talkops.cli.main import (
 )
 from talkops.cli.non_interactive import run_non_interactive
 
-
 # ── 1. Argument Types & Validators ───────────────────────
 
 
 def test_positive_int_valid():
+    """Verify positive int valid."""
     assert positive_int("1") == 1
     assert positive_int("100") == 100
 
 
 def test_positive_int_invalid():
+    """Verify positive int invalid."""
     with pytest.raises(argparse.ArgumentTypeError, match="must be greater than 0"):
         positive_int("0")
     with pytest.raises(argparse.ArgumentTypeError, match="must be greater than 0"):
@@ -53,16 +69,19 @@ def test_positive_int_invalid():
 
 
 def test_non_negative_int_valid():
+    """Verify non negative int valid."""
     assert non_negative_int("0") == 0
     assert non_negative_int("10") == 10
 
 
 def test_non_negative_int_invalid():
+    """Verify non negative int invalid."""
     with pytest.raises(argparse.ArgumentTypeError, match="must be non-negative"):
         non_negative_int("-1")
 
 
 def test_shell_allow_list_arg():
+    """Verify shell allow list arg."""
     parsed = shell_allow_list_arg("aws, kubectl, terraform ")
     assert parsed == ["aws", "kubectl", "terraform"]
 
@@ -166,6 +185,7 @@ def test_stdin_piping_oversized_exits(capsys):
 
 
 def test_quiet_requires_prompt(capsys):
+    """Verify quiet requires prompt."""
     ret = main(["--quiet"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -174,6 +194,7 @@ def test_quiet_requires_prompt(capsys):
 
 
 def test_no_stream_requires_prompt(capsys):
+    """Verify no stream requires prompt."""
     ret = main(["--no-stream"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -182,6 +203,7 @@ def test_no_stream_requires_prompt(capsys):
 
 
 def test_max_turns_requires_prompt(capsys):
+    """Verify max turns requires prompt."""
     ret = main(["--max-turns", "5"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -189,6 +211,7 @@ def test_max_turns_requires_prompt(capsys):
 
 
 def test_timeout_requires_prompt(capsys):
+    """Verify timeout requires prompt."""
     ret = main(["--timeout", "60"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -196,6 +219,7 @@ def test_timeout_requires_prompt(capsys):
 
 
 def test_no_mcp_and_mcp_config_conflict(capsys):
+    """Verify no mcp and mcp config conflict."""
     ret = main(["-p", "test", "--no-mcp", "--mcp-config", "mcp.json"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -203,6 +227,7 @@ def test_no_mcp_and_mcp_config_conflict(capsys):
 
 
 def test_goal_with_prompt_conflict(capsys):
+    """Verify goal with prompt conflict."""
     ret = main(["-p", "test prompt", "--goal", "interactive goal"])
     assert ret == 1
     captured = capsys.readouterr()
@@ -213,6 +238,7 @@ def test_goal_with_prompt_conflict(capsys):
 
 
 def test_cloud_flags_parsed():
+    """Verify cloud flags parsed."""
     parser = build_parser()
     args = parser.parse_args([
         "-p", "Audit AWS infrastructure",
@@ -228,6 +254,7 @@ def test_cloud_flags_parsed():
 
 
 def test_approval_mode_resolution():
+    """Verify approval mode resolution."""
     args_smart = argparse.Namespace(smart=True, approval_mode=None, prompt="test")
     assert _resolve_approval_mode(args_smart) == ApprovalMode.SMART
 
@@ -250,6 +277,7 @@ def test_approval_mode_resolution():
 
 
 def test_model_params_json_valid(monkeypatch):
+    """Verify model params json valid."""
     mock_run = MagicMock(return_value=0)
     monkeypatch.setattr("talkops.cli.main.run_non_interactive", mock_run)
 
@@ -261,6 +289,7 @@ def test_model_params_json_valid(monkeypatch):
 
 
 def test_model_params_json_invalid(capsys):
+    """Verify model params json invalid."""
     ret = main(["-p", "hello", "--model-params", "{invalid-json}"])
     assert ret == 1
     captured = capsys.readouterr()
@@ -275,6 +304,7 @@ def test_run_non_interactive_timeout():
     with patch("talkops.cli.non_interactive._run_headless") as mock_headless:
         # Simulate long-running coro that wait_for will cancel
         async def slow_headless(*args: Any, **kwargs: Any) -> int:
+            """Provide slow headless test helper or fixture."""
             await asyncio.sleep(10.0)
             return 0
 
@@ -300,6 +330,7 @@ async def test_run_headless_quiet_mode_and_turn_limit():
     mock_agent = MagicMock()
 
     async def mock_astream(*args: Any, **kwargs: Any):
+        """Provide mock astream test helper or fixture."""
         yield ((), "messages", ("Analyzing logs...", {}))
         yield ((), "updates", {"messages": [MagicMock(name="aws ec2 describe-instances")]})
         yield ((), "updates", {"messages": [MagicMock(name="aws ec2 describe-instances")]})
@@ -327,6 +358,7 @@ async def test_run_headless_json_output(capsys):
     mock_agent = MagicMock()
 
     async def mock_astream(*args: Any, **kwargs: Any):
+        """Provide mock astream test helper or fixture."""
         yield ((), "messages", ("All 12 instances are healthy.", {}))
 
     mock_agent.astream = mock_astream
@@ -352,7 +384,7 @@ async def test_run_headless_json_output(capsys):
 
 
 def test_auth_json_envelope(capsys, monkeypatch):
-    """auth command with --json flag emits structured envelope."""
+    """Auth command with --json flag emits structured envelope."""
     fake_ctx = MagicMock(
         is_authenticated=True,
         account_id="123456789012",
@@ -375,7 +407,7 @@ def test_auth_json_envelope(capsys, monkeypatch):
 
 
 def test_doctor_json_envelope(capsys, monkeypatch):
-    """doctor command with --json flag emits structured environment metrics."""
+    """Doctor command with --json flag emits structured environment metrics."""
     fake_ctx = MagicMock(
         is_authenticated=True,
         account_id="123456789012",
@@ -397,8 +429,9 @@ def test_doctor_json_envelope(capsys, monkeypatch):
 
 
 def test_threads_list_json_envelope(capsys, monkeypatch):
-    """threads list --json emits list of thread metadata."""
+    """Threads list --json emits list of thread metadata."""
     async def fake_list_threads(**kwargs):
+        """Provide fake list threads test helper or fixture."""
         return [
             {
                 "thread_id": "thread_abc123",
@@ -422,7 +455,7 @@ def test_threads_list_json_envelope(capsys, monkeypatch):
 
 
 def test_threads_delete_command(capsys, monkeypatch):
-    """threads delete command deletes target thread and outputs envelope."""
+    """Threads delete command deletes target thread and outputs envelope."""
     mock_del = AsyncMock(return_value=True)
     monkeypatch.setattr("talkops.state.session.delete_thread", mock_del)
 
@@ -441,7 +474,7 @@ def test_threads_delete_command(capsys, monkeypatch):
 
 
 def test_normalize_thread_id():
-    import uuid
+    """Verify normalize thread id."""
     from talkops.ui.remote_client import normalize_thread_id
 
     # 1. Valid UUID string remains unchanged
@@ -464,13 +497,13 @@ def test_normalize_thread_id():
 @pytest.mark.asyncio
 async def test_run_headless_valid_uuid_passed_to_agent():
     """Headless runner must ensure effective_thread is a valid UUID string."""
-    import uuid
     from talkops.cli.non_interactive import _run_headless
 
     mock_agent = MagicMock()
     captured_config = {}
 
     async def mock_astream(*args: Any, **kwargs: Any):
+        """Provide mock astream test helper or fixture."""
         nonlocal captured_config
         captured_config = kwargs.get("config", {})
         yield ((), "messages", ("pong", {}))
@@ -501,6 +534,7 @@ async def test_max_turns_ignores_middleware_updates_and_counts_model_turns():
 
     async def mock_astream(*args: Any, **kwargs: Any):
         # Middleware pre-model steps
+        """Provide mock astream test helper or fixture."""
         yield ((), "updates", {"TodoListMiddleware.before_model": None})
         yield ((), "updates", {"SummarizationMiddleware.before_model": None})
         # Streamed AI message chunk
@@ -629,11 +663,13 @@ def test_auth_and_doctor_forward_aws_profile_and_region(monkeypatch):
     captured_doc = {}
 
     def fake_auth(fmt, aws_profile=None, aws_region=None):
+        """Provide fake auth test helper or fixture."""
         captured_auth["profile"] = aws_profile
         captured_auth["region"] = aws_region
         return 0
 
     def fake_doc(fmt, aws_profile=None, aws_region=None):
+        """Provide fake doc test helper or fixture."""
         captured_doc["profile"] = aws_profile
         captured_doc["region"] = aws_region
         return 0

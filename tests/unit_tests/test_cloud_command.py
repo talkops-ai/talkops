@@ -1,11 +1,27 @@
-"""Unit tests for /cloud command, AWS profile discovery, TOML persistence, and CloudProfileSelector."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for /cloud command, AWS profile discovery, TOML persistence, and CloudProfileSelector."""
 import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+import textual._context
+from rich.console import Console
+from textual.widgets import Input, Static
 
 from talkops.commands._base import CommandContext
 from talkops.commands.core.cloud import CloudHandler
@@ -28,6 +44,7 @@ from talkops.config.toml_config import (
 
 @pytest.fixture
 def temp_config_path(tmp_path: Path) -> Path:
+    """Provide temp config path test helper or fixture."""
     return tmp_path / "config.toml"
 
 
@@ -126,6 +143,7 @@ def test_get_and_set_active_aws_profile(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cloud_handler_metadata():
+    """Verify cloud handler metadata."""
     handler = CloudHandler()
     assert handler.name == "/cloud"
     assert "/aws" in handler.aliases
@@ -133,11 +151,13 @@ async def test_cloud_handler_metadata():
 
 @pytest.mark.asyncio
 async def test_cloud_handler_interactive_trigger():
+    """Verify cloud handler interactive trigger."""
     handler = CloudHandler()
     mock_app = MagicMock()
     called = False
 
     async def mock_show():
+        """Provide mock show test helper or fixture."""
         nonlocal called
         called = True
 
@@ -152,6 +172,7 @@ async def test_cloud_handler_interactive_trigger():
 
 @pytest.mark.asyncio
 async def test_cloud_handler_direct_switch(monkeypatch, tmp_path: Path):
+    """Verify cloud handler direct switch."""
     test_config = tmp_path / "config.toml"
     monkeypatch.setattr("talkops.config.cloud_profiles.save_aws_profile", lambda p: save_aws_profile(p, test_config))
     monkeypatch.setattr("talkops.config.cloud_profiles.save_recent_aws_profile", lambda p: None)
@@ -175,6 +196,7 @@ async def test_cloud_handler_direct_switch(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cloud_handler_list_subcommand():
+    """Verify cloud handler list subcommand."""
     handler = CloudHandler()
     ctx = CommandContext(app=None, raw_command="/cloud list", args="list")
     result = await handler.execute(ctx)
@@ -186,6 +208,7 @@ async def test_cloud_handler_list_subcommand():
 
 @pytest.mark.asyncio
 async def test_cloud_handler_status_subcommand():
+    """Verify cloud handler status subcommand."""
     handler = CloudHandler()
     ctx = CommandContext(app=None, raw_command="/cloud status", args="status")
     result = await handler.execute(ctx)
@@ -200,6 +223,7 @@ async def test_cloud_handler_status_subcommand():
 
 
 def test_cloud_selector_screen_init():
+    """Verify cloud selector screen init."""
     from talkops.ui.widgets.cloud_selector import CloudProfileSelectorScreen
 
     screen = CloudProfileSelectorScreen(current_profile="dev-profile")
@@ -239,7 +263,6 @@ async def test_cloud_selector_navigation_and_batch_mount():
     from talkops.config.cloud_profiles import AWSProfileInfo
     from talkops.ui.app import TalkOpsApp
     from talkops.ui.widgets.cloud_selector import CloudProfileSelectorScreen
-    from textual.widgets import Input
 
     app = TalkOpsApp()
     async with app.run_test(headless=True) as pilot:
@@ -294,6 +317,7 @@ async def test_cloud_selector_navigation_and_batch_mount():
 
 
 def test_get_active_aws_region(monkeypatch, tmp_path: Path):
+    """Verify get active aws region."""
     from talkops.config.cloud_profiles import get_active_aws_region
     from talkops.config.toml_config import load_aws_region, save_aws_region
 
@@ -401,6 +425,7 @@ def test_profile_switch_region_sequence(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_status_bar_cloud_display():
+    """Verify status bar cloud display."""
     from talkops.ui.widgets.status import StatusBar
 
     bar = StatusBar()
@@ -415,6 +440,7 @@ async def test_status_bar_cloud_display():
 
 
 def test_welcome_banner_environment_and_capabilities():
+    """Verify welcome banner environment and capabilities."""
     from talkops.ui.widgets.welcome import WelcomeBanner
 
     banner = WelcomeBanner(model_spec="anthropic:claude-opus", effort="high")
@@ -441,6 +467,7 @@ def test_welcome_banner_environment_and_capabilities():
 
 
 def test_welcome_banner_mcp_states():
+    """Verify welcome banner mcp states."""
     from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
     from talkops.ui.widgets.welcome import WelcomeBanner
 
@@ -462,6 +489,7 @@ def test_welcome_banner_mcp_states():
 
 
 def test_welcome_banner_long_skill_list_never_wraps():
+    """Verify welcome banner long skill list never wraps."""
     from talkops.ui.widgets.welcome import WelcomeBanner
 
     banner = WelcomeBanner()
@@ -562,9 +590,6 @@ def test_cloud_selector_unconfigured_profile_notification():
 
 def test_status_bar_narrow_cloud_rendering():
     """Verify that narrow terminal widths truncate profile names and hide region."""
-    import textual._context
-    from rich.console import Console
-    from textual.widgets import Static
     from talkops.ui.widgets.status import StatusBar
 
     mock_app = MagicMock()

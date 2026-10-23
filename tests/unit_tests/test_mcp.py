@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Comprehensive unit tests for TalkOps MCP subsystem.
 
 Covers:
@@ -21,12 +35,13 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 
 from talkops.cli.commands.mcp import run_mcp_command
 from talkops.config.adapters.sqlite import SqliteConfigAdapter
@@ -68,11 +83,11 @@ from talkops.middleware.mcp_context import (
     _build_mcp_context_from_infos,
 )
 
-
 # ── Config and Environment Interpolation ──────────────────────────────────────
 
 
 def test_interpolate_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify interpolate env default."""
     monkeypatch.delenv("TEST_AWS_REGION", raising=False)
     # Default fallback
     assert _interpolate_env("${TEST_AWS_REGION:-us-west-2}", field="test.region") == "us-west-2"
@@ -88,6 +103,7 @@ def test_interpolate_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_resolve_mcp_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify resolve mcp server env."""
     monkeypatch.setenv("AWS_PROFILE_NAME", "production")
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
@@ -103,6 +119,7 @@ def test_resolve_mcp_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_sync_mcp_env_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     # AWS_REGION <-> AWS_DEFAULT_REGION
+    """Verify sync mcp env aliases."""
     monkeypatch.setenv("AWS_REGION", "ap-south-1")
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     sync_mcp_env_aliases()
@@ -124,6 +141,7 @@ def test_sync_mcp_env_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_normalize_mcp_arguments() -> None:
+    """Verify normalize mcp arguments."""
     schema = {
         "type": "object",
         "properties": {
@@ -145,6 +163,7 @@ def test_normalize_mcp_arguments() -> None:
 
 
 def test_clean_mcp_schema() -> None:
+    """Verify clean mcp schema."""
     schema = {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -212,8 +231,35 @@ def test_clean_mcp_schema() -> None:
     assert "" not in cleaned_circ
     assert cleaned_circ["properties"]["node"]["properties"]["child"] == {"type": "object"}
 
+    # Verify nullable anyOf and default: null compaction
+    nullable_schema = {
+        "type": "object",
+        "properties": {
+            "start_date": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "default": None,
+                "description": "Start date",
+            },
+            "filter": {
+                "anyOf": [{"type": "string"}, {"type": "object"}, {"type": "null"}],
+                "default": None,
+                "description": "Filter expression",
+            },
+        },
+    }
+    cleaned_nullable = _clean_mcp_schema(nullable_schema)
+    assert cleaned_nullable["properties"]["start_date"] == {
+        "type": "string",
+        "description": "Start date",
+    }
+    assert cleaned_nullable["properties"]["filter"] == {
+        "anyOf": [{"type": "string"}, {"type": "object"}],
+        "description": "Filter expression",
+    }
+
 
 def test_is_transient_session_error() -> None:
+    """Verify is transient session error."""
     assert _is_transient_session_error(BrokenPipeError()) is True
     assert _is_transient_session_error(ConnectionResetError()) is True
     assert _is_transient_session_error(EOFError()) is True
@@ -224,6 +270,7 @@ def test_is_transient_session_error() -> None:
 
 
 def test_enhance_mcp_error_diagnostics_aws() -> None:
+    """Verify enhance mcp error diagnostics aws."""
     sso_err = _enhance_mcp_error_diagnostics("botocore.exceptions.ClientError: The security token included in the request is expired (ExpiredToken)")
     assert "aws sso login" in sso_err
 
@@ -380,6 +427,7 @@ def test_mcp_trust_store(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_raw_config_export_and_import(tmp_path: Path) -> None:
+    """Verify mcp raw config export and import."""
     adapter = SqliteConfigAdapter(tmp_path / "test_raw.db")
     store = ConfigStore(adapter)
     await store.initialize()
@@ -421,6 +469,7 @@ async def test_mcp_raw_config_export_and_import(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_probe_one_mcp_server_disabled_and_active() -> None:
     # 1. Disabled server
+    """Verify probe one mcp server disabled and active."""
     disabled_conf = {"transport": "stdio", "command": "echo", "enabled": False}
     info_dis = await probe_one_mcp_server("disabled_srv", disabled_conf)
     assert info_dis.status == "disabled"
@@ -462,7 +511,7 @@ def test_mcp_tool_name_provider_safe_length_and_digest() -> None:
     assert dirty_name == "my_server_list_buckets_d02139680706"
     assert len(dirty_name) <= 64
 
-    # 3. Long name with plugin prefix exceeding 64 characters (matching reference/dcode SHA256 digest)
+    # 3. Long name with plugin prefix exceeding 64 characters (truncated with SHA256 digest)
     server_name = "plugin__aws-compute_talkops-devops-plugins_35da5a75__aws-mcp"
     tool_name = "aws___get_tasks"
     hashed_name = _mcp_tool_name(server_name, tool_name)
@@ -472,6 +521,7 @@ def test_mcp_tool_name_provider_safe_length_and_digest() -> None:
 
 @pytest.mark.asyncio
 async def test_preload_mcp_server_info_integration(tmp_path: Path) -> None:
+    """Verify preload mcp server info integration."""
     clear_cached_mcp_server_infos()
 
     # Create dummy mcp file
@@ -575,6 +625,7 @@ async def test_mcp_metadata_cache_is_bound_to_exact_config() -> None:
 
 
 def test_semantic_profiler_cloud_tiers() -> None:
+    """Verify semantic profiler cloud tiers."""
     profiler = MCPSemanticProfiler.get_instance()
 
     # Tier 1 (Read-Only)
@@ -609,6 +660,7 @@ def test_semantic_profiler_cloud_tiers() -> None:
 
 
 def test_headless_mcp_guard_middleware() -> None:
+    """Verify headless mcp guard middleware."""
     guard = HeadlessMCPGuardMiddleware(tool_names=["aws_terminate_instances"])
 
     req_blocked = MagicMock()
@@ -628,6 +680,7 @@ def test_headless_mcp_guard_middleware() -> None:
 
 
 def test_mcp_context_middleware() -> None:
+    """Verify mcp context middleware."""
     server_info = [
         MCPServerInfo(
             name="aws-ec2",
@@ -646,6 +699,7 @@ def test_mcp_context_middleware() -> None:
 
 @pytest.mark.asyncio
 async def test_cached_mcp_tool_execution() -> None:
+    """Verify cached mcp tool execution."""
     from mcp.types import CallToolResult, TextContent
 
     mock_mcp_tool = MagicMock()
@@ -679,7 +733,6 @@ async def test_cached_mcp_tool_execution() -> None:
 async def test_transient_error_retry_safety() -> None:
     """Verify that read-only tools retry on transient disconnect, but mutating tools fail-safe without replay."""
     from mcp.types import CallToolResult, TextContent
-    from langchain_core.tools import ToolException
 
     # 1. Read-only tool (describe_instances) retries safely
     ro_tool = MagicMock()
@@ -737,6 +790,7 @@ async def test_transient_error_retry_safety() -> None:
 
 
 def test_run_mcp_command_cli() -> None:
+    """Verify run mcp command cli."""
     args = argparse.Namespace(action="list", json_output=True, probe=False)
     assert run_mcp_command(args) == 0
 
@@ -780,7 +834,8 @@ def test_write_and_read_mcp_server_state_materializes_and_prunes(tmp_path: Path)
     assert schema is not None
     assert schema["name"] == "describe_instances"
     assert schema["qualified_name"] == "aws-ec2:describe_instances"
-    assert schema["parameters"]["properties"]["region"]["type"] == "string"
+    assert schema["inputSchema"]["properties"]["region"]["type"] == "string"
+    assert "parameters" not in schema
 
 
 @pytest.mark.asyncio
@@ -790,6 +845,7 @@ async def test_lazy_mcp_tools_split_and_call_mcp_tool_dispatcher(
 ) -> None:
     """Verify Eager/Lazy split binds eager tools directly and routes lazy tools via call_mcp_tool."""
     from mcp.types import CallToolResult, TextContent
+
     from talkops.mcp.session_manager import (
         build_mcp_tools_from_server_infos,
         split_enabled_tools_by_eager_lazy,
@@ -859,8 +915,6 @@ async def test_lazy_mcp_tools_split_and_call_mcp_tool_dispatcher(
 @pytest.mark.asyncio
 async def test_stdio_connect_server_redirects_errlog_away_from_stderr() -> None:
     """Verify MCPSessionManager.connect_server passes non-stderr errlog to stdio_client."""
-    import sys
-
     captured_errlog: list[ object] = []
 
     mock_session = AsyncMock()
@@ -1085,5 +1139,43 @@ async def test_dynamic_mcp_hydration_in_context_and_tool_middleware() -> None:
     assert "dyn-server_list_items" in updated_ctx
     dyn_tools = tool_mw._get_dynamic_mcp_tools()
     assert "dyn-server_list_items" in dyn_tools
+
+
+def test_mcp_context_and_auto_lazy_for_large_subagent_catalog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify scoped subagents with >30 MCP tools auto-enable lazy mode and compact MCPContextMiddleware."""
+    from talkops.mcp.session_manager import build_mcp_tools_from_server_infos
+
+    monkeypatch.setenv("TALKOPS_MCP_SCHEMA_DIR", str(tmp_path))
+    monkeypatch.delenv("TALKOPS_MCP_LAZY_TOOLS", raising=False)
+    monkeypatch.delenv("TALKOPS_LAZY_MCP_TOOLS", raising=False)
+
+    tools = tuple(
+        MCPToolInfo(
+            name=f"subagent__aws-platform-engineer_talko_tool_{i}_1234567890ab",
+            original_name=f"tool_{i}",
+            description=f"Tool {i}",
+            input_schema={"type": "object"},
+        )
+        for i in range(35)
+    )
+    info = MCPServerInfo(
+        name="subagent__aws-platform-engineer_talkops-devops-plugins_771c9ed9__billing-cost",
+        transport="stdio",
+        status="ok",
+        tools=tools,
+    )
+
+    ctx_block = _build_mcp_context_from_infos([info])
+    assert "tool_0, tool_1" in ctx_block
+    assert "subagent__aws-platform-engineer_talko_tool_0" not in ctx_block
+    assert "(+25 more in schema dir)" in ctx_block
+
+    manager = MCPSessionManager({info.name: {"transport": "stdio", "command": "fake"}})
+    built = build_mcp_tools_from_server_infos([info], manager)
+    assert [t.name for t in built] == ["call_mcp_tool"]
+
 
 

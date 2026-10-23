@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Trust store for skill directories that resolve outside trusted roots.
 
 `load_skill_content` refuses to read a `SKILL.md` whose resolved path falls
@@ -33,14 +47,14 @@ user-facing configuration, so they live alongside the other state files under
 from __future__ import annotations
 
 import contextlib
-from datetime import UTC, datetime
-from enum import Enum
 import hashlib
 import json
 import logging
 import os
-from pathlib import Path
 import tempfile
+from datetime import UTC, datetime
+from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
@@ -358,13 +372,16 @@ class SkillTrustStore:
     """Backward compatibility wrapper around the persistent skill trust store."""
 
     def __init__(self, trust_file_path: Path | None = None) -> None:
+        """Initialize SkillTrustStore."""
         self.trust_file_path = trust_file_path or _default_store_path()
 
     def compute_hash(self, skill_path: Path) -> str:
+        """Compute the hash reactive value."""
         resolved = str(skill_path.expanduser().resolve())
         return hashlib.sha256(resolved.encode("utf-8")).hexdigest()
 
     def is_trusted(self, name: str, skill_path: Path) -> bool:
+        """Return whether trusted."""
         try:
             resolved = skill_path.expanduser().resolve()
         except Exception:
@@ -397,6 +414,7 @@ class SkillTrustStore:
         return is_skill_dir_trusted(resolved, store_path=self.trust_file_path)
 
     def trust_skill(self, name: str, skill_path: Path) -> None:
+        """Execute trust skill on SkillTrustStore."""
         try:
             resolved = skill_path.expanduser().resolve()
             trust_skill_dir(resolved, store_path=self.trust_file_path)

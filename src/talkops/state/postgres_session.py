@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """PostgreSQL checkpointer, store, and session backend for TalkOps Central Server Mode.
 
 Implements:
@@ -13,12 +27,13 @@ Implements:
 from __future__ import annotations
 
 import contextlib
+import json
+import os
 from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
-import json
-import os
 from typing import TYPE_CHECKING, Any, Self, cast
+from urllib.parse import quote_plus
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres.aio import AsyncPostgresStore
@@ -48,8 +63,6 @@ def get_postgres_session_uri() -> str | None:
     (`TALKOPS_POSTGRES_HOST` / `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`,
     `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_SSLMODE`).
     """
-    from urllib.parse import quote_plus
-
     for env_key in (
         "TALKOPS_POSTGRES_URI",
         "TALKOPS_SERVER_POSTGRES_URI",
@@ -201,6 +214,7 @@ class TalkOpsPostgresCheckpointer(AsyncPostgresSaver):
     async def aget_iter(self, config: RunnableConfig) -> AsyncIterator[CheckpointTuple]:
         """Asynchronously iterate checkpoints matching config."""
         async def gen() -> AsyncIterator[CheckpointTuple]:
+            """Execute gen."""
             tup = await self.aget_tuple(config)
             if tup is not None:
                 yield tup
@@ -492,6 +506,7 @@ class PostgresSessionBackend:
     """Multi-user PostgreSQL session query backend for Central Server Mode."""
 
     def __init__(self, conn_string: str | None = None) -> None:
+        """Initialize PostgresSessionBackend."""
         self.conn_string = conn_string or get_postgres_session_uri()
         if not self.conn_string:
             raise ValueError("PostgreSQL URI not configured for PostgresSessionBackend")
@@ -521,6 +536,7 @@ class PostgresSessionBackend:
         *,
         user_id: str | None = None,
     ) -> str | None:
+        """Retrieve thread title."""
         if not thread_id:
             return None
         async with self._connect() as conn, conn.cursor() as cur:
@@ -553,6 +569,7 @@ class PostgresSessionBackend:
         only_if_empty: bool = True,
         user_id: str | None = None,
     ) -> bool:
+        """Set thread title."""
         if not thread_id or not isinstance(thread_id, str) or not thread_id.strip():
             return False
 
@@ -610,6 +627,7 @@ class PostgresSessionBackend:
         cwd: str | None = None,
         user_id: str | None = None,
     ) -> list[ThreadInfo]:
+        """List threads."""
         from talkops.state.session import (
             ThreadInfo,
             _summarize_checkpoint,
@@ -708,6 +726,7 @@ class PostgresSessionBackend:
         *,
         user_id: str | None = None,
     ) -> bool:
+        """Delete thread."""
         assert self.conn_string is not None
         async with TalkOpsPostgresCheckpointer.from_conn_string(
             self.conn_string, use_pool=False
@@ -745,6 +764,7 @@ class PostgresSessionBackend:
         *,
         user_id: str | None = None,
     ) -> bool:
+        """Execute thread exists on PostgresSessionBackend."""
         async with self._connect() as conn, conn.cursor() as cur:
             if user_id and user_id not in ("*", "default", "local"):
                 await cur.execute(
@@ -771,6 +791,7 @@ class PostgresSessionBackend:
         *,
         user_id: str | None = None,
     ) -> list[str]:
+        """Find and return similar threads."""
         async with self._connect() as conn, conn.cursor() as cur:
             if user_id and user_id not in ("*", "default", "local"):
                 await cur.execute(

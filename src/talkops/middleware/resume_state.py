@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Middleware for persisting per-checkpoint resume facts (tokens, model specs)."""
 
 from __future__ import annotations
@@ -104,7 +118,7 @@ class ResumeStateMiddleware(AgentMiddleware[ResumeState, ContextT]):
     ) -> dict[str, Any] | None:
         """Schedule non-blocking conversation title generation on the first turn of a main thread.
 
-        Mirrors ``(*CascadeManager).maybeGenerateConversationTitle`` (0x101d812a0):
+        Preconditions:
         - Only runs on the first turn (no prior ``AIMessage`` in state).
         - Only runs on root conversation trajectories (``checkpoint_ns == ""``).
         - Skips non-conversational background requests (e.g. ``goal_criteria_request``).
@@ -120,7 +134,9 @@ class ResumeStateMiddleware(AgentMiddleware[ResumeState, ContextT]):
         if not thread_id or checkpoint_ns:
             return None
 
-        from talkops.state.conversation_title import schedule_conversation_title_generation
+        from talkops.state.conversation_title import (
+            schedule_conversation_title_generation,
+        )
         from talkops.state.session import _initial_prompt_from_messages
 
         initial_prompt = _initial_prompt_from_messages(messages)

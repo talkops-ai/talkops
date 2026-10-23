@@ -1,6 +1,20 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Model configuration structures, catalogs, and helpers for LLM providers.
 
-Matches the OpsCode model system:
+Matches the TalkOps model system:
 - Supports all providers: Google GenAI, Anthropic, OpenAI, OpenRouter, Groq, DeepSeek, Ollama, etc.
 - Detailed capabilities: reasoning_output, tool_calling, max_tokens, etc.
 - Dynamic spec resolution: ``provider:model`` format
@@ -8,29 +22,57 @@ Matches the OpsCode model system:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
-from enum import StrEnum
 import importlib.util
 import json
 import os
-from pathlib import Path
 import socket
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, TypedDict, cast
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from talkops.config.settings import get_settings, resolve_env_var
+from talkops.config.toml_config import (
+    clear_default_model,
+    load_default_model,
+    load_recent_model,
+    save_default_model,
+    save_recent_model,
+)
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+PROVIDER_ALIASES: dict[str, str] = {
+    "google": "google_genai",
+    "gemini": "google_genai",
+    "vertexai": "google_vertexai",
+    "vertex": "google_vertexai",
+    "anthropic_vertex": "google_anthropic_vertex",
+    "mistral": "mistralai",
+    "azure": "azure_openai",
+    "watsonx": "ibm",
+}
+
+
+def canonicalize_provider(provider: str | None) -> str:
+    """Return the canonical internal provider identifier for an alias or provider name."""
+    if not provider:
+        return ""
+    cleaned = provider.strip().lower()
+    return PROVIDER_ALIASES.get(cleaned, cleaned)
+
 
 PROVIDER_API_KEY_ENV: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "azure_openai": "AZURE_OPENAI_API_KEY",
     "baseten": "BASETEN_API_KEY",
     "bedrock": "AWS_ACCESS_KEY_ID",
+    "cerebras": "CEREBRAS_API_KEY",
     "cohere": "COHERE_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "fireworks": "FIREWORKS_API_KEY",
@@ -46,6 +88,7 @@ PROVIDER_API_KEY_ENV: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "perplexity": "PPLX_API_KEY",
+    "sambanova": "SAMBANOVA_API_KEY",
     "together": "TOGETHER_API_KEY",
     "typesafe": "TYPESAFE_API_KEY",
     "xai": "XAI_API_KEY",
@@ -69,30 +112,56 @@ CODEX_MODELS: frozenset[str] = frozenset(
 
 PROVIDER_BASE_URL_ENV: dict[str, tuple[str, ...]] = {
     "anthropic": ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_URL"),
-    "azure_openai": ("AZURE_OPENAI_ENDPOINT",),
+    "azure_openai": ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_BASE_URL"),
     "baseten": ("BASETEN_BASE_URL", "BASETEN_API_BASE"),
-    "cohere": ("CO_API_URL",),
-    "deepseek": ("DEEPSEEK_API_BASE",),
+    "bedrock": ("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "BEDROCK_ENDPOINT_URL", "AWS_BEDROCK_ENDPOINT_URL", "BEDROCK_BASE_URL"),
+    "cerebras": ("CEREBRAS_BASE_URL", "CEREBRAS_API_BASE"),
+    "cohere": ("CO_API_URL", "COHERE_BASE_URL"),
+    "deepseek": ("DEEPSEEK_API_BASE", "DEEPSEEK_BASE_URL"),
     "fireworks": ("FIREWORKS_BASE_URL", "FIREWORKS_API_BASE"),
-    "google_genai": ("GOOGLE_GEMINI_BASE_URL",),
+    "google_genai": ("GOOGLE_GEMINI_BASE_URL", "GOOGLE_GENAI_BASE_URL", "GOOGLE_BASE_URL"),
+    "google_vertexai": ("VERTEXAI_API_ENDPOINT", "VERTEXAI_BASE_URL", "GOOGLE_VERTEXAI_BASE_URL"),
+    "google_anthropic_vertex": ("VERTEXAI_API_ENDPOINT", "VERTEXAI_BASE_URL", "GOOGLE_ANTHROPIC_VERTEX_BASE_URL"),
     "groq": ("GROQ_BASE_URL", "GROQ_API_BASE"),
-    "huggingface": ("HF_INFERENCE_ENDPOINT",),
-    "ibm": ("WATSONX_URL",),
-    "meta": ("MODEL_API_BASE",),
-    "mistralai": ("MISTRAL_BASE_URL",),
-    "nvidia": ("NVIDIA_BASE_URL",),
+    "huggingface": ("HF_INFERENCE_ENDPOINT", "HUGGINGFACE_BASE_URL"),
+    "ibm": ("WATSONX_URL", "IBM_BASE_URL"),
+    "litellm": ("LITELLM_API_BASE", "LITELLM_BASE_URL"),
+    "meta": ("MODEL_API_BASE", "META_BASE_URL"),
+    "mistralai": ("MISTRAL_BASE_URL", "MISTRAL_API_BASE"),
+    "nvidia": ("NVIDIA_BASE_URL", "NVIDIA_API_BASE"),
+    "ollama": ("OLLAMA_HOST", "OLLAMA_BASE_URL"),
     "openai": ("OPENAI_BASE_URL", "OPENAI_API_BASE"),
     "openai_codex": ("OPENAI_BASE_URL", "OPENAI_API_BASE"),
-    "openrouter": ("OPENROUTER_API_BASE",),
-    "perplexity": ("PERPLEXITY_BASE_URL",),
-    "together": ("TOGETHER_API_BASE",),
+    "openrouter": ("OPENROUTER_API_BASE", "OPENROUTER_BASE_URL"),
+    "perplexity": ("PERPLEXITY_BASE_URL", "PPLX_BASE_URL"),
+    "sambanova": ("SAMBANOVA_BASE_URL", "SAMBANOVA_API_BASE"),
+    "together": ("TOGETHER_API_BASE", "TOGETHER_BASE_URL"),
     "typesafe": ("TYPESAFE_BASE_URL", "TYPESAFE_API_BASE"),
-    "xai": ("XAI_API_BASE",),
+    "xai": ("XAI_API_BASE", "XAI_BASE_URL"),
+}
+
+PROVIDER_DEFAULT_BASE_URL: dict[str, str] = {
+    "cerebras": "https://api.cerebras.ai/v1",
+    "sambanova": "https://api.sambanova.ai/v1",
 }
 
 IMPLICIT_AUTH_PROVIDERS: set[str] = {"google_vertexai", "google_anthropic_vertex"}
 NO_AUTH_REQUIRED_PROVIDERS: set[str] = {"ollama", "dynamic"}
 OPTIONAL_AUTH_ENV: dict[str, str] = {"ollama": "OLLAMA_API_KEY"}
+
+
+def normalize_ollama_endpoint(endpoint: str | None) -> str | None:
+    """Normalize an Ollama endpoint or OLLAMA_HOST value into a valid http(s) URL."""
+    if not endpoint or not endpoint.strip():
+        return None
+    raw = endpoint.strip().rstrip("/")
+    if not raw.startswith(("http://", "https://")):
+        raw = f"http://{raw}"
+    parsed = urlparse(raw)
+    if parsed.hostname == "0.0.0.0":
+        port_part = f":{parsed.port}" if parsed.port else ":11434"
+        raw = f"{parsed.scheme}://localhost{port_part}{parsed.path}".rstrip("/")
+    return raw
 
 
 class ProviderAuthState(StrEnum):
@@ -141,6 +210,7 @@ class ModelSpec:
     model: str
 
     def __post_init__(self) -> None:
+        """Validate and normalize fields after dataclass initialization."""
         if not self.provider:
             raise ValueError("Provider cannot be empty")
         if not self.model:
@@ -180,6 +250,7 @@ class ModelSpec:
             return None
 
     def __str__(self) -> str:
+        """Return a human-readable string representation."""
         return f"{self.provider}:{self.model}"
 
 
@@ -232,6 +303,7 @@ class ModelConfig:
     providers: Mapping[str, ProviderConfig] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Validate and normalize fields after dataclass initialization."""
         if not isinstance(self.providers, MappingProxyType):
             object.__setattr__(self, "providers", MappingProxyType(dict(self.providers)))
 
@@ -240,15 +312,33 @@ class ModelConfig:
         """Load the active model configuration from application settings and config.toml.
 
         Returns:
-            ModelConfig initialized with default and recent model selections.
+            ModelConfig initialized with default, recent, and custom provider configurations.
         """
         settings = get_settings()
         explicit = getattr(settings, "model_name", None) or getattr(settings, "model", None)
 
-        from talkops.config.toml_config import load_default_model, load_recent_model
+        from talkops.config.toml_config import (
+            load_default_model,
+            load_model_providers,
+            load_recent_model,
+        )
+
         default = explicit or load_default_model()
         recent = explicit or load_recent_model() or default
-        return cls(default_model=default, recent_model=recent)
+        try:
+            providers = load_model_providers()
+        except Exception:
+            providers = {}
+        return cls(default_model=default, recent_model=recent, providers=providers)
+
+    def _get_provider_config(self, provider: str) -> ProviderConfig | None:
+        """Lookup provider configuration by raw name or canonicalized name."""
+        if provider in self.providers:
+            return self.providers[provider]
+        canon = canonicalize_provider(provider)
+        if canon in self.providers:
+            return self.providers[canon]
+        return None
 
     def is_provider_enabled(self, provider: str) -> bool:
         """Check whether a model provider is enabled in configuration.
@@ -259,7 +349,7 @@ class ModelConfig:
         Returns:
             True if enabled; False otherwise.
         """
-        provider_config = self.providers.get(provider)
+        provider_config = self._get_provider_config(provider)
         if provider_config is None:
             return True
         return provider_config.get("enabled", True)
@@ -274,7 +364,7 @@ class ModelConfig:
         Returns:
             Dictionary of provider kwargs.
         """
-        provider_config = self.providers.get(provider)
+        provider_config = self._get_provider_config(provider)
         if not provider_config:
             return {}
         params = dict(provider_config.get("params", {}))
@@ -287,7 +377,7 @@ class ModelConfig:
         return params
 
     def get_base_url(self, provider: str) -> str | None:
-        """Resolve the effective base URL for a provider from env or config.
+        """Resolve the effective base URL for a provider from env, config, or credential storage.
 
         Args:
             provider: Provider identifier.
@@ -295,20 +385,46 @@ class ModelConfig:
         Returns:
             Resolved base URL string or None.
         """
-        provider_config = self.providers.get(provider)
+        canon = canonicalize_provider(provider)
+        provider_config = self._get_provider_config(provider)
         if provider_config:
             base_url_env = provider_config.get("base_url_env")
             if base_url_env:
                 val = resolve_env_var(base_url_env)
                 if val:
-                    return val
+                    return normalize_ollama_endpoint(val) if canon == "ollama" else val
             if provider_config.get("base_url"):
-                return provider_config.get("base_url")
+                raw_url = str(provider_config["base_url"])
+                return normalize_ollama_endpoint(raw_url) if canon == "ollama" else raw_url
 
-        for env_name in PROVIDER_BASE_URL_ENV.get(provider, ()):
+        for env_name in PROVIDER_BASE_URL_ENV.get(canon, PROVIDER_BASE_URL_ENV.get(provider, ())):
             val = resolve_env_var(env_name)
             if val:
-                return val
+                return normalize_ollama_endpoint(val) if canon == "ollama" else val
+
+        try:
+            from talkops.state.remote_session import _can_use_disk_auth_session
+
+            if _can_use_disk_auth_session():
+                from talkops.auth.storage import get_credential_storage
+
+                entry = get_credential_storage().get_provider_entry(canon) or (
+                    get_credential_storage().get_provider_entry(provider) if provider != canon else None
+                )
+                if entry and entry.get("base_url"):
+                    stored_key = entry.get("api_key")
+                    env_var = PROVIDER_API_KEY_ENV.get(canon)
+                    current_env_key = os.environ.get(env_var) if env_var else None
+                    if not current_env_key or not stored_key or current_env_key == stored_key:
+                        raw_url = str(entry["base_url"]).strip()
+                        if raw_url:
+                            return normalize_ollama_endpoint(raw_url) if canon == "ollama" else raw_url
+        except Exception:
+            pass
+
+        default_url = PROVIDER_DEFAULT_BASE_URL.get(canon)
+        if default_url:
+            return default_url
 
         return None
 
@@ -321,7 +437,7 @@ class ModelConfig:
         Returns:
             Environment variable name or None.
         """
-        provider_config = self.providers.get(provider)
+        provider_config = self._get_provider_config(provider)
         if not provider_config:
             return None
         return provider_config.get("base_url_env")
@@ -335,7 +451,7 @@ class ModelConfig:
         Returns:
             Environment variable name or None.
         """
-        provider_config = self.providers.get(provider)
+        provider_config = self._get_provider_config(provider)
         if not provider_config:
             return None
         return provider_config.get("api_key_env")
@@ -349,7 +465,7 @@ class ModelConfig:
         Returns:
             Python import path string or None.
         """
-        provider_config = self.providers.get(provider)
+        provider_config = self._get_provider_config(provider)
         if not provider_config:
             return None
         return provider_config.get("class_path")
@@ -364,7 +480,7 @@ class ModelConfig:
         Returns:
             Dictionary of profile overrides.
         """
-        provider_config = self.providers.get(provider)
+        provider_config = self._get_provider_config(provider)
         if not provider_config:
             return {}
         profile = dict(provider_config.get("profile", {}))
@@ -386,7 +502,14 @@ def get_credential_env_var(provider: str) -> str | None:
     Returns:
         Environment variable name or None.
     """
-    return PROVIDER_API_KEY_ENV.get(provider)
+    try:
+        custom_env = ModelConfig.load().get_api_key_env(provider)
+        if custom_env:
+            return custom_env
+    except Exception:
+        pass
+    canon = canonicalize_provider(provider)
+    return PROVIDER_API_KEY_ENV.get(canon) or PROVIDER_API_KEY_ENV.get(provider)
 
 
 def get_base_url_env_vars(provider: str) -> tuple[str, ...]:
@@ -398,7 +521,24 @@ def get_base_url_env_vars(provider: str) -> tuple[str, ...]:
     Returns:
         Tuple of candidate environment variable names.
     """
-    return PROVIDER_BASE_URL_ENV.get(provider, ())
+    canon = canonicalize_provider(provider)
+    candidates = list(PROVIDER_BASE_URL_ENV.get(canon, PROVIDER_BASE_URL_ENV.get(provider, ())))
+    try:
+        custom_env = ModelConfig.load().get_base_url_env(provider)
+        if custom_env and custom_env not in candidates:
+            candidates.insert(0, custom_env)
+    except Exception:
+        pass
+    return tuple(candidates)
+
+
+def get_base_url_env_var(provider: str) -> str | None:
+    """Return the primary environment variable name for a provider's base URL."""
+    candidates = get_base_url_env_vars(provider)
+    if candidates:
+        return candidates[0]
+    canon = canonicalize_provider(provider)
+    return f"{canon.upper()}_BASE_URL" if canon else None
 
 
 PROVIDER_SETTINGS_FIELD_MAP: dict[str, str] = {
@@ -431,12 +571,15 @@ PROVIDER_SETTINGS_FIELD_MAP: dict[str, str] = {
 PROVIDER_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "google_genai": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-    "google_vertexai": ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT"),
-    "google_anthropic_vertex": ("GOOGLE_CLOUD_PROJECT", "GOOGLE_API_KEY"),
+    "google_vertexai": ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "google_anthropic_vertex": ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "GOOGLE_API_KEY"),
     "mistralai": ("MISTRAL_API_KEY", "MISTRALAI_API_KEY"),
     "mistral": ("MISTRAL_API_KEY", "MISTRALAI_API_KEY"),
     "fireworks": ("FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY"),
     "perplexity": ("PPLX_API_KEY", "PERPLEXITY_API_KEY"),
+    "cohere": ("COHERE_API_KEY", "CO_API_KEY"),
+    "huggingface": ("HUGGINGFACEHUB_API_TOKEN", "HF_TOKEN", "HUGGINGFACE_API_KEY"),
+    "ibm": ("WATSONX_APIKEY", "WATSONX_API_KEY", "IBM_CLOUD_API_KEY"),
     "typesafe": ("TYPESAFE_API_KEY", "JEV_API_KEY"),
 }
 
@@ -450,15 +593,16 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
     Returns:
         ProviderAuthStatus indicating current configuration state and credentials.
     """
-    if provider in NO_AUTH_REQUIRED_PROVIDERS:
+    canon = canonicalize_provider(provider)
+    if canon in NO_AUTH_REQUIRED_PROVIDERS or provider in NO_AUTH_REQUIRED_PROVIDERS:
         return ProviderAuthStatus(state=ProviderAuthState.NOT_REQUIRED, provider=provider, detail="local provider")
 
-    if provider in IMPLICIT_AUTH_PROVIDERS:
+    if canon in IMPLICIT_AUTH_PROVIDERS or provider in IMPLICIT_AUTH_PROVIDERS:
         return ProviderAuthStatus(state=ProviderAuthState.IMPLICIT, provider=provider, detail="implicit auth")
 
     settings = get_settings()
 
-    if provider in ("bedrock", "bedrock_converse", "anthropic_bedrock"):
+    if canon in ("bedrock", "bedrock_converse", "anthropic_bedrock"):
         from talkops.config.aws import (
             AWS_CREDENTIAL_ENV_SOURCES,
             get_boto3_session,
@@ -521,14 +665,14 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
     if env_var:
         val = resolve_env_var(env_var)
 
-    if not val and provider in PROVIDER_KEY_ALIASES:
-        for alias in PROVIDER_KEY_ALIASES[provider]:
+    if not val and canon in PROVIDER_KEY_ALIASES:
+        for alias in PROVIDER_KEY_ALIASES[canon]:
             val = resolve_env_var(alias)
             if val:
                 break
 
     if not val:
-        field = PROVIDER_SETTINGS_FIELD_MAP.get(provider)
+        field = PROVIDER_SETTINGS_FIELD_MAP.get(canon) or PROVIDER_SETTINGS_FIELD_MAP.get(provider)
         if field and hasattr(settings, field):
             val = getattr(settings, field)
 
@@ -539,14 +683,16 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
             if _can_use_disk_auth_session():
                 from talkops.auth.storage import get_credential_storage
 
-                val = get_credential_storage().get_provider_key(provider)
+                val = get_credential_storage().get_provider_key(canon) or (
+                    get_credential_storage().get_provider_key(provider) if provider != canon else None
+                )
         except Exception:
             pass
 
     if val:
         return ProviderAuthStatus(state=ProviderAuthState.CONFIGURED, provider=provider, env_var=env_var)
 
-    if provider in ("google_genai", "google"):
+    if canon == "google_genai":
         use_vertex = resolve_env_var("GOOGLE_GENAI_USE_VERTEXAI") or str(
             getattr(settings, "google_genai_use_vertexai", False)
         )
@@ -558,11 +704,20 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
                 detail="Vertex AI backend enabled",
             )
 
-    optional_env = OPTIONAL_AUTH_ENV.get(provider)
+    optional_env = OPTIONAL_AUTH_ENV.get(canon)
     if optional_env and resolve_env_var(optional_env):
         return ProviderAuthStatus(state=ProviderAuthState.CONFIGURED, provider=provider, env_var=optional_env)
 
     if not env_var:
+        try:
+            if ModelConfig.load().get_class_path(provider):
+                return ProviderAuthStatus(
+                    state=ProviderAuthState.NOT_REQUIRED,
+                    provider=provider,
+                    detail="custom class_path provider",
+                )
+        except Exception:
+            pass
         return ProviderAuthStatus(state=ProviderAuthState.UNKNOWN, provider=provider, detail="credentials unknown")
 
     return ProviderAuthStatus(
@@ -586,12 +741,15 @@ def apply_stored_credentials(provider: str | None = None) -> bool:
     """Bridge credentials into process env vars for LangChain model factories across all providers."""
     if not provider:
         try:
-            from talkops.config.toml_config import apply_stored_credentials as _toml_apply
+            from talkops.config.toml_config import (
+                apply_stored_credentials as _toml_apply,
+            )
             _toml_apply()
             return True
         except Exception:
             return False
 
+    canon = canonicalize_provider(provider)
     settings = get_settings()
     env_var = get_credential_env_var(provider)
     applied = False
@@ -600,38 +758,46 @@ def apply_stored_credentials(provider: str | None = None) -> bool:
     if env_var:
         val = resolve_env_var(env_var)
 
-    if not val and provider in PROVIDER_KEY_ALIASES:
-        for alias in PROVIDER_KEY_ALIASES[provider]:
+    if not val and canon in PROVIDER_KEY_ALIASES:
+        for alias in PROVIDER_KEY_ALIASES[canon]:
             val = resolve_env_var(alias)
             if val:
                 break
 
     if not val:
-        field = PROVIDER_SETTINGS_FIELD_MAP.get(provider)
+        field = PROVIDER_SETTINGS_FIELD_MAP.get(canon) or PROVIDER_SETTINGS_FIELD_MAP.get(provider)
         if field and hasattr(settings, field):
             val = getattr(settings, field)
 
-    if not val:
-        try:
-            from talkops.state.remote_session import _can_use_disk_auth_session
+    stored_entry: dict[str, Any] | None = None
+    try:
+        from talkops.state.remote_session import _can_use_disk_auth_session
 
-            if _can_use_disk_auth_session():
-                from talkops.auth.storage import get_credential_storage
+        if _can_use_disk_auth_session():
+            from talkops.auth.storage import get_credential_storage
 
-                val = get_credential_storage().get_provider_key(provider)
-        except Exception:
-            pass
+            stored_entry = get_credential_storage().get_provider_entry(canon) or (
+                get_credential_storage().get_provider_entry(provider) if provider != canon else None
+            )
+            if not val and stored_entry:
+                val = stored_entry.get("api_key")
+    except Exception:
+        pass
 
     if val:
         if env_var:
             os.environ[env_var] = str(val)
-        if provider in PROVIDER_KEY_ALIASES:
-            for alias in PROVIDER_KEY_ALIASES[provider]:
-                os.environ[alias] = str(val)
+        if canon in PROVIDER_KEY_ALIASES:
+            for alias in PROVIDER_KEY_ALIASES[canon]:
+                # Only populate key aliases that are API key vars (do not overwrite GOOGLE_CLOUD_PROJECT with an API key)
+                if alias not in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID"):
+                    os.environ[alias] = str(val)
+                elif env_var in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID"):
+                    os.environ[alias] = str(val)
         applied = True
 
-    # Reconcile provider endpoint / base URLs across canonical key and aliases
-    base_urls = PROVIDER_BASE_URL_ENV.get(provider, ())
+    # Reconcile provider endpoint / base URLs across canonical key, aliases, and storage
+    base_urls = get_base_url_env_vars(provider)
     if base_urls:
         primary_base_url_var = base_urls[0]
         stored_base_url = resolve_env_var(primary_base_url_var)
@@ -640,25 +806,42 @@ def apply_stored_credentials(provider: str | None = None) -> bool:
                 stored_base_url = resolve_env_var(alias)
                 if stored_base_url:
                     break
+        if not stored_base_url and stored_entry and stored_entry.get("base_url"):
+            stored_key = stored_entry.get("api_key")
+            current_env_key = os.environ.get(env_var) if env_var else None
+            if not current_env_key or not stored_key or current_env_key == stored_key:
+                stored_base_url = str(stored_entry["base_url"]).strip()
         if stored_base_url:
+            if canon == "ollama":
+                stored_base_url = normalize_ollama_endpoint(stored_base_url) or stored_base_url
             os.environ[primary_base_url_var] = str(stored_base_url)
             for alias in base_urls[1:]:
                 os.environ[alias] = str(stored_base_url)
+            applied = True
 
-    if provider in ("google_genai", "google", "google_vertexai", "google_anthropic_vertex"):
+    if canon in ("google_genai", "google_vertexai", "google_anthropic_vertex"):
         use_vertex = resolve_env_var("GOOGLE_GENAI_USE_VERTEXAI") or str(
             getattr(settings, "google_genai_use_vertexai", False)
         )
         if (
-            provider in ("google_vertexai", "google_anthropic_vertex")
+            canon in ("google_vertexai", "google_anthropic_vertex")
             or use_vertex.strip().lower() in ("true", "1", "yes")
         ):
             os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
             applied = True
-        proj = resolve_env_var("GOOGLE_CLOUD_PROJECT") or getattr(settings, "google_cloud_project", None)
+        proj = (
+            resolve_env_var("GOOGLE_CLOUD_PROJECT")
+            or resolve_env_var("GCP_PROJECT_ID")
+            or getattr(settings, "google_cloud_project", None)
+        )
         if proj:
             os.environ["GOOGLE_CLOUD_PROJECT"] = str(proj)
-        loc = resolve_env_var("GOOGLE_CLOUD_LOCATION") or getattr(settings, "google_cloud_location", None)
+        loc = (
+            resolve_env_var("GOOGLE_CLOUD_LOCATION")
+            or resolve_env_var("GCP_LOCATION")
+            or resolve_env_var("CLOUD_ML_REGION")
+            or getattr(settings, "google_cloud_location", None)
+        )
         if loc:
             os.environ["GOOGLE_CLOUD_LOCATION"] = str(loc)
 
@@ -2024,6 +2207,70 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "tool_calling": True,
         "structured_output": True,
     },
+    "google_anthropic_vertex:claude-sonnet-5@20250929": {
+        "name": "Claude Sonnet 5 (Vertex)",
+        "max_input_tokens": 200_000,
+        "max_output_tokens": 64_000,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high", "max"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "google_anthropic_vertex:claude-opus-5@20251101": {
+        "name": "Claude Opus 5 (Vertex)",
+        "max_input_tokens": 200_000,
+        "max_output_tokens": 64_000,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high", "xhigh", "max"],
+        "reasoning_effort_default": "high",
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "cerebras:llama-3.3-70b": {
+        "name": "Llama 3.3 70B (Cerebras)",
+        "max_input_tokens": 128_000,
+        "max_output_tokens": 8_192,
+        "text_inputs": True,
+        "reasoning_output": False,
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "cerebras:qwen-3-32b": {
+        "name": "Qwen 3 32B (Cerebras)",
+        "max_input_tokens": 128_000,
+        "max_output_tokens": 16_384,
+        "text_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "sambanova:Meta-Llama-3.3-70B-Instruct": {
+        "name": "Llama 3.3 70B Instruct (SambaNova)",
+        "max_input_tokens": 128_000,
+        "max_output_tokens": 8_192,
+        "text_inputs": True,
+        "reasoning_output": False,
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "sambanova:DeepSeek-R1": {
+        "name": "DeepSeek R1 (SambaNova)",
+        "max_input_tokens": 128_000,
+        "max_output_tokens": 16_384,
+        "text_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
 }
 
 DEFAULT_PROVIDER_PRIORITY: tuple[str, ...] = (
@@ -2033,6 +2280,7 @@ DEFAULT_PROVIDER_PRIORITY: tuple[str, ...] = (
     "bedrock",
     "azure_openai",
     "google_vertexai",
+    "google_anthropic_vertex",
     "deepseek",
     "groq",
     "openrouter",
@@ -2040,6 +2288,8 @@ DEFAULT_PROVIDER_PRIORITY: tuple[str, ...] = (
     "xai",
     "together",
     "fireworks",
+    "cerebras",
+    "sambanova",
     "cohere",
     "perplexity",
     "baseten",
@@ -2107,9 +2357,6 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
         ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview"),
         ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
         ("gemini-3-flash-preview", "Gemini 3 Flash Preview"),
-        ("gemini-2.5-pro", "Gemini 2.5 Pro"),
-        ("gemini-2.5-flash", "Gemini 2.5 Flash"),
-        ("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite"),
         ("gemini-flash-latest", "Gemini Flash (Latest)"),
         ("gemini-flash-lite-latest", "Gemini Flash-Lite (Latest)"),
     ],
@@ -2239,11 +2486,21 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
         ("gemini-3.8-flash", "Gemini 3.8 Flash (Vertex)"),
         ("gemini-3.7-flash", "Gemini 3.7 Flash (Vertex)"),
         ("gemini-3.5-flash", "Gemini 3.5 Flash (Vertex)"),
+        ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite (Vertex)"),
+        ("gemini-3-flash-preview", "Gemini 3 Flash Preview (Vertex)"),
         ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview (Vertex)"),
-        ("gemini-2.5-pro", "Gemini 2.5 Pro (Vertex)"),
-        ("gemini-2.5-flash", "Gemini 2.5 Flash (Vertex)"),
+    ],
+    "google_anthropic_vertex": [
         ("claude-sonnet-5@20250929", "Claude Sonnet 5 (Vertex)"),
         ("claude-opus-5@20251101", "Claude Opus 5 (Vertex)"),
+    ],
+    "cerebras": [
+        ("llama-3.3-70b", "Llama 3.3 70B (Cerebras)"),
+        ("qwen-3-32b", "Qwen 3 32B (Cerebras)"),
+    ],
+    "sambanova": [
+        ("Meta-Llama-3.3-70B-Instruct", "Llama 3.3 70B Instruct (SambaNova)"),
+        ("DeepSeek-R1", "DeepSeek R1 (SambaNova)"),
     ],
     "ollama": [
         ("deepseek-v4-pro:cloud", "DeepSeek V4 Pro"),
@@ -2304,6 +2561,8 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "openrouter": "OpenRouter",
     "fireworks": "Fireworks AI",
     "together": "Together AI",
+    "cerebras": "Cerebras",
+    "sambanova": "SambaNova",
     "xai": "xAI",
     "mistralai": "Mistral AI",
     "groq": "Groq",
@@ -2335,10 +2594,17 @@ def get_provider_display_name(provider: str) -> str:
     Returns:
         Formatted human-readable display name.
     """
-    return PROVIDER_DISPLAY_NAMES.get(provider, provider.title())
+    try:
+        custom_cfg = ModelConfig.load()._get_provider_config(provider)
+        if custom_cfg and custom_cfg.get("display_name"):
+            return str(custom_cfg["display_name"])
+    except Exception:
+        pass
+    canon = canonicalize_provider(provider)
+    return PROVIDER_DISPLAY_NAMES.get(canon, PROVIDER_DISPLAY_NAMES.get(provider, provider.title()))
 
 
-# ── Dynamic Provider & Model Discovery (dcode aligned) ────
+# ── Dynamic Provider & Model Discovery ────────────────────
 
 _BUILTIN_PROVIDERS_CACHE: dict[str, Any] | None = None
 _PROVIDER_PROFILES_CACHE: dict[str, dict[str, Any]] = {}
@@ -2444,6 +2710,13 @@ def _load_provider_profiles_from_package(module_path: str) -> dict[str, Any]:
     return {}
 
 
+_DEPRECATED_UPSTREAM_MODEL_PREFIXES: tuple[str, ...] = (
+    "gemini-2.5",
+    "gemini-2.0",
+    "gemini-1.5",
+)
+
+
 def _discover_upstream_models() -> dict[str, list[tuple[str, str]]]:
     """Dynamically discover models from installed LangChain packages exposing data._profiles."""
     discovered: dict[str, list[tuple[str, str]]] = {}
@@ -2458,6 +2731,8 @@ def _discover_upstream_models() -> dict[str, list[tuple[str, str]]]:
             continue
         models: list[tuple[str, str]] = []
         for name, prof in profiles.items():
+            if any(name.lower().startswith(prefix) for prefix in _DEPRECATED_UPSTREAM_MODEL_PREFIXES):
+                continue
             if (
                 prof.get("tool_calling", False)
                 and prof.get("text_inputs", True) is not False
@@ -2487,7 +2762,8 @@ def _ollama_host_reachable(base_url: str, *, timeout: float = 0.5) -> bool:
 
 def _fetch_ollama_installed_models(endpoint: str | None = None) -> list[str]:
     """Query local or hosted Ollama daemon /api/tags for installed models."""
-    base = (endpoint or OLLAMA_DEFAULT_BASE_URL).rstrip("/")
+    resolved_endpoint = endpoint or ModelConfig.load().get_base_url("ollama") or OLLAMA_DEFAULT_BASE_URL
+    base = (normalize_ollama_endpoint(resolved_endpoint) or OLLAMA_DEFAULT_BASE_URL).rstrip("/")
     if not _ollama_host_reachable(base):
         return []
 
@@ -2593,7 +2869,7 @@ def get_model_profiles(
     result: dict[str, ModelProfileEntry] = {}
     config = ModelConfig.load()
 
-    # 1. Dynamic upstream discovery from installed provider packages (dcode aligned)
+    # 1. Dynamic upstream discovery from installed provider packages
     for provider, module_path in _get_provider_profile_modules():
         if not config.is_provider_enabled(provider):
             continue
@@ -2737,9 +3013,24 @@ def get_available_models_list() -> list[tuple[str, str, str]]:
     seen: set[str] = set()
     config = ModelConfig.load()
 
+    # Pre-fetch locally installed Ollama models so they appear at the top of the Ollama group
+    installed_ollama_models: list[str] = []
+    if config.is_provider_enabled("ollama"):
+        try:
+            installed_ollama_models = _fetch_ollama_installed_models(config.get_base_url("ollama"))
+        except Exception:
+            logger.debug("Failed Ollama model discovery", exc_info=True)
+
     # 1. Curated frontier catalog across all providers (primary source of truth)
     for provider in DEFAULT_PROVIDER_PRIORITY:
         if provider not in AVAILABLE_MODELS or not config.is_provider_enabled(provider):
+            continue
+        if provider == "ollama":
+            for model_id in installed_ollama_models:
+                spec = f"ollama:{model_id}"
+                if spec not in seen:
+                    result.append((spec, f"{model_id} (installed)", "ollama"))
+                    seen.add(spec)
             continue
         for model_id, display_name in AVAILABLE_MODELS[provider]:
             spec = f"{provider}:{model_id}"
@@ -2769,17 +3060,13 @@ def get_available_models_list() -> list[tuple[str, str, str]]:
     except Exception:
         logger.debug("Failed upstream model discovery", exc_info=True)
 
-    # 3. Dynamic local Ollama discovery if daemon is running
+    # 3. Remaining local Ollama models if not already added above
     if config.is_provider_enabled("ollama"):
-        try:
-            ollama_models = _fetch_ollama_installed_models()
-            for model_id in ollama_models:
-                spec = f"ollama:{model_id}"
-                if spec not in seen:
-                    result.append((spec, model_id, "ollama"))
-                    seen.add(spec)
-        except Exception:
-            logger.debug("Failed Ollama model discovery", exc_info=True)
+        for model_id in installed_ollama_models:
+            spec = f"ollama:{model_id}"
+            if spec not in seen:
+                result.append((spec, f"{model_id} (installed)", "ollama"))
+                seen.add(spec)
 
     # 4. Config-defined custom models
     for provider, pconfig in config.providers.items():
@@ -2797,7 +3084,8 @@ def get_available_models_list() -> list[tuple[str, str, str]]:
 
 def get_curated_models_for_provider(provider: str) -> list[tuple[str, str]]:
     """Return curated list of (model_id, display_name) tuples for a provider from AVAILABLE_MODELS."""
-    return list(AVAILABLE_MODELS.get(provider, []))
+    canon = canonicalize_provider(provider)
+    return list(AVAILABLE_MODELS.get(canon, AVAILABLE_MODELS.get(provider, [])))
 
 _BEDROCK_REGION_PREFIXES = ("us.", "eu.", "apac.", "us-gov.")
 
@@ -2857,11 +3145,19 @@ def normalize_model_spec(model_spec: str) -> str:
         return model_spec
     stripped = model_spec.strip()
     if stripped.lower().startswith("bedrock:"):
-        return stripped
+        return f"bedrock:{stripped[len('bedrock:'):]}"
     if is_bedrock_model_id(stripped):
         return f"bedrock:{stripped}"
     if ":" in stripped:
-        return stripped
+        raw_prov, model_id = stripped.split(":", 1)
+        prov_clean = raw_prov.strip().lower()
+        try:
+            if prov_clean in ModelConfig.load().providers:
+                return f"{prov_clean}:{model_id.strip()}"
+        except Exception:
+            pass
+        canon = canonicalize_provider(prov_clean)
+        return f"{canon}:{model_id.strip()}"
     provider = detect_provider(stripped)
     if provider:
         return f"{provider}:{stripped}"
@@ -2882,20 +3178,16 @@ def resolve_model_spec(spec: str | None) -> tuple[str, str]:
         return "bedrock", stripped
     if ":" in stripped:
         provider, model_id = stripped.split(":", 1)
-        return provider.lower(), model_id
+        prov_clean = provider.strip().lower()
+        try:
+            if prov_clean in ModelConfig.load().providers:
+                return prov_clean, model_id.strip()
+        except Exception:
+            pass
+        return canonicalize_provider(prov_clean), model_id.strip()
     provider = detect_provider(stripped) or ""
     return provider, stripped
 
-
-from talkops.config.toml_config import (
-    clear_default_model,
-    load_default_model,
-    load_recent_model,
-    save_default_model,
-    save_recent_model,
-)
-
-import importlib.util
 
 _SUPPRESSED_WARNINGS: set[str] = set()
 
@@ -2923,15 +3215,43 @@ def revoke_provider_credentials(provider: str | None = None, settings: Any | Non
 
     target_providers: list[str] = []
     env_keys_to_clear: set[str] = set()
+    canon_filter = None if (provider is None or provider.lower() in ("all", "*", "")) else canonicalize_provider(provider)
 
     for p, env_var in PROVIDER_API_KEY_ENV.items():
-        if provider is None or provider.lower() in ("all", "*", "") or provider.lower() == p.lower():
+        if canon_filter is None or canon_filter == p.lower() or (provider and provider.lower() == p.lower()):
             target_providers.append(p)
             if env_var:
                 env_keys_to_clear.add(env_var)
                 os.environ.pop(env_var, None)
+            for alias in PROVIDER_KEY_ALIASES.get(p, ()):
+                if alias not in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID") or env_var in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID"):
+                    env_keys_to_clear.add(alias)
+                    os.environ.pop(alias, None)
+            for base_var in PROVIDER_BASE_URL_ENV.get(p, ()):
+                env_keys_to_clear.add(base_var)
+                os.environ.pop(base_var, None)
+            if settings is not None:
+                field = PROVIDER_SETTINGS_FIELD_MAP.get(p)
+                if field and hasattr(settings, field):
+                    try:
+                        setattr(settings, field, None)
+                    except Exception:
+                        pass
 
-    if GLOBAL_ENV_PATH.exists():
+    try:
+        from talkops.auth.storage import get_credential_storage
+
+        storage = get_credential_storage()
+        if canon_filter is None:
+            storage.delete_provider_key("all", sync_dotenv=False)
+        else:
+            storage.delete_provider_key(canon_filter, sync_dotenv=False)
+            if provider and provider.strip().lower() != canon_filter:
+                storage.delete_provider_key(provider.strip().lower(), sync_dotenv=False)
+    except Exception:
+        pass
+
+    if GLOBAL_ENV_PATH.exists() and env_keys_to_clear:
         try:
             lines = GLOBAL_ENV_PATH.read_text(encoding="utf-8").splitlines()
             remaining = [
@@ -2950,11 +3270,13 @@ _PROVIDER_DEPENDENCIES: dict[str, tuple[str, str]] = {
     "azure_openai": ("langchain_openai", "openai"),
     "baseten": ("langchain_baseten", "baseten"),
     "bedrock": ("langchain_aws", "bedrock"),
+    "cerebras": ("langchain_openai", "openai"),
     "cohere": ("langchain_cohere", "cohere"),
     "deepseek": ("langchain_deepseek", "deepseek"),
     "fireworks": ("langchain_fireworks", "fireworks"),
     "google_genai": ("langchain_google_genai", "google-genai"),
     "google_vertexai": ("langchain_google_vertexai", "vertex"),
+    "google_anthropic_vertex": ("langchain_google_vertexai", "vertex"),
     "groq": ("langchain_groq", "groq"),
     "huggingface": ("langchain_huggingface", "huggingface"),
     "ibm": ("langchain_ibm", "ibm"),
@@ -2967,21 +3289,69 @@ _PROVIDER_DEPENDENCIES: dict[str, tuple[str, str]] = {
     "openai_codex": ("langchain_openai", "openai"),
     "openrouter": ("langchain_openrouter", "openrouter"),
     "perplexity": ("langchain_perplexity", "perplexity"),
+    "sambanova": ("langchain_openai", "openai"),
     "together": ("langchain_together", "together"),
     "typesafe": ("langchain_typesafe", "typesafe"),
     "xai": ("langchain_xai", "xai"),
 }
 
+_PROVIDER_PYPI_PACKAGES: dict[str, str] = {
+    "anthropic": "langchain-anthropic",
+    "anthropic_bedrock": "langchain-aws",
+    "azure_openai": "langchain-openai",
+    "baseten": "langchain-baseten",
+    "bedrock": "langchain-aws",
+    "bedrock_converse": "langchain-aws",
+    "cerebras": "langchain-openai",
+    "cohere": "langchain-cohere",
+    "deepseek": "langchain-deepseek",
+    "fireworks": "langchain-fireworks",
+    "google-genai": "langchain-google-genai",
+    "google_genai": "langchain-google-genai",
+    "google_vertexai": "langchain-google-vertexai",
+    "google_anthropic_vertex": "langchain-google-vertexai",
+    "vertex": "langchain-google-vertexai",
+    "groq": "langchain-groq",
+    "huggingface": "langchain-huggingface",
+    "ibm": "langchain-ibm",
+    "litellm": "langchain-litellm",
+    "meta": "langchain-meta",
+    "mistralai": "langchain-mistralai",
+    "nvidia": "langchain-nvidia-ai-endpoints",
+    "ollama": "langchain-ollama",
+    "openai": "langchain-openai",
+    "openai_codex": "langchain-openai",
+    "openrouter": "langchain-openrouter",
+    "perplexity": "langchain-perplexity",
+    "sambanova": "langchain-openai",
+    "together": "langchain-together",
+    "typesafe": "langchain-typesafe",
+    "xai": "langchain-xai",
+}
+
+
+def provider_package_name(provider_or_extra: str) -> str:
+    """Return the canonical PyPI package name (`langchain-...`) for a provider or extra name."""
+    cleaned = provider_or_extra.strip().lower()
+    if cleaned in _PROVIDER_PYPI_PACKAGES:
+        return _PROVIDER_PYPI_PACKAGES[cleaned]
+    canon = canonicalize_provider(cleaned)
+    if canon in _PROVIDER_PYPI_PACKAGES:
+        return _PROVIDER_PYPI_PACKAGES[canon]
+    return f"langchain-{cleaned}"
+
 
 def provider_install_extra(provider: str) -> str | None:
     """Return the extra package name required for provider."""
-    dep = _PROVIDER_DEPENDENCIES.get(provider)
+    canon = canonicalize_provider(provider)
+    dep = _PROVIDER_DEPENDENCIES.get(canon) or _PROVIDER_DEPENDENCIES.get(provider)
     return dep[1] if dep else None
 
 
 def is_provider_package_installed(provider: str) -> bool:
     """Check if the provider's Python integration package is installed."""
-    dep = _PROVIDER_DEPENDENCIES.get(provider)
+    canon = canonicalize_provider(provider)
+    dep = _PROVIDER_DEPENDENCIES.get(canon) or _PROVIDER_DEPENDENCIES.get(provider)
     if dep is None:
         return True
     try:

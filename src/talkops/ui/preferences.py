@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """User preferences & persistent configuration manager.
 
 Parses and writes `~/.talkops/config.toml` for UI theme, scrollbar, timestamps,
@@ -7,11 +21,11 @@ and auto-approval preferences.
 from __future__ import annotations
 
 import os
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
-import tomllib
 from rich.text import Text
 from textual import on
 from textual.binding import Binding, BindingType
@@ -30,6 +44,7 @@ from talkops.ui.theme import (
 
 @dataclass
 class UserPreferences:
+    """Represent user preferences."""
     theme: str = "talkops-dark"
     scrollbar: bool = True
     timestamps: bool = True
@@ -85,10 +100,12 @@ class ThemeSelector(Widget):
     ]
 
     def __init__(self, **kwargs: Any) -> None:
+        """Initialize ThemeSelector."""
         super().__init__(**kwargs)
         self._registry = get_registry()
 
     def compose(self):
+        """Compose and yield child widgets for this component."""
         yield Static("Select Color Theme", classes="title")
         option_list = OptionList(id="theme-options")
         for key, entry in self._registry.items():
@@ -98,6 +115,7 @@ class ThemeSelector(Widget):
 
     @on(Button.Pressed, "#btn-apply")
     def action_apply(self) -> None:
+        """Execute the apply action."""
         opt_list = self.query_one("#theme-options", OptionList)
         if opt_list.highlighted is not None:
             option = opt_list.get_option_at_index(opt_list.highlighted)
@@ -110,4 +128,5 @@ class ThemeSelector(Widget):
         self.remove()
 
     def action_dismiss_selector(self) -> None:
+        """Execute the dismiss selector action."""
         self.remove()

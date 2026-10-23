@@ -1,6 +1,20 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Contextual post-turn tips manager for TalkOps TUI.
 
-Modeled on Antigravity CLI's `tips_manager.go`:
+Manages contextual operator tips across interactive sessions:
 - Evaluates contextual eligibility predicates after a completed turn
   (context window utilization, tool count, turn duration, active goal,
   and commands already used by the operator).
@@ -12,9 +26,9 @@ Modeled on Antigravity CLI's `tips_manager.go`:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import random
 import re
+from dataclasses import dataclass, field
 from typing import Callable
 
 _INLINE_SLASH_RECOMMENDATION_RE = re.compile(
@@ -143,6 +157,7 @@ class TipsManager:
         min_turns_between_tips: int = 2,
         enabled: bool = True,
     ) -> None:
+        """Initialize TipsManager."""
         self._tips = tuple(tips)
         self._rng = rng or random.Random()
         self._min_turns_between_tips = max(1, min_turns_between_tips)
@@ -162,10 +177,12 @@ class TipsManager:
 
     @property
     def used_commands(self) -> frozenset[str]:
+        """Return the used commands property."""
         return frozenset(self._used_commands)
 
     @property
     def shown_tip_ids(self) -> frozenset[str]:
+        """Return the shown tip ids property."""
         return frozenset(self._shown_tip_ids)
 
     def next_turn_tip(
@@ -216,7 +233,7 @@ class TipsManager:
         if not eligible:
             return None
 
-        # Antigravity CLI's 50% display roll: rand.Intn(2 * len(tips))
+        # 50% display probability roll across eligible tips
         roll = self._rng.randrange(2 * len(eligible))
         if roll >= len(eligible):
             return None

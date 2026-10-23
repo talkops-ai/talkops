@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Memory storage — structured precedence-based memory management for talkops.
 
 Precedence for memory locations:
@@ -10,11 +24,11 @@ and injected into the system prompt or queried via ``/memory`` commands.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
-from pathlib import Path
 import re
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence
 
 from talkops.config.paths import DATA_DIR
@@ -56,6 +70,7 @@ class MemoryStore:
         project_root: Path | None = None,
         user_home: Path | None = None,
     ) -> None:
+        """Initialize MemoryStore."""
         self._project_dir = (
             (project_root / ".talkops" / "memory") if project_root else None
         )

@@ -1,14 +1,28 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TalkOps prompts generation and typed interrupt schemas."""
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 from talkops.prompts import (
-    CloudProvider,
     MODEL_IDENTITY_RE,
     TALKOPS_MEMORY_HEADLESS_SYSTEM_PROMPT,
     TALKOPS_MEMORY_READONLY_SYSTEM_PROMPT,
     TALKOPS_MEMORY_SYSTEM_PROMPT,
+    CloudProvider,
     build_fs_tool_guidance,
     build_model_identity_section,
     build_working_dir_section,
@@ -20,6 +34,7 @@ from talkops.schema.interrupts import HitlResumePayload
 
 
 def test_build_model_identity_section():
+    """Verify build model identity section."""
     section = build_model_identity_section(
         name="claude-3-7-sonnet",
         provider="anthropic",
@@ -34,11 +49,13 @@ def test_build_model_identity_section():
 
 
 def test_build_model_identity_empty():
+    """Verify build model identity empty."""
     assert build_model_identity_section(None) == ""
     assert build_model_identity_section("") == ""
 
 
 def test_normalize_cloud_provider():
+    """Verify normalize cloud provider."""
     assert normalize_cloud_provider(None) == CloudProvider.AWS
     assert normalize_cloud_provider("aws") == CloudProvider.AWS
     assert normalize_cloud_provider("amazon") == CloudProvider.AWS
@@ -51,6 +68,7 @@ def test_normalize_cloud_provider():
 
 
 def test_get_base_system_prompt_aws_default():
+    """Verify get base system prompt aws default."""
     prompt = get_base_system_prompt(
         assistant_id="talkops",
         interactive=True,
@@ -60,15 +78,18 @@ def test_get_base_system_prompt_aws_default():
     assert "Multi-Agent Orchestrator" in prompt
     assert "Skill-Based Multi-Agent Framework" in prompt
     assert "write_todos" in prompt
-    assert "aws-core" in prompt
-    assert "aws-terraform" in prompt
-    assert "aws-eks-autopilot" in prompt
+    assert "commit" in prompt
+    assert "remember" in prompt
+    assert "simplify" in prompt
+    assert "skill-creator" in prompt
+    assert "aws-core" not in prompt
     assert "Computational Verification" in prompt
     assert "Blast Radius Safeguards" in prompt
     assert "Preserving Subagent Technical Deliverables" in prompt
 
 
 def test_get_base_system_prompt_azure():
+    """Verify get base system prompt azure."""
     prompt = get_base_system_prompt(
         assistant_id="talkops",
         interactive=True,
@@ -76,11 +97,12 @@ def test_get_base_system_prompt_azure():
         cloud_provider=CloudProvider.AZURE,
     )
     assert "Cloud Platform Context: Azure" in prompt
-    assert "azure-ops" in prompt
+    assert "Microsoft Azure" in prompt
     assert "az account show" in prompt
 
 
 def test_get_base_system_prompt_gcp():
+    """Verify get base system prompt gcp."""
     prompt = get_base_system_prompt(
         assistant_id="talkops",
         interactive=True,
@@ -88,11 +110,12 @@ def test_get_base_system_prompt_gcp():
         cloud_provider=CloudProvider.GCP,
     )
     assert "Cloud Platform Context: Google Cloud (GCP)" in prompt
-    assert "gcp-ops" in prompt
+    assert "Google Cloud Platform (GCP)" in prompt
     assert "Workload Identity" in prompt
 
 
 def test_get_base_system_prompt_multi():
+    """Verify get base system prompt multi."""
     prompt = get_base_system_prompt(
         assistant_id="talkops",
         interactive=True,
@@ -100,11 +123,12 @@ def test_get_base_system_prompt_multi():
         cloud_provider=CloudProvider.MULTI,
     )
     assert "Cloud Platform Context: Multi-Cloud" in prompt
-    assert "multi-cloud-ops" in prompt
+    assert "Multi-Cloud / Hybrid" in prompt
     assert "workload portability" in prompt.lower()
 
 
 def test_get_base_system_prompt_headless():
+    """Verify get base system prompt headless."""
     prompt = get_base_system_prompt(
         assistant_id="talkops",
         interactive=False,
@@ -117,6 +141,7 @@ def test_get_base_system_prompt_headless():
 
 
 def test_no_unreplaced_placeholders():
+    """Verify no unreplaced placeholders."""
     for provider in [CloudProvider.AWS, CloudProvider.AZURE, CloudProvider.GCP, CloudProvider.MULTI]:
         for interactive in [True, False]:
             prompt = get_base_system_prompt(
@@ -136,6 +161,7 @@ def test_no_unreplaced_placeholders():
 
 
 def test_model_identity_hotpatch_regex():
+    """Verify model identity hotpatch regex."""
     initial_prompt = get_base_system_prompt(
         model_name="gpt-4o",
         model_provider="openai",
@@ -156,6 +182,7 @@ def test_model_identity_hotpatch_regex():
 
 def test_sandbox_working_dir_guidance():
     # Local mode
+    """Verify sandbox working dir guidance."""
     local_section = build_working_dir_section(cwd="/Users/operator/project", sandbox_type=None)
     assert "/Users/operator/project" in local_section
     assert "remote Linux sandbox" not in local_section
@@ -168,6 +195,7 @@ def test_sandbox_working_dir_guidance():
 
 def test_fs_tool_guidance():
     # Restricted tool set
+    """Verify fs tool guidance."""
     guidance = build_fs_tool_guidance(["read_file", "write_file"])
     assert "You have restricted access to the filesystem" in guidance
     assert "`edit_file`" not in guidance
@@ -179,6 +207,7 @@ def test_fs_tool_guidance():
 
 
 def test_memory_system_prompts():
+    """Verify memory system prompts."""
     default_prompt = get_memory_system_prompt()
     assert default_prompt == TALKOPS_MEMORY_SYSTEM_PROMPT
     assert "live cloud telemetry and explicit operator commands" in default_prompt.lower()
@@ -193,6 +222,7 @@ def test_memory_system_prompts():
 
 
 def test_built_in_skills_exist_and_valid():
+    """Verify built in skills exist and valid."""
     built_in_dir = Path(__file__).parent.parent.parent / "src" / "talkops" / "built_in_skills"
     assert built_in_dir.is_dir()
 
@@ -212,6 +242,7 @@ def test_built_in_skills_exist_and_valid():
 
 
 def test_hitl_resume_payload_parsing():
+    """Verify hitl resume payload parsing."""
     payload_approve = HitlResumePayload.from_raw("approve")
     assert len(payload_approve.decisions) == 1
     assert payload_approve.decisions[0].type == "approve"
@@ -227,6 +258,7 @@ def test_hitl_resume_payload_parsing():
 
 
 def test_get_base_system_prompt_dual_engine_and_tool_discipline():
+    """Verify get base system prompt dual engine and tool discipline."""
     prompt = get_base_system_prompt(
         assistant_id="talkops",
         interactive=True,
@@ -244,7 +276,7 @@ def test_get_base_system_prompt_dual_engine_and_tool_discipline():
     assert "Native Cloud Foundation (AWS)" in prompt
     assert "Extensible Plugin Marketplace Ecosystem" in prompt
 
-    # Validate Antigravity CLI Coding Guidelines & Documentation Integrity
+    # Validate TalkOps Coding Guidelines & Documentation Integrity
     assert "No Snippet Tunnel Vision" in prompt
     assert "API Contract Preservation" in prompt
     assert "No Superficial Symptom Patches" in prompt
@@ -264,6 +296,7 @@ def test_get_base_system_prompt_dual_engine_and_tool_discipline():
 
 
 def test_adaptive_output_granularity_contract():
+    """Verify adaptive output granularity contract."""
     prompt = get_base_system_prompt(
         assistant_id="talkops",
         interactive=True,

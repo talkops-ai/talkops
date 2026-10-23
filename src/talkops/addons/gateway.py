@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """In-memory AgentRunGateway and HookEventBus for TalkOps Server Addons.
 
 `AgentRunGateway` provides a unified, zero-loopback interface for all ServerAddons
@@ -9,10 +23,10 @@ and resume Human-in-the-Loop (HITL) interrupts via `Command(resume=...)`.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-import uuid
 from typing import Any, Literal
 
 from talkops.utils.logger import get_logger
@@ -50,6 +64,7 @@ class HookEventBus:
     """
 
     def __init__(self) -> None:
+        """Initialize HookEventBus."""
         self._subscribers: dict[str, list[AddonEventHandler]] = {}
         self._recent_events: list[AddonEvent] = []
         self._max_history: int = 200
@@ -68,6 +83,15 @@ class HookEventBus:
                 handlers.remove(handler)
 
         return _unsubscribe
+
+    def has_subscribers(self, event_type: str) -> bool:
+        """Return True if at least one handler is subscribed to `event_type` (or wildcard)."""
+        if self._subscribers.get(event_type):
+            return True
+        for wildcard_key in ("*", "addon.*"):
+            if self._subscribers.get(wildcard_key):
+                return True
+        return False
 
     async def publish(
         self,
@@ -132,6 +156,7 @@ class RunHandle:
     _task: asyncio.Task[Any] | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert instance to dict."""
         return {
             "run_id": self.run_id,
             "thread_id": self.thread_id,
@@ -164,6 +189,7 @@ class AgentRunGateway:
         graph_factory: Callable[[], Awaitable[Any]] | None = None,
         cwd: str | None = None,
     ) -> None:
+        """Initialize AgentRunGateway."""
         self._graph = graph
         self._checkpointer = checkpointer
         self._checkpointer_cm: Any = None
@@ -181,10 +207,12 @@ class AgentRunGateway:
 
     @property
     def event_bus(self) -> HookEventBus:
+        """Return the event bus property."""
         return self._event_bus
 
     @property
     def graph(self) -> Any:
+        """Return the graph property."""
         return self._graph
 
     def bind_runtime(
@@ -223,6 +251,7 @@ class AgentRunGateway:
 
         try:
             import aiosqlite
+
             from talkops.state.session import (
                 TalkOpsCheckpointer,
                 _guard_sqlite_handle,
@@ -331,6 +360,7 @@ class AgentRunGateway:
         return dict(record)
 
     async def get_thread(self, thread_id: str) -> dict[str, Any] | None:
+        """Retrieve thread."""
         resolved_tid = self.resolve_thread_id(thread_id)
         record = self._threads.get(resolved_tid)
         if record is not None:
@@ -341,6 +371,7 @@ class AgentRunGateway:
         return None
 
     async def delete_thread(self, thread_id: str) -> bool:
+        """Delete thread."""
         resolved_tid = self.resolve_thread_id(thread_id)
         await self.cancel_thread_runs(resolved_tid)
         existed = resolved_tid in self._threads
@@ -722,6 +753,7 @@ class AgentRunGateway:
         return await graph.aupdate_state(cfg, values)
 
     def get_run(self, run_id: str) -> RunHandle | None:
+        """Retrieve run."""
         return self._runs.get(run_id)
 
     def list_thread_runs(
@@ -731,6 +763,7 @@ class AgentRunGateway:
         status: str | None = None,
         limit: int = 20,
     ) -> list[RunHandle]:
+        """List thread runs."""
         resolved_tid = self.resolve_thread_id(thread_id)
         run_ids = self._thread_runs.get(resolved_tid, [])
         handles = [self._runs[rid] for rid in reversed(run_ids) if rid in self._runs]
@@ -739,6 +772,7 @@ class AgentRunGateway:
         return handles[:limit]
 
     async def cancel_run(self, thread_id: str, run_id: str) -> bool:
+        """Cancel run."""
         handle = self._runs.get(run_id)
         if handle is None or handle.thread_id != self.resolve_thread_id(thread_id):
             return False
@@ -753,6 +787,7 @@ class AgentRunGateway:
         return True
 
     async def cancel_thread_runs(self, thread_id: str) -> list[str]:
+        """Cancel thread runs."""
         resolved_tid = self.resolve_thread_id(thread_id)
         cancelled: list[str] = []
         for handle in self.list_thread_runs(resolved_tid):
@@ -767,6 +802,7 @@ class AgentRunGateway:
         key: str,
         value: dict[str, Any],
     ) -> None:
+        """Execute put store item on AgentRunGateway."""
         if self._store is not None and hasattr(self._store, "aput"):
             await self._store.aput(namespace, key, value)
         elif self._store is not None and hasattr(self._store, "put"):
@@ -777,6 +813,7 @@ class AgentRunGateway:
         namespace: tuple[str, ...],
         key: str,
     ) -> Any:
+        """Retrieve store item."""
         if self._store is not None and hasattr(self._store, "aget"):
             return await self._store.aget(namespace, key)
         if self._store is not None and hasattr(self._store, "get"):

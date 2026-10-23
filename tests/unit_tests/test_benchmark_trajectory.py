@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Phase 1: Benchmark TrajectoryRecorder, Cost Breakdown, and Headless CLI Flags."""
 
 from __future__ import annotations
@@ -19,6 +33,7 @@ from talkops.cli.non_interactive import _run_headless
 
 
 def test_closing_action_hygiene_rate_calculation() -> None:
+    """Verify closing action hygiene rate calculation."""
     hygiene = ClosingActionHygiene()
     assert hygiene.hygiene_rate == 1.0
 
@@ -35,6 +50,7 @@ def test_closing_action_hygiene_rate_calculation() -> None:
 
 
 def test_tnr_stats_non_regression_rate() -> None:
+    """Verify tnr stats non regression rate."""
     tnr = TNRStats(transactions_total=4, committed=3, rolled_back=1, regressions_prevented=1, unrecoverable_violations=0)
     assert tnr.non_regression_rate == 1.0
 
@@ -49,6 +65,7 @@ def test_tnr_stats_non_regression_rate() -> None:
 
 
 def test_trajectory_recorder_writes_jsonl_and_aggregates_metrics(tmp_path: Path) -> None:
+    """Verify trajectory recorder writes jsonl and aggregates metrics."""
     traj_file = tmp_path / "run_001.jsonl"
     rec = TrajectoryRecorder("thread-bench-1", trajectory_file=traj_file, start_monotonic=100.0)
 
@@ -148,10 +165,12 @@ def test_trajectory_recorder_writes_jsonl_and_aggregates_metrics(tmp_path: Path)
 async def test_headless_json_includes_benchmark_telemetry_and_trajectory(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Verify headless json includes benchmark telemetry and trajectory."""
     traj_path = tmp_path / "headless_traj.jsonl"
     mock_agent = MagicMock()
 
     async def mock_astream(*args: Any, **kwargs: Any):
+        """Provide mock astream test helper or fixture."""
         yield ((), "messages", ("Root cause localized and fixed.", {}))
         yield (
             (),
@@ -193,6 +212,7 @@ async def test_headless_json_includes_benchmark_telemetry_and_trajectory(
 
 
 def test_cli_parses_benchmark_ablation_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify cli parses benchmark ablation flags."""
     parser = build_parser()
     args = parser.parse_args(
         [

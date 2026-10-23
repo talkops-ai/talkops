@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Textual widgets for TalkOps.
 
 Import directly from submodules, e.g.:
@@ -28,16 +42,16 @@ from talkops.ui.widgets.approval import (
     assess_tool_risk,
 )
 from talkops.ui.widgets.ask_user import (
+    OTHER_CHOICE_LABEL,
     AskUserMenu,
     AskUserTextArea,
-    OTHER_CHOICE_LABEL,
 )
 from talkops.ui.widgets.auth import (
+    CONFIGURATION_DOCS_URL,
+    PROVIDER_API_KEY_URLS,
     AuthCheckbox,
     AuthPromptScreen,
     AuthResult,
-    CONFIGURATION_DOCS_URL,
-    PROVIDER_API_KEY_URLS,
     is_langsmith,
 )
 from talkops.ui.widgets.auth_manager import (
@@ -66,6 +80,10 @@ from talkops.ui.widgets.chat_input import (
     ChatTextArea,
     InputMode,
     detect_input_mode,
+)
+from talkops.ui.widgets.cloud_selector import (
+    CloudProfileOption,
+    CloudProfileSelectorScreen,
 )
 from talkops.ui.widgets.config_manager import (
     ConfigManagerScreen,
@@ -118,11 +136,11 @@ from talkops.ui.widgets.loading import (
     format_duration,
 )
 from talkops.ui.widgets.mcp_viewer import (
+    MCP_VIEWER_RECONNECT_REQUEST,
     MCPServerErrorScreen,
     MCPServerHeaderItem,
     MCPToolItem,
     MCPViewerScreen,
-    MCP_VIEWER_RECONNECT_REQUEST,
 )
 from talkops.ui.widgets.messages import (
     AppMessage,
@@ -155,10 +173,6 @@ from talkops.ui.widgets.modal_base import (
     format_modal_option_row,
     truncate_cells,
 )
-from talkops.ui.widgets.cloud_selector import (
-    CloudProfileOption,
-    CloudProfileSelectorScreen,
-)
 from talkops.ui.widgets.model_selector import (
     ModelOption,
     ModelSelectorScreen,
@@ -167,8 +181,8 @@ from talkops.ui.widgets.notification_center import (
     NotificationCenter,
 )
 from talkops.ui.widgets.notification_settings import (
-    NotificationSettingsScreen,
     WARNING_TOGGLES,
+    NotificationSettingsScreen,
 )
 from talkops.ui.widgets.operation_card import (
     OperationCard,
@@ -194,19 +208,19 @@ from talkops.ui.widgets.skills_viewer import (
 )
 from talkops.ui.widgets.status import (
     CONNECTION_STATES,
+    PROVIDER_PREFIX_STRIPS,
     BranchLabel,
     ConnectionState,
     ModelLabel,
-    PROVIDER_PREFIX_STRIPS,
     StatusBar,
 )
 from talkops.ui.widgets.subagent_panel import (
     SubagentColumn,
     SubagentPanel,
     SubagentStatus,
+    _format_timing,
     _Phase,
     _SubagentRecord,
-    _format_timing,
     sanitize_control_chars,
 )
 from talkops.ui.widgets.theme_selector import (

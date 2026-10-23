@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for `/btw` side-question isolation and UI card."""
 
 from __future__ import annotations
@@ -7,8 +21,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 
 from talkops.agent.config import CLIContextSchema
@@ -119,14 +135,14 @@ async def test_btw_middleware_strips_tools_and_jumps_to_end() -> None:
 async def test_btw_middleware_in_langchain_create_agent_graph() -> None:
     """Verify create_agent with BtwSideQuestionMiddleware strips tools and skips rubric/stop hooks."""
     from langchain.agents import create_agent
-    from langchain_core.language_models.chat_models import BaseChatModel
-    from langchain_core.outputs import ChatGeneration, ChatResult
+
     from talkops.middleware.reliable_rubric import ReliableRubricMiddleware
     from talkops.state.base import TalkOpsAgentState
 
     bound_tools_seen: list[int] = []
 
     class InspectingChatModel(BaseChatModel):
+        """Test suite or helper class for inspecting chat model."""
         @property
         def _llm_type(self) -> str:
             return "inspecting-fake"
@@ -143,6 +159,7 @@ async def test_btw_middleware_in_langchain_create_agent_graph() -> None:
             )
 
         def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+            """Provide bind tools test helper or fixture."""
             bound_tools_seen.append(len(tools))
             return self
 
@@ -191,6 +208,7 @@ async def test_remote_agent_astream_side_question_forks_and_deletes_temp_thread(
     mock_client.runs.cancel = AsyncMock()
 
     async def fake_astream(run_input: dict[str, Any], **kwargs: Any):
+        """Provide fake astream test helper or fixture."""
         assert kwargs["config"]["configurable"]["thread_id"] == "temp-btw-thread-999"
         assert kwargs["context"]["_btw_side_question"] is True
         assert run_input["_btw_side_question"] is True

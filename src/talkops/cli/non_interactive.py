@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Non-interactive (headless CLI) runner for TalkOps.
 
 Connects to the TalkOps server session, streams agent output to stdout,
@@ -13,6 +27,7 @@ import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from talkops.approval_mode import ApprovalMode
@@ -109,7 +124,10 @@ async def _run_headless(
                 print(f"[Startup command failed: {exc}]", file=sys.stderr)
 
     # 2. AWS Profile and Region environment synchronization
-    from talkops.config.cloud_profiles import get_active_aws_profile, get_active_aws_region
+    from talkops.config.cloud_profiles import (
+        get_active_aws_profile,
+        get_active_aws_region,
+    )
 
     if not aws_profile:
         aws_profile = get_active_aws_profile()
@@ -135,7 +153,6 @@ async def _run_headless(
             resolved_model = "anthropic:claude-3-5-sonnet-latest"
 
     # 4. Server Configuration
-    from pathlib import Path
     from talkops.project_utils import ProjectContext
 
     project_context = (
@@ -226,7 +243,10 @@ async def _run_headless(
             if rubric:
                 print(f"Active Acceptance Criteria:\n{rubric}\n", file=sys.stderr)
 
-        from talkops.security.approval_mode import approval_mode_key, awrite_approval_mode
+        from talkops.security.approval_mode import (
+            approval_mode_key,
+            awrite_approval_mode,
+        )
         try:
             await awrite_approval_mode(agent, effective_thread, mode=approval_mode)
         except Exception:

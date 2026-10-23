@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Event hook dispatch for talkops.
 
 Hooks allow external tools to react to agent events. Configured in
@@ -8,12 +22,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from talkops.utils.logger import get_logger
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -186,10 +201,13 @@ async def _run_hook(hook: HookConfig, event: str, payload: dict[str, Any]) -> No
 
 
 class suppress_os_errors:
+    """Represent suppress os errors."""
     def __enter__(self) -> None:
+        """Enter the runtime context related to this object."""
         pass
 
     def __exit__(self, exc_type: type | None, *_: object) -> bool:
+        """Exit the runtime context and handle any exception."""
         return exc_type is not None and issubclass(exc_type, OSError)
 
 

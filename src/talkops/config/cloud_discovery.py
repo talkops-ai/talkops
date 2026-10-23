@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Zero-latency multi-cloud discovery and ambient service role detection for TalkOps.
 
 Discovers cloud contexts across AWS, Microsoft Azure, Google Cloud Platform (GCP),
@@ -13,16 +27,16 @@ and Kubernetes from three sources without spawning CLI subprocesses:
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 import configparser
-from dataclasses import dataclass, field
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from talkops.utils.logger import get_logger
@@ -108,18 +122,22 @@ class CloudTargetContext:
 
     @property
     def role_arn(self) -> str | None:
+        """Return the role arn property."""
         return self.extra_metadata.get("role_arn") or None
 
     @property
     def source_profile(self) -> str | None:
+        """Return the source profile property."""
         return self.extra_metadata.get("source_profile") or None
 
     @property
     def is_sso(self) -> bool:
+        """Return the is sso property."""
         return self.auth_method == "sso" or "sso" in self.auth_method
 
     @property
     def has_keys(self) -> bool:
+        """Return the has keys property."""
         return self.auth_method in ("iam_keys", "env_keys")
 
     @property
@@ -160,6 +178,7 @@ class CloudTargetContext:
         yield self.region
 
     def __getitem__(self, index: int) -> Any:
+        """Return the item for the given key or index."""
         return (self.provider, self.target_id, self.region)[index]
 
     @property

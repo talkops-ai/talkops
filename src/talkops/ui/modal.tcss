@@ -87,11 +87,12 @@ ModalSearchInput {
     width: 100%;
     layout: horizontal;
     margin-bottom: 1;
-    background: $background;
-    border-bottom: solid $primary 30%;
+    background: $panel 45%;
+    border-bottom: solid $primary 35%;
 }
 
 ModalSearchInput:focus-within {
+    background: $panel 70%;
     border-bottom: solid $primary;
 }
 
@@ -125,7 +126,8 @@ ModalSearchInput Input:focus {
 /* Lists hug content unless a screen opts into workspace behavior. */
 OpsModalScreen OptionList {
     height: auto;
-    background: $background;
+    background: transparent;
+    background-tint: transparent;
     border: none;
     padding: 0;
     scrollbar-gutter: stable;
@@ -137,11 +139,13 @@ OpsModalScreen .ops-modal-dialog.-workspace OptionList {
 
 OpsModalScreen OptionList:focus {
     border: none;
+    background: transparent;
+    background-tint: transparent;
 }
 
 OpsModalScreen OptionList > .option-list--option-highlighted,
 OpsModalScreen OptionList:focus > .option-list--option-highlighted {
-    background: $primary 12%;
+    background: $primary 15%;
     color: $foreground;
     text-style: none;
 }

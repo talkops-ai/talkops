@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Centralized filesystem-path definitions for talkops.
 
 This module is the **single source of truth** for every directory and file
@@ -8,11 +22,14 @@ from it without triggering circular or expensive imports.
 
 from __future__ import annotations
 
+import contextlib
 import errno
-from talkops.utils.logger import get_logger
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
+
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -122,16 +139,12 @@ def project_talkops_dir(project_root: Path) -> Path:
 def project_settings_path(project_root: Path) -> Path:
     """Return ``{project_root}/.talkops/settings.json`` — project-scope settings."""
     talkops_settings = project_talkops_dir(project_root) / "settings.json"
-    if not talkops_settings.exists() and (project_root / ".opscode" / "settings.json").exists():
-        return project_root / ".opscode" / "settings.json"
     return talkops_settings
 
 
 def project_local_settings_path(project_root: Path) -> Path:
     """Return ``{project_root}/.talkops/settings.local.json`` — local-scope settings."""
     talkops_local = project_talkops_dir(project_root) / "settings.local.json"
-    if not talkops_local.exists() and (project_root / ".opscode" / "settings.local.json").exists():
-        return project_root / ".opscode" / "settings.local.json"
     return talkops_local
 
 # ── Project root markers ─────────────────────────────────
@@ -194,10 +207,6 @@ PROJECT_DOTENV_DENIED_ENV_KEYS: Final[frozenset[str]] = frozenset(
         "TALKOPS_READ_PROJECT_DOTENV",
         "READ_PROJECT_DOTENV",
         "TALKOPS_SERVER_DB_PATH",
-        "OPSCODE_APPROVAL_MODE",
-        "OPSCODE_SHELL_ALLOW_LIST",
-        "OPSCODE_READ_ONLY",
-        "OPSCODE_CONFIG_DIR",
         "TERM_PROGRAM",
     }
 )
@@ -583,20 +592,23 @@ def display_path(path: Path | str) -> str:
 class _ProfilePathProxy:
     @staticmethod
     def agent_skills_dir(agent: str) -> Path:
+        """Execute agent skills dir on _ProfilePathProxy."""
         return user_skills_dir(agent)
 
     @property
     def config_file(self) -> Path:
+        """Return the config file property."""
         return CONFIG_PATH
 
 
 class _PathsSnapshot:
-    """Convenience snapshot mirroring dcode PATHS interface for display and paths."""
+    """Convenience snapshot of resolved TalkOps configuration and workspace paths."""
 
     profile = _ProfilePathProxy()
 
     @staticmethod
     def display(path: Path | str) -> str:
+        """Execute display on _PathsSnapshot."""
         return display_path(path)
 
 
@@ -700,9 +712,6 @@ def ensure_conversation_history_dir() -> Path:
 
 def upsert_env_vars(env_dict: dict[str, str], env_path: Path | None = None) -> bool:
     """Upsert key-value pairs into a .env file atomically."""
-    import contextlib
-    import tempfile
-
     target_path = env_path or GLOBAL_ENV_PATH
     try:
         target_path.parent.mkdir(parents=True, exist_ok=True)

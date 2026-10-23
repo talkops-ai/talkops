@@ -1,31 +1,49 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for AuthManagerScreen OpsModalScreen migration."""
 
 from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import OptionList
+from textual.widgets import Input, OptionList, Static
 
 from talkops.ui.widgets.auth import AuthPromptScreen
-from talkops.ui.widgets.auth_manager import AuthManagerScreen, _KNOWN_PROVIDERS
+from talkops.ui.widgets.auth_manager import _KNOWN_PROVIDERS, AuthManagerScreen
 
 
 class DummyAuthApp(App[None]):
     """Minimal textual app to mount and test AuthManagerScreen."""
 
     def __init__(self, screen_instance: AuthManagerScreen) -> None:
+        """Initialize DummyAuthApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
 @pytest.mark.asyncio
 async def test_auth_manager_screen_mount_and_options() -> None:
+    """Verify auth manager screen mount and options."""
     screen = AuthManagerScreen(initial_provider="openai")
     app = DummyAuthApp(screen)
 
@@ -49,19 +67,22 @@ class DummyAuthPromptApp(App[None]):
     """Minimal textual app to mount and test AuthPromptScreen."""
 
     def __init__(self, screen_instance: AuthPromptScreen) -> None:
+        """Initialize DummyAuthPromptApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
 @pytest.mark.asyncio
 async def test_auth_prompt_screen_mount_and_cancel() -> None:
-    from textual.widgets import Input, Static
+    """Verify auth prompt screen mount and cancel."""
     from talkops.ui.widgets.auth import AuthCheckbox, AuthPromptScreen
 
     screen = AuthPromptScreen(provider="google_genai")

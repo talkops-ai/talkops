@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """``/goal`` — Set, show, clear, pause, resume goals with rubric auto-generation.
 
 Drives:
@@ -14,7 +28,10 @@ without discovering ``/rubric``.
 
 from __future__ import annotations
 
+import uuid
 from typing import Literal
+
+from langchain_core.messages import SystemMessage
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
@@ -37,6 +54,7 @@ class GoalState:
 
     def __init__(self) -> None:
         # ── Goal fields ──────────────────────────────────
+        """Initialize GoalState."""
         self.objective: str | None = None
         self.status: GoalStatus | str | None = None
         self.rubric: str | None = None
@@ -76,16 +94,16 @@ class GoalState:
 
     @property
     def is_active(self) -> bool:
+        """Return the is active property."""
         return self.status in {"active", "blocked"}
 
     @property
     def is_actionable(self) -> bool:
+        """Return the is actionable property."""
         return self.objective is not None and self.status in {"active", "blocked"}
 
     def grader_display_values(self, startup_model: str = "") -> tuple[str, str]:
-        """Return display strings for the shared grader model and iteration cap.
-
-        """
+        """Return display strings for the shared grader model and iteration cap."""
         if self.rubric_model:
             model = self.rubric_model
         elif startup_model:
@@ -101,6 +119,7 @@ class GoalState:
         return model, iterations
 
     def to_dict(self) -> dict[str, object]:
+        """Convert instance to dict."""
         return {
             "objective": self.objective,
             "status": self.status,
@@ -134,7 +153,6 @@ def _is_grader_alias_arg(arg: str) -> bool:
 
 def _goal_usage_text() -> str:
     """Return user-facing usage instructions for goal commands.
-
 
     The command list is wrapped in a markdown fenced code block so that
     ``rich.markdown.Markdown`` preserves line breaks instead of collapsing
@@ -184,22 +202,27 @@ class GoalHandler(BaseCommandHandler):
 
     @property
     def name(self) -> str:
+        """Return the primary slash command name."""
         return "/goal"
 
     @property
     def category(self) -> CommandCategory:
+        """Return the command category classification."""
         return CommandCategory.POWER
 
     @property
     def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
         return SafetyLevel.LOW_RISK
 
     @property
     def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
         return BypassTier.QUEUED
 
     @property
     def model_facing_description(self) -> str | None:
+        """Return the description exposed to the LLM for command recommendations."""
         return (
             "Recommend this when the user wants to run a long-running or complex "
             "multi-step task with acceptance criteria and wants the agent to be "
@@ -207,6 +230,7 @@ class GoalHandler(BaseCommandHandler):
         )
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
         state = get_goal_state(ctx.app)
         remainder = ctx.args.strip()
         subcommand = remainder.lower()
@@ -257,7 +281,6 @@ class GoalHandler(BaseCommandHandler):
 
         # ── clear ────────────────────────────────────────
         if subcommand == "clear":
-            from langchain_core.messages import SystemMessage
             async with ctx.app._goal_state_mutation_boundary():
                 state.clear()
                 self._sync_status_rubric(ctx.app, state)
@@ -294,8 +317,7 @@ class GoalHandler(BaseCommandHandler):
     # ── Subcommand implementations ───────────────────────
 
     def _show_goal_state(self, state: GoalState) -> CommandResult:
-        """Render active or pending goal state.
-
+        r"""Render active or pending goal state.
 
         Uses ``**bold**`` labels and ``\\n\\n`` paragraph breaks so that
         ``rich.markdown.Markdown`` renders each section clearly.
@@ -365,9 +387,7 @@ class GoalHandler(BaseCommandHandler):
         )
 
     async def _pause_goal(self, ctx: CommandContext, state: GoalState) -> CommandResult:
-        """Persist a paused goal without clearing its objective or criteria.
-
-        """
+        """Persist a paused goal without clearing its objective or criteria."""
         if not state.objective or state.status == "complete":
             return CommandResult(
                 success=False,
@@ -382,7 +402,6 @@ class GoalHandler(BaseCommandHandler):
                 "continue, or clear it with `/goal clear`.",
             )
         
-        from langchain_core.messages import SystemMessage
         async with ctx.app._goal_state_mutation_boundary():
             state.status = "paused"
             self._sync_status_rubric(ctx.app, state)
@@ -395,9 +414,7 @@ class GoalHandler(BaseCommandHandler):
         )
 
     async def _resume_goal(self, ctx: CommandContext, state: GoalState) -> CommandResult:
-        """Resume a paused goal from its persisted conversation state.
-
-        """
+        """Resume a paused goal from its persisted conversation state."""
         if not state.objective or state.status == "complete":
             return CommandResult(
                 success=False,
@@ -409,7 +426,6 @@ class GoalHandler(BaseCommandHandler):
                 message="Goal is not paused. Use `/goal show` to inspect its current state.",
             )
             
-        from langchain_core.messages import SystemMessage
         async with ctx.app._goal_state_mutation_boundary():
             state.status = "active"
             self._sync_status_rubric(ctx.app, state)
@@ -469,7 +485,6 @@ class GoalHandler(BaseCommandHandler):
         self, ctx: CommandContext, state: GoalState, objective: str
     ) -> CommandResult:
         """Request goal criteria generation."""
-        import uuid
         request = {
             "kind": "create",
             "request_id": str(uuid.uuid4()),
@@ -486,7 +501,6 @@ class GoalHandler(BaseCommandHandler):
         self, ctx: CommandContext, state: GoalState, feedback: str
     ) -> CommandResult:
         """Request goal criteria amendment."""
-        import uuid
         request: dict[str, str] = {
             "kind": "amend",
             "request_id": str(uuid.uuid4()),
@@ -505,9 +519,7 @@ class GoalHandler(BaseCommandHandler):
 
     @staticmethod
     def _sync_status_rubric(app: object, state: GoalState) -> None:
-        """Reflect active rubric and goal state in the status bar.
-
-        """
+        """Reflect active rubric and goal state in the status bar."""
         if app is None:
             return
 
@@ -559,7 +571,6 @@ def _generate_rubric(
 
 def _parse_rubric_max_iterations(raw: str) -> tuple[int | None, str | None]:
     """Parse a grader ``max-iterations`` argument.
-
 
     Returns:
         Tuple of ``(value, error)``.  ``error`` is ``None`` on success.

@@ -1,8 +1,21 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Ask user widget for interactive questions during agent execution."""
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 import re
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -10,6 +23,8 @@ from textual.binding import Binding, BindingType
 from textual.containers import Container, Vertical
 from textual.message import Message
 from textual.widgets import Markdown, Static
+
+from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
     import asyncio
@@ -196,6 +211,7 @@ class AskUserMenu(Container):
         """Message sent when user submits all answers."""
 
         def __init__(self, answers: list[str]) -> None:
+            """Initialize Answered."""
             super().__init__()
             self.answers = answers
 
@@ -203,6 +219,7 @@ class AskUserMenu(Container):
         """Message sent when user cancels the ask_user prompt."""
 
         def __init__(self) -> None:
+            """Initialize Cancelled."""
             super().__init__()
 
     def __init__(
@@ -211,6 +228,7 @@ class AskUserMenu(Container):
         id: str | None = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize AskUserMenu."""
         super().__init__(
             id=id or "ask-user-menu",
             classes="inline-prompt ask-user-menu",
@@ -230,6 +248,7 @@ class AskUserMenu(Container):
         self._completion.set_future(future)
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         glyphs = get_glyphs()
         count = len(self._questions)
         if count == 1:
@@ -263,6 +282,7 @@ class AskUserMenu(Container):
         )
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         apply_inline_prompt_border(self)
         self._set_active_question(0)
 
@@ -346,6 +366,7 @@ class AskUserMenu(Container):
             self._set_active_question(self._current_question - 1)
 
     def action_cancel(self) -> None:
+        """Execute the cancel action."""
         if self._completion.resolve({"type": "cancelled"}):
             self.post_message(self.Cancelled())
 
@@ -394,6 +415,7 @@ class _QuestionWidget(Vertical):
     can_focus_children = True
 
     def __init__(self, question: Question, index: int, **kwargs: Any) -> None:
+        """Initialize _QuestionWidget."""
         super().__init__(classes="ask-user-question", **kwargs)
         question_type = question.get("type", "text")
         self._question: Question = question
@@ -410,6 +432,7 @@ class _QuestionWidget(Vertical):
         self._is_other_selected: bool = False
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         q_text = _TRAILING_ANNOTATION_RE.sub("", self._question.get("question", ""))
         num = self._index + 1
         suffix = " *(required)*" if self._required else ""

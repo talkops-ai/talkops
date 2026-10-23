@@ -1,5 +1,20 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """State models, cloud operational channels, and persistence for TalkOps."""
 
+from talkops.state import conversation_title as conversation_title
 from talkops.state.background_task_channels import (
     BackgroundTaskChannels,
     BackgroundTaskRecord,
@@ -12,7 +27,6 @@ from talkops.state.base import (
     TalkOpsAgentState,
 )
 from talkops.state.btw_channels import BtwChannels
-from talkops.state.webhook_sre_channels import WebhookSREChannels
 from talkops.state.cloud_context import (
     AWSContext,
     AzureContext,
@@ -27,6 +41,17 @@ from talkops.state.cloud_context import (
     coerce_cloud_provider,
     format_cloud_badge,
     make_resource_ref,
+)
+from talkops.state.conversation_title import (
+    CONVERSATION_TITLE_SYSTEM_PROMPT,
+    clean_prompt_for_title,
+    generate_conversation_title,
+    get_thread_display_label,
+    maybe_generate_conversation_title,
+    postprocess_conversation_title,
+    resolve_conversation_title_model,
+    schedule_conversation_title_generation,
+    truncate_summary_preview,
 )
 from talkops.state.goal_channels import (
     INHERIT_RUBRIC_MODEL,
@@ -62,18 +87,6 @@ from talkops.state.service_context import (
     make_operation_record,
     make_service_record,
 )
-from talkops.state import conversation_title as conversation_title
-from talkops.state.conversation_title import (
-    CONVERSATION_TITLE_SYSTEM_PROMPT,
-    clean_prompt_for_title,
-    generate_conversation_title,
-    get_thread_display_label,
-    maybe_generate_conversation_title,
-    postprocess_conversation_title,
-    resolve_conversation_title_model,
-    schedule_conversation_title_generation,
-    truncate_summary_preview,
-)
 from talkops.state.session import (
     SessionManager,
     ThreadInfo,
@@ -95,6 +108,7 @@ from talkops.state.session import (
     upsert_thread_summary,
 )
 from talkops.state.state_migration import migrate_legacy_state
+from talkops.state.webhook_sre_channels import WebhookSREChannels
 
 __all__ = [
     # Core Composite State

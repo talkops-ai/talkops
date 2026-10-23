@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Draft acceptance criteria for a AWS Cloud & DevOps operations goal from objectives.
 
 Provides the LLM prompts and direct-invoke convenience function used by the
@@ -5,6 +19,9 @@ TUI/API ``/goal`` command for synchronous rubric generation.
 """
 
 from __future__ import annotations
+
+import json
+import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -95,8 +112,6 @@ DEVOPS_RUBRIC_SYSTEM_PROMPT = GOAL_RUBRIC_SYSTEM_PROMPT
 
 def _derive_choices_for_question(question_text: str) -> list[dict[str, str]]:
     """Derive 2-3 helpful multiple-choice options from a clarifying question string."""
-    import re
-
     q_clean = question_text.strip().rstrip("?")
     choices: list[str] = []
 
@@ -145,8 +160,6 @@ def extract_clarifying_questions(
     questions are rendered once in the interactive ``ask_user``-style question
     selector rather than duplicated in static markdown.
     """
-    import re
-
     normalized: list[dict[str, object]] = []
     seen_questions: set[str] = set()
 
@@ -355,8 +368,6 @@ def _extract_text_content(content: object) -> str:
 
 def _extract_criteria_from_text(raw_text: str) -> str:
     """Extract clean markdown criteria bullets from model text or JSON structure."""
-    import json
-
     text = raw_text.strip()
     if not text:
         return ""

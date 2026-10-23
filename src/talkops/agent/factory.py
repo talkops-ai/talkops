@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Core Agent Factory for TalkOps.
 
 Produces a compiled LangGraph ``Pregel`` graph wired with the complete
@@ -8,9 +22,10 @@ and security controls with Database as Source of Truth.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping, Sequence
 import concurrent.futures
 import fnmatch
+import os as _os
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,7 +44,6 @@ from talkops.backend.composite import TalkOpsCompositeBackend
 from talkops.backend.local import LocalShellBackend
 from talkops.config import paths
 from talkops.config.settings import get_settings
-from talkops.project_utils import ProjectContext, get_server_project_context
 from talkops.mcp.discovery import discover_mcp_configs
 from talkops.memory.registry import MemoryRegistry
 from talkops.middleware.ask_user import AskUserMiddleware
@@ -42,7 +56,6 @@ from talkops.middleware.compaction import (
     _create_cli_compaction_middleware,
 )
 from talkops.middleware.configurable_model import ConfigurableModelMiddleware
-from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
 from talkops.middleware.cost_tracking import CostTrackingMiddleware
 from talkops.middleware.glm_stall_recovery import (
     GlmTerminalStallRecoveryMiddleware,
@@ -58,6 +71,7 @@ from talkops.middleware.headless_mcp_guard import (
     HeadlessMCPGuardMiddleware,
     gated_mcp_tool_names,
 )
+from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
 from talkops.middleware.local_context import LocalContextMiddleware
 from talkops.middleware.mcp_middleware import MCPToolMiddleware
 from talkops.middleware.memory_guard import ManagedMemoryGuardMiddleware
@@ -70,14 +84,15 @@ from talkops.middleware.skills import (
     PluginSkillsMiddleware,
     discover_skill_dirs,
 )
-from talkops.middleware.subagents import SubagentsMiddleware
 from talkops.middleware.subagent_telemetry import SubagentTelemetryMiddleware
+from talkops.middleware.subagents import SubagentsMiddleware
 from talkops.middleware.tool_filter import ToolFilterMiddleware
 from talkops.middleware.unified_system_message import (
     UnifiedSystemMessageMiddleware,
 )
 from talkops.middleware.webhook_sre import WebhookSREMiddleware
 from talkops.model.factory import create_model
+from talkops.project_utils import ProjectContext, get_server_project_context
 from talkops.prompts import (
     get_base_system_prompt,
     get_memory_system_prompt,
@@ -373,8 +388,8 @@ def _subagent_cli_middleware(
     elif interrupt_on is not None:
         middleware.append(AsyncApprovalHITLMiddleware(interrupt_on))
 
-    from deepagents.middleware.filesystem import FilesystemMiddleware
     from deepagents.backends import FilesystemBackend
+    from deepagents.middleware.filesystem import FilesystemMiddleware
 
     effective_backend = backend or FilesystemBackend(virtual_mode=False)
     middleware.append(FilesystemMiddleware(backend=effective_backend))
@@ -466,11 +481,26 @@ def _subagent_cli_middleware(
     if bundled_source and Path(bundled_source[0]).is_dir():
         skill_sources.append(bundled_source)
 
+    own_plugin_id = str(meta_for_skills.get("plugin_id") or "")
+    only_own_plugin_wildcard = bool(
+        skill_sources
+        and allowed_skills
+        and own_plugin_id
+        and all(
+            pat.lower()
+            in (
+                f"{own_plugin_id.lower()}:*",
+                f"{own_plugin_id.split('@', 1)[0].lower()}:*",
+            )
+            for pat in allowed_skills
+        )
+    )
+
     if skill_sources_override is not None:
         # Explicit, exclusive skill sources (e.g. workflow executor built-ins);
         # never inherit the global skill catalog.
         skill_sources.extend(tuple(src) for src in skill_sources_override if Path(src[0]).is_dir())
-    elif allowed_skills is not None:
+    elif allowed_skills is not None and not only_own_plugin_wildcard:
         global_sources = get_skill_sources(
             project_root=Path(worktree_root) if worktree_root else None,
             include_subagent_skills=True,
@@ -506,6 +536,7 @@ def _subagent_cli_middleware(
                 backend=FilesystemBackend(virtual_mode=False),
                 sources=skill_sources,
                 allowed_skills=allowed_skills,
+                is_subagent=True,
                 project_root=Path(worktree_root) if worktree_root else None,
             )
         )
@@ -572,7 +603,7 @@ def create_talkops_agent(
     """
     settings = get_settings()
 
-    # 1. Resolve working directory following dcode conventions
+    # 1. Resolve working directory following TalkOps conventions
     resolved_context = project_context or get_server_project_context()
     effective_cwd: Path
     if cwd is not None:
@@ -635,7 +666,7 @@ def create_talkops_agent(
                 all_tools.append(t)
 
     # Append default tools if not already present (core web exploration & multi-cloud context)
-    # Following dcode conventions: web_search is only bound when Tavily is configured
+    # Following TalkOps conventions: web_search is only bound when Tavily is configured
     default_tool_names = [
         "fetch_url",
         "cloud_list_contexts",
@@ -798,7 +829,8 @@ def create_talkops_agent(
         "\n\n## Subagent Execution & Anti-Recursion Discipline\n"
         "- You are already the dedicated subagent for this task. Execute the work directly using your tools — do NOT re-delegate your entire assignment to another single subagent.\n"
         "- Maximize parallel tool calls for independent read/discovery queries (`read_file`, `grep_search`, `glob`, read-only cloud CLI queries).\n"
-        "- Reference all files and manifests with exact `file_path:line_number` and preserve structured tables and actionable CLI commands in your final report."
+        "- Offload large raw telemetry (>50 lines of logs or unparsed JSON) to files on disk rather than dumping raw logs into your final message.\n"
+        "- Ground every claim with exact `file_path:line_number` or cloud resource ARNs/IDs, and preserve all structured tables, regional breakdowns, and copy-pasteable CLI commands in your final report."
     )
 
     for name, subagent_meta in subagent_by_name.items():
@@ -817,6 +849,12 @@ def create_talkops_agent(
         }
         if model_spec:
             subagent_dict["model"] = model_spec
+        sub_mode = subagent_meta.get("mode")
+        if sub_mode in ("isolated", "fork"):
+            subagent_dict["mode"] = sub_mode
+        sub_response_format = subagent_meta.get("response_format")
+        if sub_response_format is not None:
+            subagent_dict["response_format"] = sub_response_format
 
         subagent_name = subagent_meta.get("name") or name
         subagent_path = subagent_meta.get("path")
@@ -929,7 +967,7 @@ def create_talkops_agent(
         has_search=any(getattr(t, "name", None) == "web_search" for t in all_tools),
     )
 
-    # 10. Build ordered middleware stack (matching OpsCode execution order)
+    # 10. Build ordered middleware stack (matching TalkOps execution order)
     agent_middleware: list[AgentMiddleware[Any, Any]] = []
 
     # 10.0 WebhookSREMiddleware — dynamically swaps the base system prompt to
@@ -1012,7 +1050,7 @@ def create_talkops_agent(
         )
         agent_middleware.append(ManagedMemoryGuardMiddleware(guarded_paths=memory_sources_str))
 
-    # 10.6 PluginSkillsMiddleware (resolved via canonical dcode-aligned get_skill_sources)
+    # 10.6 PluginSkillsMiddleware (resolved via canonical get_skill_sources)
     from talkops.skills.sources import get_skill_sources
 
     coord_skill_sources = get_skill_sources(
@@ -1042,7 +1080,6 @@ def create_talkops_agent(
     )
 
     # 10.7 CodeInterpreterMiddleware (if enabled)
-    import os as _os
 
     no_subagents_flag = bool(kwargs.pop("no_subagents", False)) or (
         _os.environ.get("TALKOPS_SERVER_NO_SUBAGENTS", "").lower() == "true"
@@ -1065,8 +1102,16 @@ def create_talkops_agent(
             ptc_option: PTCOption | None = cast(PTCOption, list(ptc_names)) if ptc_names is not None else None
 
             with suppress_langchain_beta_warning():
+                from talkops.middleware.unified_system_message import (
+                    compact_interpreter_prompt,
+                )
+
+                class _TalkOpsCodeInterpreterMiddleware(CodeInterpreterMiddleware):
+                    def _prepare_for_call(self, request: Any) -> str:
+                        return compact_interpreter_prompt(super()._prepare_for_call(request))
+
                 agent_middleware.append(
-                    CodeInterpreterMiddleware(
+                    _TalkOpsCodeInterpreterMiddleware(
                         tool_name="js_eval",
                         timeout=getattr(settings, "interpreter_timeout_seconds", 30),
                         memory_limit=getattr(settings, "interpreter_memory_limit_mb", 64) * 1024 * 1024,
@@ -1189,8 +1234,9 @@ def create_talkops_agent(
     # so the main deep agent never sees it. Each plugin subagent runnable is
     # compiled with the exact same tools, MCP servers, skills, definition, and
     # middleware attached as when invoked via js_eval / task.
-    from talkops.middleware.agent_session import AgentSessionMiddleware
     from deepagents.middleware.subagents import SubAgent, create_sub_agent
+
+    from talkops.middleware.agent_session import AgentSessionMiddleware
 
     plugin_agent_runnables: dict[str, Any] = {}
     for sub in compiled_subagents:

@@ -1,21 +1,40 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TalkOps slash command system and CommandRegistry."""
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import MagicMock
-from talkops.commands.registry import CommandRegistry
+from textual.app import App
+from textual.widgets import Select
+
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
 from talkops.commands.core.exit_cmd import ExitHandler
+from talkops.commands.registry import CommandRegistry
 
 
 @pytest.fixture(autouse=True)
 def reset_registry():
+    """Provide reset registry test helper or fixture."""
     CommandRegistry.reset()
     yield
     CommandRegistry.reset()
 
 
 def test_command_registry_discovery():
+    """Verify command registry discovery."""
     registry = CommandRegistry.get_instance()
     all_cmds = registry.list_all_commands()
     assert "/exit" in all_cmds
@@ -25,6 +44,7 @@ def test_command_registry_discovery():
 
 
 def test_exit_command_and_aliases():
+    """Verify exit command and aliases."""
     registry = CommandRegistry.get_instance()
     exit_handler = registry.get_handler("/exit")
     assert exit_handler is not None
@@ -41,6 +61,7 @@ def test_exit_command_and_aliases():
 
 @pytest.mark.asyncio
 async def test_exit_command_execution():
+    """Verify exit command execution."""
     mock_app = MagicMock()
     mock_app.exit = MagicMock()
     mock_app.prepare_exit = MagicMock()
@@ -56,6 +77,7 @@ async def test_exit_command_execution():
 
 @pytest.mark.asyncio
 async def test_dispatch_slash_command():
+    """Verify dispatch slash command."""
     registry = CommandRegistry.get_instance()
     mock_app = MagicMock()
     mock_app.exit = MagicMock()
@@ -67,30 +89,38 @@ async def test_dispatch_slash_command():
 
 
 def test_plugin_command_registration_and_source():
+    """Verify plugin command registration and source."""
     registry = CommandRegistry.get_instance()
 
     class CustomPluginHandler(BaseCommandHandler):
+        """Test suite or helper class for custom plugin handler."""
         @property
         def name(self) -> str:
+            """Return the primary slash command name."""
             return "/mycmd"
 
         @property
         def aliases(self) -> tuple[str, ...]:
+            """Return alternative slash command aliases."""
             return ("/mc",)
 
         @property
         def category(self) -> CommandCategory:
+            """Return the command category classification."""
             return CommandCategory.DEVOPS
 
         @property
         def safety_level(self) -> SafetyLevel:
+            """Return the safety level required for this command."""
             return SafetyLevel.READ_ONLY
 
         @property
         def bypass_tier(self) -> BypassTier:
+            """Return the execution queue bypass tier for this command."""
             return BypassTier.NORMAL
 
         async def execute(self, ctx: CommandContext) -> CommandResult:
+            """Execute the command handler with the provided command context."""
             return CommandResult(success=True, feedback_message="custom output")
 
     custom_handler = CustomPluginHandler()
@@ -112,6 +142,7 @@ def test_plugin_command_registration_and_source():
 
 @pytest.mark.asyncio
 async def test_config_command_execution():
+    """Verify config command execution."""
     from talkops.commands.core.config_cmd import ConfigHandler
     from talkops.config.settings import Settings
 
@@ -148,9 +179,9 @@ async def test_config_command_execution():
 
 @pytest.mark.asyncio
 async def test_pool_command_execution():
+    """Verify pool command execution."""
     from talkops.commands.core.pool import PoolHandler
     from talkops.config.toml_config import clear_agent_pool, load_agent_pool
-    from unittest.mock import AsyncMock
 
     handler = PoolHandler()
     clear_agent_pool()
@@ -195,15 +226,16 @@ async def test_pool_command_execution():
 
 @pytest.mark.asyncio
 async def test_pool_selector_screen_mount():
-    from textual.app import App
-    from textual.widgets import Select
-    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
+    """Verify pool selector screen mount."""
     from talkops.config.toml_config import clear_agent_pool
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
     clear_agent_pool()
 
     class TestApp(App[None]):
+        """Test suite or helper class for test app."""
         def on_mount(self) -> None:
+            """Initialize component state when mounted into the DOM."""
             self.push_screen(PoolSelectorScreen(active_provider="openai"))
 
     test_app = TestApp()
@@ -237,14 +269,16 @@ async def test_pool_selector_screen_mount():
 
 
 async def test_pool_selector_buttons_visible_in_constrained_terminal():
-    from textual.app import App
-    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
+    """Verify pool selector buttons visible in constrained terminal."""
     from talkops.config.toml_config import clear_agent_pool
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
     clear_agent_pool()
 
     class TestApp(App[None]):
+        """Test suite or helper class for test app."""
         def on_mount(self) -> None:
+            """Initialize component state when mounted into the DOM."""
             self.push_screen(PoolSelectorScreen(active_provider="google_genai"))
 
     test_app = TestApp()
@@ -272,20 +306,23 @@ async def test_pool_selector_buttons_visible_in_constrained_terminal():
 
 
 async def test_pool_selector_save_and_reset_actions():
-    from textual.app import App
-    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
+    """Verify pool selector save and reset actions."""
     from talkops.config.toml_config import clear_agent_pool, load_agent_pool
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
     clear_agent_pool()
 
     saved_result = None
 
     def on_dismiss(res):
+        """Provide on dismiss test helper or fixture."""
         nonlocal saved_result
         saved_result = res
 
     class TestApp(App[None]):
+        """Test suite or helper class for test app."""
         def on_mount(self) -> None:
+            """Initialize component state when mounted into the DOM."""
             self.push_screen(PoolSelectorScreen(active_provider="google_genai"), on_dismiss)
 
     test_app = TestApp()
@@ -311,6 +348,7 @@ async def test_pool_selector_save_and_reset_actions():
         reset_result = None
 
         def on_reset_dismiss(res):
+            """Provide on reset dismiss test helper or fixture."""
             nonlocal reset_result
             reset_result = res
 
@@ -327,13 +365,14 @@ async def test_pool_selector_save_and_reset_actions():
 
 async def test_pool_selector_dismiss_idempotency():
     """Verify PoolSelectorScreen dismissal is idempotent and avoids ScreenStackError on double dismiss."""
-    from textual.app import App
     from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
     dismissed_results = []
 
     class TestApp(App[None]):
+        """Test suite or helper class for test app."""
         def on_mount(self) -> None:
+            """Initialize component state when mounted into the DOM."""
             self.push_screen(
                 PoolSelectorScreen(active_provider="google_genai"),
                 lambda res: dismissed_results.append(res),
@@ -359,8 +398,8 @@ async def test_pool_selector_dismiss_idempotency():
 
 @pytest.mark.asyncio
 async def test_goal_command_conversational_amendment_when_active():
+    """Verify goal command conversational amendment when active."""
     from talkops.commands.power.goal import GoalHandler, get_goal_state
-    from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
     mock_app._run_goal_criteria_request = AsyncMock()
@@ -392,8 +431,8 @@ async def test_goal_command_conversational_amendment_when_active():
 
 @pytest.mark.asyncio
 async def test_goal_command_conversational_amendment_when_blocked():
+    """Verify goal command conversational amendment when blocked."""
     from talkops.commands.power.goal import GoalHandler, get_goal_state
-    from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
     mock_app._run_goal_criteria_request = AsyncMock()
@@ -420,8 +459,8 @@ async def test_goal_command_conversational_amendment_when_blocked():
 
 @pytest.mark.asyncio
 async def test_goal_command_explicit_new_replaces_active():
+    """Verify goal command explicit new replaces active."""
     from talkops.commands.power.goal import GoalHandler, get_goal_state
-    from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
     mock_app._run_goal_criteria_request = AsyncMock()
@@ -447,8 +486,8 @@ async def test_goal_command_explicit_new_replaces_active():
 
 @pytest.mark.asyncio
 async def test_goal_command_create_when_no_active_goal():
+    """Verify goal command create when no active goal."""
     from talkops.commands.power.goal import GoalHandler, get_goal_state
-    from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
     mock_app._run_goal_criteria_request = AsyncMock()
@@ -472,8 +511,8 @@ async def test_goal_command_create_when_no_active_goal():
 
 @pytest.mark.asyncio
 async def test_context_command_no_emojis_and_complete_metrics():
+    """Verify context command no emojis and complete metrics."""
     from talkops.commands.core.context import ContextHandler
-    from unittest.mock import AsyncMock
 
     mock_app = MagicMock()
     mock_app._model = "google_genai:gemini-3.5-flash"
@@ -529,6 +568,7 @@ async def test_context_command_no_emojis_and_complete_metrics():
 
 @pytest.mark.asyncio
 async def test_multi_provider_pool_command_set_and_status():
+    """Verify multi provider pool command set and status."""
     from talkops.commands._base import CommandContext
     from talkops.commands.core.pool import PoolHandler
     from talkops.config.toml_config import clear_agent_pool, load_agent_pool
@@ -539,8 +579,8 @@ async def test_multi_provider_pool_command_set_and_status():
     # 1. Set multi-provider pool
     ctx_set = CommandContext(
         app=None,
-        raw_command="/pool set fast=openai:gpt-4o-mini standard=google_genai:gemini-2.5-flash powerful=anthropic:claude-sonnet-4-5",
-        args="set fast=openai:gpt-4o-mini standard=google_genai:gemini-2.5-flash powerful=anthropic:claude-sonnet-4-5",
+        raw_command="/pool set fast=openai:gpt-4o-mini standard=google_genai:gemini-3.7-flash powerful=anthropic:claude-sonnet-4-5",
+        args="set fast=openai:gpt-4o-mini standard=google_genai:gemini-3.7-flash powerful=anthropic:claude-sonnet-4-5",
     )
     res_set = await handler.execute(ctx_set)
     assert res_set.success is True
@@ -550,7 +590,7 @@ async def test_multi_provider_pool_command_set_and_status():
     saved = load_agent_pool()
     assert saved is not None
     assert saved["fast"] == "openai:gpt-4o-mini"
-    assert saved["standard"] == "google_genai:gemini-2.5-flash"
+    assert saved["standard"] == "google_genai:gemini-3.7-flash"
     assert saved["powerful"] == "anthropic:claude-sonnet-4-5"
     assert saved.get("provider") == "multi"
 
@@ -561,7 +601,7 @@ async def test_multi_provider_pool_command_set_and_status():
     assert res_status.message is not None
     assert "Multi-Provider" in res_status.message
     assert "openai:gpt-4o-mini" in res_status.message
-    assert "google_genai:gemini-2.5-flash" in res_status.message
+    assert "google_genai:gemini-3.7-flash" in res_status.message
     assert "anthropic:claude-sonnet-4-5" in res_status.message
 
     clear_agent_pool()
@@ -569,21 +609,23 @@ async def test_multi_provider_pool_command_set_and_status():
 
 @pytest.mark.asyncio
 async def test_pool_selector_screen_multi_provider_ui():
-    from textual.app import App
-    from textual.widgets import Select
-    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
+    """Verify pool selector screen multi provider ui."""
     from talkops.config.toml_config import clear_agent_pool, load_agent_pool
+    from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
     clear_agent_pool()
 
     saved_result = None
 
     def on_dismiss(res):
+        """Provide on dismiss test helper or fixture."""
         nonlocal saved_result
         saved_result = res
 
     class TestApp(App[None]):
+        """Test suite or helper class for test app."""
         def on_mount(self) -> None:
+            """Initialize component state when mounted into the DOM."""
             self.push_screen(PoolSelectorScreen(active_provider="google_genai"), on_dismiss)
 
     test_app = TestApp()
@@ -619,7 +661,8 @@ async def test_pool_selector_screen_multi_provider_ui():
         # 4. Standard remains google_genai
         s_std = screen.query_one("#select-standard", Select)
         assert any("google_genai" in str(opt[1]) for opt in s_std._options)
-        s_std.value = "google_genai:gemini-2.5-flash"
+        assert not any("gemini-2.5" in str(opt[1]) for opt in s_std._options)
+        s_std.value = "google_genai:gemini-3.7-flash"
 
         # 5. Save multi-provider pool
         await pilot.click("#btn-save")
@@ -627,14 +670,14 @@ async def test_pool_selector_screen_multi_provider_ui():
 
         assert saved_result is not None
         assert saved_result["fast"] == "openai:gpt-4o-mini"
-        assert saved_result["standard"] == "google_genai:gemini-2.5-flash"
+        assert saved_result["standard"] == "google_genai:gemini-3.7-flash"
         assert saved_result["powerful"] == "anthropic:claude-sonnet-4-5"
         assert saved_result["provider"] == "multi"
 
         persisted = load_agent_pool()
         assert persisted is not None
         assert persisted["fast"] == "openai:gpt-4o-mini"
-        assert persisted["standard"] == "google_genai:gemini-2.5-flash"
+        assert persisted["standard"] == "google_genai:gemini-3.7-flash"
         assert persisted["powerful"] == "anthropic:claude-sonnet-4-5"
         assert persisted["provider"] == "multi"
 

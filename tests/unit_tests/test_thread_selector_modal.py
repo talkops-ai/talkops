@@ -1,6 +1,22 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for ThreadSelectorScreen OpsModalScreen migration."""
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import pytest
 from textual.app import App, ComposeResult
@@ -18,27 +34,31 @@ class DummyThreadApp(App):
     """Minimal textual app to mount and test ThreadSelectorScreen."""
 
     def __init__(self, screen_instance: ThreadSelectorScreen) -> None:
+        """Initialize DummyThreadApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
 def test_format_relative_time() -> None:
+    """Verify format relative time."""
     assert _format_relative_time(None) == ""
     assert _format_relative_time("") == ""
     # Test recent seconds
-    from datetime import datetime, timezone
     now_iso = datetime.now(timezone.utc).isoformat()
     assert _format_relative_time(now_iso) == "just now"
 
 
 @pytest.mark.asyncio
 async def test_thread_selector_screen_mount_and_options() -> None:
+    """Verify thread selector screen mount and options."""
     threads = [
         {
             "thread_id": "thread-12345678-abcd",
@@ -92,6 +112,7 @@ async def test_thread_selector_screen_mount_and_options() -> None:
 
 @pytest.mark.asyncio
 async def test_thread_search_editing_keys_do_not_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify thread search editing keys do not delete."""
     screen = ThreadSelectorScreen(
         threads=[{"thread_id": "thread-12345678-abcd", "initial_prompt": "Deployment"}],
     )
@@ -99,6 +120,7 @@ async def test_thread_search_editing_keys_do_not_delete(monkeypatch: pytest.Monk
     deleted: list[str] = []
 
     async def fake_delete(thread_id: str) -> None:
+        """Provide fake delete test helper or fixture."""
         deleted.append(thread_id)
 
     monkeypatch.setattr(screen, "_delete_thread_async", fake_delete)
@@ -115,6 +137,7 @@ async def test_thread_search_editing_keys_do_not_delete(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 async def test_thread_row_click_does_not_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify thread row click does not delete."""
     screen = ThreadSelectorScreen(
         threads=[{"thread_id": "thread-12345678-abcd", "initial_prompt": "Deployment"}],
     )
@@ -122,6 +145,7 @@ async def test_thread_row_click_does_not_delete(monkeypatch: pytest.MonkeyPatch)
     deleted: list[str] = []
 
     async def fake_delete(thread_id: str) -> None:
+        """Provide fake delete test helper or fixture."""
         deleted.append(thread_id)
 
     monkeypatch.setattr(screen, "_delete_thread_async", fake_delete)
@@ -142,6 +166,7 @@ async def test_thread_row_click_does_not_delete(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.asyncio
 async def test_thread_ctrl_d_and_confirm_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify thread ctrl d and confirm flow."""
     screen = ThreadSelectorScreen(
         threads=[{"thread_id": "thread-12345678-abcd", "initial_prompt": "Deployment"}],
     )
@@ -149,6 +174,7 @@ async def test_thread_ctrl_d_and_confirm_flow(monkeypatch: pytest.MonkeyPatch) -
     deleted: list[str] = []
 
     async def fake_delete(thread_id: str) -> None:
+        """Provide fake delete test helper or fixture."""
         deleted.append(thread_id)
 
     monkeypatch.setattr(screen, "_delete_thread_async", fake_delete)
@@ -186,6 +212,7 @@ async def test_thread_ctrl_d_and_confirm_flow(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_thread_row_del_click_triggers_confirm_modal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify thread row del click triggers confirm modal."""
     screen = ThreadSelectorScreen(
         threads=[{"thread_id": "thread-12345678-abcd", "initial_prompt": "Deployment"}],
     )
@@ -193,6 +220,7 @@ async def test_thread_row_del_click_triggers_confirm_modal(monkeypatch: pytest.M
     deleted: list[str] = []
 
     async def fake_delete(thread_id: str) -> None:
+        """Provide fake delete test helper or fixture."""
         deleted.append(thread_id)
 
     monkeypatch.setattr(screen, "_delete_thread_async", fake_delete)

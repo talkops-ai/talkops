@@ -1,8 +1,21 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Interactive agent model pool configuration screen for `/pool`."""
 
 from __future__ import annotations
 
-from talkops.utils.logger import get_logger
 from typing import Any, ClassVar
 
 from textual.app import ComposeResult
@@ -14,7 +27,11 @@ from textual.widgets import Button, Select, Static
 from textual.widgets._select import SelectOverlay
 
 from talkops.config.settings import get_glyphs
-from talkops.config.toml_config import clear_agent_pool, load_agent_pool, save_agent_pool
+from talkops.config.toml_config import (
+    clear_agent_pool,
+    load_agent_pool,
+    save_agent_pool,
+)
 from talkops.model.config import (
     AVAILABLE_MODELS,
     DEFAULT_PROVIDER_PRIORITY,
@@ -25,6 +42,7 @@ from talkops.model.config import (
 )
 from talkops.model.pool import get_model_pool_manager
 from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -70,7 +88,7 @@ class PoolSelectorScreen(OpsModalScreen[dict[str, Any] | None]):
         margin-bottom: 1;
         padding: 0 1;
         border: round $primary 40%;
-        background: $background;
+        background: $panel 35%;
     }
 
     PoolSelectorScreen .tier-block:hover {
@@ -168,6 +186,7 @@ class PoolSelectorScreen(OpsModalScreen[dict[str, Any] | None]):
         *,
         active_provider: str = "google_genai",
     ) -> None:
+        """Initialize PoolSelectorScreen."""
         super().__init__()
         saved = load_agent_pool() or {}
         saved_prov = saved.get("provider")
@@ -201,6 +220,7 @@ class PoolSelectorScreen(OpsModalScreen[dict[str, Any] | None]):
         return options
 
     def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on PoolSelectorScreen."""
         provider_options = self._get_provider_options()
 
         # Pre-select initial values from saved pool or dynamic discovery
@@ -335,6 +355,7 @@ class PoolSelectorScreen(OpsModalScreen[dict[str, Any] | None]):
         )
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         super().on_mount()
         glyphs = get_glyphs()
         self.set_modal_title("Model Pool Configuration", counter=self._provider)

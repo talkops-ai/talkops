@@ -1,9 +1,23 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Helpers for loading and formatting skill invocations."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -67,7 +81,9 @@ def discover_skills_and_roots(
     p_roots = list(plugin_skill_roots)
     if not p_sources:
         try:
-            from talkops.plugins.adapters.skills import discover_plugin_skill_sources_and_roots
+            from talkops.plugins.adapters.skills import (
+                discover_plugin_skill_sources_and_roots,
+            )
 
             discovered_p_sources, discovered_p_roots = discover_plugin_skill_sources_and_roots(
                 project_root=effective_project_root
@@ -268,7 +284,7 @@ def build_skill_invocation_envelope(
             else skill_p
         )
 
-    # Support Claude Code-style dynamic pre-computation (!`cmd`, ```! ... ```, $ARGUMENTS, ${TALKOPS_SKILL_DIR})
+    # Support dynamic skill pre-computation (!`cmd`, ```! ... ```, $ARGUMENTS, ${TALKOPS_SKILL_DIR})
     if any(
         marker in stripped_body
         for marker in ("!`", "```!", "$ARGUMENTS", "${TALKOPS_", "${CLAUDE_")

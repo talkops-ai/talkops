@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tri-Mode Cloud Credential Broker for TalkOps.
 
 Supports three unified authentication paradigms across AWS, Microsoft Azure,
@@ -21,14 +35,14 @@ Google Cloud Platform (GCP), and Kubernetes (K8s):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
 import subprocess
-from typing import Any, Literal
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal
 
 from talkops.config.cloud_discovery import (
     AmbientCloudDetector,
@@ -78,6 +92,7 @@ class DualModeCredentialBroker:
     """Tri-Mode (Ambient + Local Workstation + Central Server) Cloud Credential Broker."""
 
     def __init__(self, runtime_mode: RuntimeAuthMode | None = None) -> None:
+        """Initialize DualModeCredentialBroker."""
         self.runtime_mode: RuntimeAuthMode = runtime_mode or detect_runtime_auth_mode()
 
     # ── Target Resolution Helpers ──────────────────────────────────────────
@@ -88,7 +103,10 @@ class DualModeCredentialBroker:
         target_id: str | None = None,
     ) -> CloudTargetContext | None:
         """Look up discovered CloudTargetContext for a provider and target_id."""
-        from talkops.config.cloud_profiles import get_active_cloud_target, get_cloud_target_info
+        from talkops.config.cloud_profiles import (
+            get_active_cloud_target,
+            get_cloud_target_info,
+        )
 
         effective_id = target_id
         if not effective_id:

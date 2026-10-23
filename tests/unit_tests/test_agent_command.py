@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for the enhanced ``/agent`` command, autocomplete, and AgentSessionMiddleware."""
 
 from __future__ import annotations
@@ -35,7 +49,6 @@ from talkops.ui.command_registry import (
 )
 from talkops.ui.textual_adapter import _is_agent_session_namespace
 
-
 # ── Fakes & Helpers ──────────────────────────────────────────────────────────
 
 
@@ -43,16 +56,19 @@ class FakeSubAgent:
     """Minimal runnable stand-in for compiled plugin subagent."""
 
     def __init__(self, result: dict[str, Any] | Exception) -> None:
+        """Initialize FakeSubAgent."""
         self.result = result
         self.calls: list[dict[str, Any]] = []
 
     def invoke(self, payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        """Provide invoke test helper or fixture."""
         self.calls.append(payload)
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
 
     async def ainvoke(self, payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        """Provide ainvoke test helper or fixture."""
         return self.invoke(payload, **kwargs)
 
 
@@ -86,6 +102,7 @@ def _sample_plugin_agents() -> list[dict[str, Any]]:
 
 
 def test_resolve_plugin_agent_exact_and_short_names() -> None:
+    """Verify resolve plugin agent exact and short names."""
     agents = cast("Any", _sample_plugin_agents())
 
     # Exact full name
@@ -117,6 +134,7 @@ def test_resolve_plugin_agent_exact_and_short_names() -> None:
 
 
 def test_build_agent_commands_matches_workflow_pattern() -> None:
+    """Verify build agent commands matches workflow pattern."""
     agents = _sample_plugin_agents()
     entries = build_agent_commands(agents)
 
@@ -139,6 +157,7 @@ def test_build_agent_commands_matches_workflow_pattern() -> None:
 
 def test_command_descriptor_and_prefix_resolution() -> None:
     # Top-level command
+    """Verify command descriptor and prefix resolution."""
     cmd = get_command("/agent")
     assert cmd is not None
     assert cmd.name == "/agent"
@@ -160,6 +179,7 @@ def test_command_descriptor_and_prefix_resolution() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_list_text() -> None:
+    """Verify agent list text."""
     handler = AgentsHandler()
     mock_app = MagicMock()
     mock_app.get_discovered_plugin_agents.return_value = _sample_plugin_agents()
@@ -177,6 +197,7 @@ async def test_agent_list_text() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_status_when_inactive() -> None:
+    """Verify agent status when inactive."""
     handler = AgentsHandler()
     mock_app = MagicMock()
     mock_app.get_discovered_plugin_agents.return_value = _sample_plugin_agents()
@@ -191,6 +212,7 @@ async def test_agent_status_when_inactive() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_activation_and_status() -> None:
+    """Verify agent activation and status."""
     handler = AgentsHandler()
     mock_app = MagicMock()
     mock_app._run_agent_session_request = AsyncMock()
@@ -217,6 +239,7 @@ async def test_agent_activation_and_status() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_activation_with_initial_prompt() -> None:
+    """Verify agent activation with initial prompt."""
     handler = AgentsHandler()
     mock_app = MagicMock()
     mock_app._run_agent_session_request = AsyncMock()
@@ -240,6 +263,7 @@ async def test_agent_activation_with_initial_prompt() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_clear_and_detach() -> None:
+    """Verify agent clear and detach."""
     handler = AgentsHandler()
     mock_app = MagicMock()
     mock_app._run_agent_session_request = AsyncMock()
@@ -275,6 +299,7 @@ async def test_agent_clear_and_detach() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_invoke_handler_prefix_syntax() -> None:
+    """Verify agent invoke handler prefix syntax."""
     invoke_handler = AgentInvokeHandler()
     assert invoke_handler.name == "/agent:"
     assert "/agents:" in invoke_handler.aliases
@@ -304,6 +329,7 @@ async def test_agent_invoke_handler_prefix_syntax() -> None:
 
 
 def test_agent_session_middleware_passthrough_when_no_request() -> None:
+    """Verify agent session middleware passthrough when no request."""
     subagent = FakeSubAgent({})
     mw = AgentSessionMiddleware({"test-agent": subagent})
 
@@ -317,6 +343,7 @@ def test_agent_session_middleware_passthrough_when_no_request() -> None:
 
 
 def test_agent_session_middleware_start_without_prompt() -> None:
+    """Verify agent session middleware start without prompt."""
     subagent = FakeSubAgent({})
     mw = AgentSessionMiddleware({"test-agent": subagent})
 
@@ -336,6 +363,7 @@ def test_agent_session_middleware_start_without_prompt() -> None:
 
 
 def test_agent_session_middleware_start_with_prompt() -> None:
+    """Verify agent session middleware start with prompt."""
     fake_reply = {"messages": [HumanMessage(content="run audit"), AIMessage(content="audit complete")]}
     subagent = FakeSubAgent(fake_reply)
     mw = AgentSessionMiddleware({"test-agent": subagent})
@@ -359,6 +387,7 @@ def test_agent_session_middleware_start_with_prompt() -> None:
 
 
 def test_agent_session_middleware_continue_maintains_isolated_history() -> None:
+    """Verify agent session middleware continue maintains isolated history."""
     fake_reply = {
         "messages": [
             HumanMessage(content="q1"),
@@ -389,6 +418,7 @@ def test_agent_session_middleware_continue_maintains_isolated_history() -> None:
 
 
 def test_agent_session_middleware_clear() -> None:
+    """Verify agent session middleware clear."""
     subagent = FakeSubAgent({})
     mw = AgentSessionMiddleware({"test-agent": subagent})
 
@@ -406,6 +436,7 @@ def test_agent_session_middleware_clear() -> None:
 
 
 def test_agent_session_middleware_bubbles_up_interrupt() -> None:
+    """Verify agent session middleware bubbles up interrupt."""
     subagent = FakeSubAgent(GraphInterrupt(()))
     mw = AgentSessionMiddleware({"test-agent": subagent})
 
@@ -418,6 +449,7 @@ def test_agent_session_middleware_bubbles_up_interrupt() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_session_middleware_async_execution() -> None:
+    """Verify agent session middleware async execution."""
     fake_reply = {"messages": [HumanMessage(content="hello"), AIMessage(content="world")]}
     subagent = FakeSubAgent(fake_reply)
     mw = AgentSessionMiddleware({"test-agent": subagent})
@@ -436,6 +468,7 @@ async def test_agent_session_middleware_async_execution() -> None:
 
 
 def test_is_agent_session_turn() -> None:
+    """Verify is agent session turn."""
     assert is_agent_session_turn({"_agent_session_turn": True})
     assert is_agent_session_turn({"agent_session_request": {"kind": "start"}})
     assert not is_agent_session_turn({"messages": []})
@@ -443,6 +476,7 @@ def test_is_agent_session_turn() -> None:
 
 
 def test_is_agent_session_namespace() -> None:
+    """Verify is agent session namespace."""
     assert _is_agent_session_namespace((f"{AGENT_SESSION_NODE_PREFIX}aws-compute",))
     assert not _is_agent_session_namespace(("GoalCriteriaMiddleware.goal_criteria",))
     assert not _is_agent_session_namespace(())
@@ -453,6 +487,7 @@ def test_is_agent_session_namespace() -> None:
 
 
 def test_agent_autocomplete_prioritization_and_space() -> None:
+    """Verify agent autocomplete prioritization and space."""
     from talkops.ui.command_registry import get_all_entries
     from talkops.ui.widgets.autocomplete import SlashCommandController
 
@@ -495,6 +530,7 @@ def test_agent_autocomplete_prioritization_and_space() -> None:
 
 
 def test_agent_session_middleware_excludes_heavy_channels_and_resets_on_agent_switch() -> None:
+    """Verify agent session middleware excludes heavy channels and resets on agent switch."""
     fake_reply = {"messages": [HumanMessage(content="new prompt"), AIMessage(content="new reply")]}
     subagent_b = FakeSubAgent(fake_reply)
     mw = AgentSessionMiddleware({"agent-a": FakeSubAgent({}), "agent-b": subagent_b})
@@ -536,6 +572,7 @@ def test_agent_session_middleware_excludes_heavy_channels_and_resets_on_agent_sw
 
 @pytest.mark.asyncio
 async def test_close_subagent_mcp_sessions_on_clear_and_agent_switch() -> None:
+    """Verify close subagent mcp sessions on clear and agent switch."""
     from talkops.mcp.session_manager import MCPSessionManager
     from talkops.plugins.adapters.mcp import scoped_subagent_mcp_server_name
 
@@ -550,9 +587,11 @@ async def test_close_subagent_mcp_sessions_on_clear_and_agent_switch() -> None:
 
     class _DummyEntry:
         def __init__(self, name: str) -> None:
+            """Initialize _DummyEntry."""
             self.name = name
 
         async def aclose(self) -> None:
+            """Provide aclose test helper or fixture."""
             closed.append(self.name)
 
     mgr._sessions[finops_srv] = cast(Any, _DummyEntry(finops_srv))

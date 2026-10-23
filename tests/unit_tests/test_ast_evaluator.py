@@ -1,18 +1,41 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for AST evaluation, shell safety, unicode, and URL validation."""
+import pytest
 
 from talkops.security.cli_ast_evaluator import CliAstEvaluator, evaluate_command_safety
-from talkops.security.shell_safety import contains_dangerous_patterns, is_shell_command_allowed
+from talkops.security.shell_safety import (
+    contains_dangerous_patterns,
+    is_shell_command_allowed,
+)
 from talkops.security.unicode_security import (
     check_url_safety,
     normalize_confusables,
     sanitize_unicode,
     strip_dangerous_unicode,
 )
-from talkops.security.url_validation import UrlValidationError, is_url_safe, validate_url
+from talkops.security.url_validation import (
+    UrlValidationError,
+    is_url_safe,
+    validate_url,
+)
 
 
 def test_dangerous_shell_command_patterns():
     # Destructive fork-bombs and root deletes
+    """Verify dangerous shell command patterns."""
     assert contains_dangerous_patterns(":(){ :|:& };:") is True
     assert contains_dangerous_patterns("rm -rf /") is True
     assert contains_dangerous_patterns("rm -fr /") is True
@@ -28,6 +51,7 @@ def test_dangerous_shell_command_patterns():
 
 
 def test_shell_allow_list_policy():
+    """Verify shell allow list policy."""
     allow_list = ["aws", "kubectl", "terraform", "git"]
 
     # Allowed commands
@@ -42,6 +66,7 @@ def test_shell_allow_list_policy():
 
 
 def test_cli_ast_evaluator_chains():
+    """Verify cli ast evaluator chains."""
     evaluator = CliAstEvaluator()
     # Chained allowed commands
     res = evaluator.evaluate("aws s3 ls && kubectl get pods", allow_list=["aws", "kubectl"])
@@ -54,6 +79,7 @@ def test_cli_ast_evaluator_chains():
 
 def test_unicode_safety_and_homoglyphs():
     # Invisible & zero width chars
+    """Verify unicode safety and homoglyphs."""
     invisible_text = "aws\u200B s3\u200C ls"
     sanitized = sanitize_unicode(invisible_text)
     assert sanitized.removed_characters_count > 0
@@ -68,6 +94,7 @@ def test_unicode_safety_and_homoglyphs():
 
 def test_url_safety_validation():
     # Valid external URLs
+    """Verify url safety validation."""
     assert is_url_safe("https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/concepts.html") is True
     resolved_ips = validate_url("https://github.com/kubernetes/kubernetes")
     assert isinstance(resolved_ips, list) and len(resolved_ips) > 0
@@ -77,7 +104,6 @@ def test_url_safety_validation():
     assert is_url_safe("http://127.0.0.1:8080/secret") is False
     assert is_url_safe("http://localhost:3000") is False
 
-    import pytest
     with pytest.raises(UrlValidationError):
         validate_url("http://169.254.169.254/latest/meta-data/")
 

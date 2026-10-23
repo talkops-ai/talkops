@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Modal foundation primitives and base container for TalkOps TUI.
 
 Provides OpsModalScreen, ModalDialog, PillTabs, ModalSearchInput, and
@@ -6,11 +20,11 @@ modal option row formatting helpers for all command modals.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import contextlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import Any, ClassVar, Generic, Self, TypeVar
 
 from rich.cells import cell_len
 from textual import events
@@ -239,6 +253,7 @@ class PillTab(Widget):
         count: int | None = None,
         active: bool = False,
     ) -> None:
+        """Initialize PillTab."""
         super().__init__(id=id)
         self.label = label
         self.count = count
@@ -246,9 +261,11 @@ class PillTab(Widget):
 
     @property
     def tab_id(self) -> str:
+        """Return the tab id property."""
         return self.id or self.label.lower().replace(" ", "-")
 
     def render(self) -> Content:
+        """Render the widget content."""
         if self.count is not None:
             count_repr = f"[{self.count}]" if is_ascii_mode() else f"{self.count}"
             return Content.assemble(
@@ -259,9 +276,11 @@ class PillTab(Widget):
         return Content(self.label)
 
     def watch_active(self, active: bool) -> None:
+        """React to changes in the active reactive attribute."""
         self.set_class(active, "pill-tab--active")
 
     def on_click(self, event: events.Click) -> None:
+        """Handle mouse click events."""
         event.stop()
         if self.parent and isinstance(self.parent, PillTabs):
             self.parent.activate_tab(self.tab_id)
@@ -276,6 +295,7 @@ class PillTabs(Widget):
         """Posted when the active tab is switched."""
 
         def __init__(self, tab_id: str, tab_index: int) -> None:
+            """Initialize TabChanged."""
             super().__init__()
             self.tab_id = tab_id
             self.tab_index = tab_index
@@ -287,11 +307,13 @@ class PillTabs(Widget):
         id: str | None = None,
         initial_tab: str | None = None,
     ) -> None:
+        """Initialize PillTabs."""
         super().__init__(id=id)
         self._initial_tabs = list(tabs or [])
         self._initial_active = initial_tab
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         for item in self._initial_tabs:
             if isinstance(item, PillTab):
                 yield item
@@ -303,6 +325,7 @@ class PillTabs(Widget):
                 yield PillTab(label, id=tab_id)
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         tabs = self.tabs
         if not tabs:
             return
@@ -311,10 +334,12 @@ class PillTabs(Widget):
 
     @property
     def tabs(self) -> list[PillTab]:
+        """Return the tabs property."""
         return list(self.query(PillTab))
 
     @property
     def active_index(self) -> int:
+        """Return the active index property."""
         for idx, tab in enumerate(self.tabs):
             if tab.tab_id == self.active_tab:
                 return idx
@@ -358,6 +383,7 @@ class PillTabs(Widget):
                 break
 
     def watch_active_tab(self, active_tab: str) -> None:
+        """React to changes in the active tab reactive attribute."""
         for tab in self.tabs:
             tab.active = (tab.tab_id == active_tab)
 
@@ -372,6 +398,7 @@ class ModalSearchInput(Widget):
         """Posted when search query changes."""
 
         def __init__(self, value: str) -> None:
+            """Initialize Changed."""
             super().__init__()
             self.value = value
 
@@ -379,6 +406,7 @@ class ModalSearchInput(Widget):
         """Posted when search query is submitted."""
 
         def __init__(self, value: str) -> None:
+            """Initialize Submitted."""
             super().__init__()
             self.value = value
 
@@ -390,6 +418,7 @@ class ModalSearchInput(Widget):
         input_id: str | None = None,
         target_list: Widget | None = None,
     ) -> None:
+        """Initialize ModalSearchInput."""
         super().__init__(id=id)
         self._placeholder = placeholder
         self._input_id = input_id
@@ -398,6 +427,7 @@ class ModalSearchInput(Widget):
         self._input: Input | None = None
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         glyph = get_glyphs().search
         self._icon = Static(glyph, classes="modal-search-icon")
         self._input = Input(
@@ -409,24 +439,29 @@ class ModalSearchInput(Widget):
 
     @property
     def input_widget(self) -> Input:
+        """Return the input widget property."""
         if self._input is None:
             return self.query_one(Input)
         return self._input
 
     @property
     def value(self) -> str:
+        """Return the value property."""
         return self.input_widget.value
 
     @value.setter
     def value(self, val: str) -> None:
+        """Set the value property."""
         self.input_widget.value = val
 
     @property
     def placeholder(self) -> str:
+        """Return the placeholder property."""
         return self.input_widget.placeholder
 
     @placeholder.setter
     def placeholder(self, val: str) -> None:
+        """Set the placeholder property."""
         self.input_widget.placeholder = val
 
     @property
@@ -435,17 +470,21 @@ class ModalSearchInput(Widget):
         return self._input is not None and self._input.has_focus
 
     def focus(self, scroll_visible: bool = True) -> Self:  # type: ignore[override]
+        """Focus modal search input."""
         self.input_widget.focus(scroll_visible=scroll_visible)
         return self
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changed events."""
         self.post_message(self.Changed(event.value))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle input submitted events."""
         self.post_message(self.Submitted(event.value))
         self._focus_target_list()
 
     def on_key(self, event: events.Key) -> None:
+        """Handle keyboard press events."""
         if event.key == "down":
             event.prevent_default()
             event.stop()
@@ -503,6 +542,7 @@ class OpsModalScreen(ModalScreen[T], Generic[T]):
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
+        """Initialize OpsModalScreen."""
         super().__init__(name=name, id=id, classes=classes)
         self.dialog: ModalDialog | None = None
         self._modal_title_text: str = ""
@@ -520,6 +560,7 @@ class OpsModalScreen(ModalScreen[T], Generic[T]):
         yield from ()
 
     def on_mount(self) -> Any:
+        """Initialize component state when mounted into the DOM."""
         if self.dialog is None:
             with contextlib.suppress(NoMatches):
                 self.dialog = self.query_one(ModalDialog)

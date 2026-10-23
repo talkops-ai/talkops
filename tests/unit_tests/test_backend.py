@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TalkOps backend execution, registry, and composite routing."""
 
 from __future__ import annotations
@@ -32,15 +46,19 @@ class TestBackendRegistry:
     """Tests for BackendRegistry singleton, registration, and builder."""
 
     def test_singleton(self) -> None:
+        """Verify singleton."""
         r1 = get_backend_registry()
         r2 = get_backend_registry()
         assert r1 is r2
 
     def test_register_and_build(self) -> None:
+        """Verify register and build."""
         registry = BackendRegistry()
 
         class DummyBackend:
+            """Test suite or helper class for dummy backend."""
             def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+                """Initialize DummyBackend."""
                 self.kwargs = kwargs
 
         registry.register("dummy", DummyBackend)
@@ -49,17 +67,21 @@ class TestBackendRegistry:
         assert backend.kwargs["root_dir"] == "/tmp/talkops_test"
 
     def test_build_unknown_raises(self) -> None:
+        """Verify build unknown raises."""
         registry = BackendRegistry()
         with pytest.raises(ValueError, match="not registered"):
             registry.build("nonexistent_provider")
 
     def test_list_registered(self) -> None:
+        """Verify list registered."""
         registry = BackendRegistry()
 
         class Alpha:
+            """Test suite or helper class for alpha."""
             pass
 
         class Beta:
+            """Test suite or helper class for beta."""
             pass
 
         registry.register("beta_backend", Beta)
@@ -67,10 +89,12 @@ class TestBackendRegistry:
         assert registry.list_registered() == ["alpha_backend", "beta_backend"]
 
     def test_decorator_registers(self) -> None:
+        """Verify decorator registers."""
         registry = BackendRegistry()
 
         @register_backend("test_custom_provider")
         class CustomProvider:
+            """Test suite or helper class for custom provider."""
             pass
 
         global_reg = get_backend_registry()
@@ -82,16 +106,19 @@ class TestLocalShellBackend:
     """Tests for LocalShellBackend AWS and DevOps environment handling."""
 
     def test_local_backend_registered(self) -> None:
+        """Verify local backend registered."""
         registry = get_backend_registry()
         assert "local" in registry.list_registered()
 
     def test_local_shell_backend_execute(self, tmp_path: Path) -> None:
+        """Verify local shell backend execute."""
         backend = LocalShellBackend(root_dir=tmp_path)
         res = backend.execute("echo 'hello talkops'")
         assert res.exit_code == 0
         assert "hello talkops" in res.output
 
     def test_aws_env_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify aws env preserved."""
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE123456789")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secretkey123456789")
         monkeypatch.setenv("AWS_SESSION_TOKEN", "sessiontoken123")
@@ -110,16 +137,19 @@ class TestLocalShellBackend:
         assert env["AWS_SDK_LOAD_CONFIG"] == "1"
 
     def test_aws_pager_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify aws pager disabled by default."""
         monkeypatch.delenv("AWS_PAGER", raising=False)
         env = _build_shell_env()
         assert env["AWS_PAGER"] == ""
 
     def test_aws_pager_preserved_if_explicit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify aws pager preserved if explicit."""
         monkeypatch.setenv("AWS_PAGER", "cat")
         env = _build_shell_env()
         assert env["AWS_PAGER"] == "cat"
 
     def test_iac_prefix_env_captured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify iac prefix env captured."""
         monkeypatch.setenv("TF_VAR_environment", "staging")
         monkeypatch.setenv("TF_IN_AUTOMATION", "1")
         monkeypatch.setenv("TERRAGRUNT_TFPATH", "tofu")
@@ -138,6 +168,7 @@ class TestLocalShellBackend:
         assert env["KUBECONFIG"] == "/custom/kube/config"
 
     def test_safe_keys_included(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify safe keys included."""
         monkeypatch.setenv("HOME", "/home/devops")
         monkeypatch.setenv("SHELL", "/bin/zsh")
         monkeypatch.setenv("USER", "devops")
@@ -148,12 +179,14 @@ class TestLocalShellBackend:
         assert env["USER"] == "devops"
 
     def test_path_prepend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify path prepend."""
         monkeypatch.setenv("PATH", "/usr/bin")
         env = _build_shell_env()
         assert "/usr/local/bin" in env["PATH"]
         assert "/opt/homebrew/bin" in env["PATH"]
 
     def test_sensitive_env_not_leaked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify sensitive env not leaked."""
         monkeypatch.setenv("SECRET_PASSWORD", "hunter2")
         monkeypatch.setenv("DATABASE_URL", "postgres://user:pwd@db/prod")
         monkeypatch.setenv("GITHUB_TOKEN", "ghp_123456789")
@@ -193,6 +226,7 @@ class TestTalkOpsCompositeBackend:
     """Tests for TalkOpsCompositeBackend routing, cleanup, and compatibility."""
 
     def test_composite_backend_virtual_routing(self, tmp_path: Path) -> None:
+        """Verify composite backend virtual routing."""
         local_backend = LocalShellBackend(root_dir=tmp_path)
         composite = TalkOpsCompositeBackend(default=local_backend)
 
@@ -215,6 +249,7 @@ class TestTalkOpsCompositeBackend:
         composite.cleanup()
 
     def test_composite_cleanup(self) -> None:
+        """Verify composite cleanup."""
         backend = TalkOpsCompositeBackend(default=MagicMock())
         temp_dir = backend._large_results_dir
         assert Path(temp_dir).exists()
@@ -222,12 +257,14 @@ class TestTalkOpsCompositeBackend:
         assert not Path(temp_dir).exists()
 
     def test_context_manager(self) -> None:
+        """Verify context manager."""
         with TalkOpsCompositeBackend(default=MagicMock()) as backend:
             temp_dir = backend._large_results_dir
             assert Path(temp_dir).exists()
         assert not Path(temp_dir).exists()
 
     def test_custom_routes_merged(self) -> None:
+        """Verify custom routes merged."""
         custom_backend = MagicMock()
         backend = TalkOpsCompositeBackend(
             default=MagicMock(),
@@ -239,6 +276,7 @@ class TestTalkOpsCompositeBackend:
         backend.cleanup()
 
     def test_aliases(self) -> None:
+        """Verify aliases."""
         assert CompositeBackend is TalkOpsCompositeBackend
 
 
@@ -246,6 +284,7 @@ class TestSandboxConfig:
     """Tests for SandboxConfig parsing and defaults."""
 
     def test_default_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify default config."""
         monkeypatch.delenv("TALKOPS_SANDBOX_PROVIDER", raising=False)
         monkeypatch.delenv("SANDBOX_PROVIDER", raising=False)
         monkeypatch.delenv("TALKOPS_SANDBOX_SNAPSHOT", raising=False)
@@ -256,6 +295,7 @@ class TestSandboxConfig:
         assert cfg.sync_workspace is True
 
     def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify env override."""
         monkeypatch.setenv("TALKOPS_SANDBOX_PROVIDER", "langsmith")
         monkeypatch.setenv("TALKOPS_SANDBOX_ID", "sb-12345")
         monkeypatch.setenv("TALKOPS_SANDBOX_IMAGE", "custom-aws-image:latest")
@@ -272,6 +312,7 @@ class TestSandboxConfig:
         assert cfg.sync_workspace is False
 
     def test_toml_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify toml config."""
         monkeypatch.delenv("TALKOPS_SANDBOX_PROVIDER", raising=False)
         monkeypatch.delenv("SANDBOX_PROVIDER", raising=False)
         monkeypatch.delenv("TALKOPS_SANDBOX_SYNC_WORKSPACE", raising=False)
@@ -301,6 +342,7 @@ class TestSandboxFactory:
     """Tests for sandbox factory, working dirs, and ignore lists."""
 
     def test_working_dirs(self) -> None:
+        """Verify working dirs."""
         assert get_sandbox_working_dir("langsmith") == "/root"
         assert get_sandbox_working_dir("modal") == "/workspace"
         assert get_sandbox_working_dir("daytona") == "/home/daytona"
@@ -309,12 +351,14 @@ class TestSandboxFactory:
         assert get_sandbox_working_dir("unknown") == "/workspace"
 
     def test_workspace_ignore_includes_iac(self) -> None:
+        """Verify workspace ignore includes iac."""
         assert ".terraform" in WORKSPACE_IGNORE_DIRS
         assert ".terragrunt-cache" in WORKSPACE_IGNORE_DIRS
         assert "cdk.out" in WORKSPACE_IGNORE_DIRS
         assert ".git" in WORKSPACE_IGNORE_DIRS
 
     def test_get_sandbox_backend_local(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Verify get sandbox backend local."""
         monkeypatch.setenv("TALKOPS_SANDBOX_PROVIDER", "local")
         monkeypatch.setattr("talkops.backend.sandbox_factory.get_project_root", lambda: tmp_path)
 

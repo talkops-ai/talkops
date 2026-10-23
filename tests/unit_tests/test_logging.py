@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TalkOps logging configuration and subsystems.
 
 Covers:
@@ -12,13 +26,18 @@ Covers:
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
-from pathlib import Path
 import tempfile
+from contextlib import contextmanager
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from textual.app import App, ComposeResult
+from textual.widgets._markdown import MarkdownFence
 
 from talkops.cli.main import build_parser, main
 from talkops.utils.logger import (
@@ -255,7 +274,6 @@ def test_doctor_command_reports_logging(capsys, monkeypatch):
 
 def test_rotating_file_handler_applied(tmp_path):
     """File handlers use RotatingFileHandler with size limit and backup count."""
-    from logging.handlers import RotatingFileHandler
     from talkops.utils.logger import _build_file_handler
 
     test_file = tmp_path / "rotating_test.log"
@@ -270,23 +288,25 @@ def test_rotating_file_handler_applied(tmp_path):
 async def test_headless_run_emits_lifecycle_logs(tmp_path, monkeypatch):
     """Headless run logs execution start, tool calls, subagents, and completion to log file."""
     from talkops.cli.non_interactive import _run_headless
-    from talkops.utils.logger import configure_logging, get_active_log_file
+    from talkops.utils.logger import configure_logging
 
     log_dir = tmp_path / "headless_logs"
     configure_logging(log_dir=log_dir, level="INFO", log_to_file=True, log_to_console=False)
 
     class MockRemoteAgent:
+        """Test suite or helper class for mock remote agent."""
         async def astream(self, *args, **kwargs):
+            """Provide astream test helper or fixture."""
             yield ("root", "messages", "Hello from agent")
             mock_tool = MagicMock()
             mock_tool.name = "aws:describe_instances"
             yield ("root", "updates", {"messages": [mock_tool]})
             yield ("root", "custom", {"type": "subagent", "phase": "complete", "subagent_type": "security-auditor", "duration_ms": 120})
 
-    from contextlib import contextmanager
 
     @contextmanager
     def mock_server_session(cfg):
+        """Provide mock server session test helper or fixture."""
         yield MockRemoteAgent()
 
     monkeypatch.setattr("talkops.cli.non_interactive.server_session", mock_server_session)
@@ -342,9 +362,6 @@ def test_configure_logging_clears_last_resort_when_sinks_disabled(tmp_path):
 @pytest.mark.asyncio
 async def test_markdown_fence_does_not_leak_pending_scrollbar_tasks():
     """MarkdownFence show/hide/teardown must not spawn or leak pending ScrollBar tasks."""
-    import gc
-    from textual.app import App, ComposeResult
-    from textual.widgets._markdown import MarkdownFence
     from talkops.ui.theme import get_css_variable_defaults
     from talkops.ui.widgets.messages import AssistantMessage, MessageList
 
@@ -352,6 +369,7 @@ async def test_markdown_fence_does_not_leak_pending_scrollbar_tasks():
 
     class _CaptureHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
+            """Provide emit test helper or fixture."""
             asyncio_records.append(record)
 
     asyncio_logger = logging.getLogger("asyncio")
@@ -360,9 +378,11 @@ async def test_markdown_fence_does_not_leak_pending_scrollbar_tasks():
 
     class _FenceTestApp(App[None]):
         def get_css_variables(self) -> dict[str, str]:
+            """Provide get css variables test helper or fixture."""
             return {**super().get_css_variables(), **get_css_variable_defaults()}
 
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield MessageList(id="ml")
 
     try:

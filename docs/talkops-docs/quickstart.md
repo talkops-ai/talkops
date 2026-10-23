@@ -1,198 +1,191 @@
 # Quickstart
 
-> Install OpsCloud, set up your model provider, and run your first task in under 2 minutes
-
-OpsCloud is a terminal-native AI agent for full-stack software development, DevOps, and Platform Engineering. This guide covers installation, running your first task, mastering interactive mode, headless automation, and tracing.
-
-## Install and run your first task
-
-### 1. Install
-
-**Option A: Install via Script (macOS & Linux)**
-```bash
-curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | bash
-
-# Or from local clone:
-./scripts/install.sh --local
-```
-
-**Option B: Install from PyPI**
-```bash
-pip install talkops-opscloud
-# or: uv tool install talkops-opscloud
-# or: pipx install talkops-opscloud
-```
+Get TalkOps installed, verified, and executing autonomous DevOps operations—locally in your terminal, headlessly in CI/CD, or centrally as a multi-client server listening on production webhooks—in under five minutes.
 
 > [!NOTE]
-> OpsCloud is built for macOS and Linux. Windows users should run OpsCloud inside **[WSL (Windows Subsystem for Linux)](https://learn.microsoft.com/en-us/windows/wsl/install)** for full terminal TUI and toolchain compatibility.
-
-### 2. Launch the TUI
-
-```bash
-opscloud
-```
-
-### 3. Configure credentials
-
-Inside the interactive TUI, type:
-
-```text
-/auth
-```
-
-Select your provider (Anthropic, OpenAI, Google, AWS Bedrock, TypeSafe Jev, etc.) and enter your API key. Keys are saved to `~/.opscloud/.env` with strict `0600` permissions. See [Credentials](./credentials.md) for alternative setup methods.
-
-> [!TIP]
-> For web search capabilities, OpsCloud uses [Tavily](https://tavily.com). Add your key via `/auth` or export `TAVILY_API_KEY="tvly-..."`.
-
-### 4. Give it a task
-
-Type a prompt directly into the TUI chat input:
-
-```text
-Create a Terraform module for an AWS S3 bucket with KMS customer-managed encryption, versioning, and lifecycle policies, plus a Python FastAPI endpoint that uploads files to it
-```
-
-OpsCloud routes the prompt using the **Jev Dynamic Router**, selects the appropriate subagent, and presents a syntax-highlighted diff for your approval before executing any file writes or commands.
-
-### 5. Enable tracing (optional)
-
-Run `/auth` and add your LangSmith API key. Tracing starts on the next launch.
+> 📸 **Image Placeholder — `docs/assets/quickstart-first-run.png`**
+> **What to capture:** Screenshot of a terminal running `talkops doctor` (showing green checkmarks for LLM keys, TypeSafe AI Jev, AWS/K8s CLIs, and SQLite/Postgres) followed by launching `talkops --smart`.
 
 ---
 
-## Interactive mode
+## 1. Install TalkOps
 
-Type naturally in the chat window. OpsCloud uses its built-in tools, domain subagents, and memory to complete complex workflows.
-
-### Slash commands
-
-| Command | Aliases | What it does |
-|---|---|---|
-| `/auth` | `/login` | Manage LLM provider credentials and base URLs |
-| `/model` | — | Switch models or open the interactive model picker |
-| `/pool` | — | Switch between Jev Dynamic Router tiers (`fast`, `standard`, `powerful`) |
-| `/effort` | — | Adjust reasoning effort level (`off`, `low`, `medium`, `high`) |
-| `/fast` | — | Quick switch to the fast routing tier |
-| `/agents` | — | Switch between active domain subagents |
-| `/skills` | — | Browse and inspect loaded skills |
-| `/memory` | — | View, save, or delete persistent memory entries (`AGENTS.md`) |
-| `/mcp` | — | Open the interactive MCP Server and Tool viewer |
-| `/plugins` | — | Manage installed plugins and marketplace sources |
-| `/config` | — | View or modify runtime configuration settings |
-| `/permissions` | `/perms` | Inspect and toggle tool and shell permissions |
-| `/cost` | — | View session token consumption and total USD cost |
-| `/context` | — | View context window token utilization gauge |
-| `/compact` | — | Trigger immediate conversation context compaction |
-| `/goal` | — | Set a high-level goal with tracking acceptance criteria |
-| `/rubric` | — | Attach or inspect evaluation rubric criteria |
-| `/tasks` | — | Open the agent's internal task tracking board |
-| `/review` | — | Request self-review of recent workspace modifications |
-| `/loop` | — | Enter an autonomous execution loop |
-| `/copy` | — | Copy the last assistant response to clipboard |
-| `/clear` | — | Clear visual conversation history |
-| `/resume` | — | Browse and resume previous threads |
-| `/trace` | — | View or toggle LangSmith tracing status |
-| `/doctor` | — | Run system health diagnostics (auth, tools, dependencies) |
-| `/bug` | — | Open GitHub bug report template |
-| `/btw` | — | Send an out-of-band note without triggering a new agent turn |
-| `/help` | `/h` | List all available slash commands |
-| `/exit` | `/quit` | Exit OpsCloud |
-| `/version` | — | Show version and environment metadata |
-
-### Keyboard shortcuts
-
-| Shortcut | What it does |
-|---|---|
-| `Shift+Tab` | Cycle approval mode: **Manual** → **Auto** → **Smart** |
-| `Escape` | Cancel current response stream |
-| `Ctrl+C` | Interrupt a running tool or exit the application |
-
-### Resume a conversation
-
-OpsCloud automatically saves sessions as SQLite thread checkpoints. Pick up where you left off:
+Run the standalone installer script on macOS or Linux:
 
 ```bash
-opscloud -r              # Resume the most recent thread
-opscloud -r <thread-id>  # Resume a specific thread ID
+curl -LsSf https://talkops.sh/install.sh | sh
 ```
 
-Or run `/resume` inside a session to browse past threads visually.
-
-### Switch subagents
-
-Start a session with a specific subagent:
+<details>
+<summary>Alternative installation methods (<code>uv</code>, <code>pipx</code>, <code>pip</code>)</summary>
 
 ```bash
-opscloud -a eks-cluster-operator
+# Using uv (recommended for Python 3.12+ environments)
+uv tool install talkops-ai
+
+# Using pipx
+pipx install talkops-ai
+
+# Using pip
+pip install talkops-ai
 ```
 
-Or switch dynamically inside the TUI with `/agents`. See [Subagents](./subagents.md).
+</details>
+
+Verify the binary (and its `ops` shorthand alias) is on your `PATH`:
+
+```bash
+talkops --version
+ops --version
+```
 
 ---
 
-## Non-interactive / headless mode
+## 2. Configure credentials
 
-Run single tasks headlessly from terminal scripts or CI/CD pipelines using `-p` (or `-n`):
-
-```bash
-opscloud -p "Audit and validate all Terraform modules in this repository"
-```
-
-### Pipe input
-
-Pipe logs, error traces, or manifests directly into OpsCloud:
+TalkOps requires at least one LLM provider key (such as Anthropic, OpenAI, Google Gemini, or AWS Bedrock) and optionally a **TypeSafe AI Jev** key (`TYPESAFE_API_KEY`) to enable `<70ms` Smart Mode model routing and `<100ms` tool safety classification.
 
 ```bash
-cat pod-spec.yaml | opscloud -p "Review this pod spec for Pod Security Standard violations"
-git diff | opscloud -p "Generate conventional commit message and release notes"
+# Store keys encrypted in ~/.talkops/.state/config.db
+talkops auth set anthropic sk-ant-...
+talkops auth set typesafe ts-...
+
+# Optional: Bind your default AWS profile and region
+talkops auth aws --profile default --region us-east-1
 ```
 
-### Output control flags
-
-| Flag | Description |
-|---|---|
-| `-q`, `--quiet` | Clean stdout output suitable for UNIX pipelines (suppresses banners and spinners) |
-| `--no-stream` | Buffer the full response before outputting |
-| `--max-turns N` | Limit the maximum number of agentic execution turns |
-| `--timeout SECONDS` | Enforce a hard wall-clock execution timeout |
-
-### Self-evaluation with rubrics
-
-Pair the working agent with an autonomous grader model in CI/CD:
+<details>
+<summary>Or configure via environment variables</summary>
 
 ```bash
-opscloud -n "Generate production Kubernetes deployment manifests for the auth service" \
-  --rubric "1. Non-root securityContext is enforced.
-2. Resource requests and limits are defined.
-3. Liveness and readiness probes have initialDelaySeconds configured." \
-  --rubric-model "openai:gpt-4o" \
-  --rubric-max-iterations 3 \
-  -y
+export ANTHROPIC_API_KEY="sk-ant-..."
+export TYPESAFE_API_KEY="ts-..."
+export AWS_PROFILE="default"
+export AWS_REGION="us-east-1"
 ```
 
-See [Goals and Rubrics](./goal-and-rubrics.md) for full CI/CD specifications.
+</details>
 
 ---
 
-## Trace with LangSmith
+## 3. Verify your environment with `talkops doctor`
 
-OpsCloud integrates natively with [LangSmith](https://smith.langchain.com) for tracing agent turn execution, subagent delegation, and tool invocations.
+Run the built-in 9-point diagnostic check to confirm your LLM credentials, Jev connectivity, cloud CLIs (`aws`, `az`, `gcloud`, `kubectl`, `terraform`, `helm`), and state database are ready:
 
-1. Configure your key via `/auth` or set `export LANGSMITH_API_KEY="ls-..."`.
-2. Optionally specify a project name:
+```bash
+talkops doctor
+```
+
+---
+
+## 4. Choose your operational workflow
+
+### Workflow A: Interactive TUI in Smart Mode
+
+Launch TalkOps inside any project or infrastructure repository with **Smart Mode** enabled:
+
+```bash
+talkops --smart
+```
+
+Try these prompts inside the TUI:
+- **Quick status lookup** *(routes to Tier 0 `fast` with `effort="off"` in `<70ms`—zero thinking latency and 80–90% lower token cost)*:
+  ```text
+  List all non-running pods across namespaces in the current Kubernetes context
+  ```
+- **Multi-agent incident & cost investigation** *(automatically escalates to Tier 2 `powerful` with `effort="max"`)*:
+  ```text
+  Correlate why checkout-service pods are restarting in prod-eks, check recent Helm revisions, and audit our top 3 AWS EC2 cost drivers this week
+  ```
+
+Useful slash commands while in the TUI:
+- **`/smart`**, **`/manual`**, **`/auto`** (or `Shift+Tab`) — Switch approval and routing modes
+- **`/pool`** — Inspect the 3-tier (`fast`, `standard`, `powerful`) model pool and cost savings
+- **`/cloud`** — Switch active AWS profile, Azure subscription, GCP project, or Kubernetes context
+- **`/review`** — Run a security and IaC/code quality review on your uncommitted `git diff`
+- **`/fork`** — Branch the current investigation thread to test an alternative hypothesis
+
+---
+
+### Workflow B: Central Server + Multiple Connected Clients
+
+Platform teams can launch `talkops serve` centrally so multiple engineers and CI runners can connect to a shared runtime backed by PostgreSQL:
+
+1. **Start the Central Server**:
+
    ```bash
-   export LANGSMITH_PROJECT="opscloud-production"
-   opscloud
+   talkops serve \
+     --host 0.0.0.0 \
+     --port 2024 \
+     --postgres-uri "postgresql://ops:secret@db:5432/talkops" \
+     --auth-mode token \
+     --approval-mode smart
    ```
-3. Tracing activates automatically upon detection.
+
+2. **Authenticate and connect from any operator machine**:
+
+   ```bash
+   # Exchange your long-lived API key once for a cached, auto-refreshing JWT
+   talkops auth login --server-url http://talkops.internal:2024 --api-key oc_live_... --user-id alice
+
+   # Launch the local TUI attached to the central server
+   talkops --server-url http://talkops.internal:2024
+
+   # List shared or personal remote threads
+   talkops threads list --server-url http://talkops.internal:2024
+   ```
 
 ---
 
-## What's next
+### Workflow C: Event-Driven Webhook Incident Triage
 
-- **[CLI Reference](./cli-reference.md)** — Complete options, flags, and subcommand reference.
-- **[Configuration](./Configuration.md)** — `config.toml`, environment variables, and directory layout.
-- **[Approval Modes](./approval-mode.md)** — Manual, Auto, and Smart modes with safety scanners.
-- **[Subagents](./subagents.md)** — Multi-agent delegation and context compaction.
-- **[MCP Tools](./mcp-tools.md)** — Connecting external tools via Model Context Protocol.
+While `talkops serve` is running, send a test alert to `/webhooks/{provider}` (supports `pagerduty`, `alertmanager`, `datadog`, `sns`, `cloudevents`, `servicenow`, `jenkins`, `github`, `azure-monitor`, and `generic`):
+
+```bash
+curl -X POST http://localhost:2024/webhooks/alertmanager \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "firing",
+    "groupKey": "prod-eks:checkout-5xx",
+    "alerts": [{
+      "status": "firing",
+      "labels": {
+        "alertname": "HighCheckout5xxRate",
+        "severity": "critical",
+        "namespace": "production",
+        "service": "checkout-api"
+      },
+      "annotations": {
+        "summary": "5xx error rate exceeded 12% for 5 minutes on checkout-api"
+      }
+    }]
+  }'
+```
+
+TalkOps immediately returns `202 Accepted` with a `thread_id`, executes the Root Cause Analysis in the background, posts the RCA to your configured Slack/PagerDuty/ServiceNow/GitHub sink, and lets you attach to the live thread from your terminal:
+
+```bash
+talkops --server-url http://localhost:2024 -r <thread_id>
+```
+
+---
+
+### Workflow D: Headless CI/CD Execution (`-p`)
+
+Run non-interactive checks inside GitHub Actions, GitLab CI, or Jenkins with structured acceptance criteria:
+
+```bash
+talkops -p "Validate all Terraform modules in ./infra and verify no security group opens port 22 to 0.0.0.0/0" \
+  --smart \
+  --max-turns 10 \
+  --criteria "All modules validated and security group compliance table printed"
+```
+
+---
+
+## Next steps
+
+- **[CLI & Slash Command Reference](cli-reference.md)** — Browse individual mini-sections for every CLI subcommand and `/slash` command
+- **[Approval Modes & Jev Smart Mode](approval-mode.md)** — Understand how `<70ms` dynamic model routing and `<100ms` tool safety classification work
+- **[Central Server & Multi-Client Architecture](central-server.md)** — Configure PostgreSQL persistence, JWT auth, and multi-user isolation
+- **[Webhooks & Event-Driven Automation](webhooks.md)** — Connect PagerDuty, Alertmanager, Datadog, AWS SNS, ServiceNow, and GitHub webhooks

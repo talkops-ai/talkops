@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for goal_state_notice — notice building, classification, and summarization cutoff."""
 
 from typing import Any
@@ -34,7 +48,9 @@ from talkops.state.goal_state_limits import GOAL_APPLICATION_CHAR_LIMIT
 
 
 class TestMessageClassification:
+    """Test suite or helper class for test message classification."""
     def test_is_human_message(self):
+        """Verify is human message."""
         assert is_human_message(HumanMessage(content="hi")) is True
         assert is_human_message(AIMessage(content="hi")) is False
         assert is_human_message({"role": "user", "content": "hi"}) is True
@@ -42,12 +58,14 @@ class TestMessageClassification:
         assert is_human_message({"role": "assistant", "content": "hi"}) is False
 
     def test_message_text(self):
+        """Verify message text."""
         assert message_text(HumanMessage(content="hello")) == "hello"
         assert message_text({"content": "from dict"}) == "from dict"
         assert message_text({"content": [{"type": "text", "text": "block"}]}) == "block"
         assert message_text({}) == ""
 
     def test_message_source(self):
+        """Verify message source."""
         msg = HumanMessage(
             content="test",
             additional_kwargs={"lc_source": GOAL_STATE_MESSAGE_SOURCE},
@@ -59,6 +77,7 @@ class TestMessageClassification:
         assert is_internal_message(msg) is True
 
     def test_superseded_source_classification(self):
+        """Verify superseded source classification."""
         placeholder = superseded_goal_state_placeholder(HumanMessage(content="old", id="msg-1"))
         assert placeholder.id == "msg-1"
         assert placeholder.additional_kwargs.get("lc_source") == SUPERSEDED_GOAL_STATE_SOURCE
@@ -67,17 +86,21 @@ class TestMessageClassification:
 
 
 class TestSummarizationCutoff:
+    """Test suite or helper class for test summarization cutoff."""
     def test_valid_cutoff(self):
+        """Verify valid cutoff."""
         event = {"cutoff_index": 5}
         assert validated_summarization_cutoff(event, message_count=10) == 5
         assert summarization_cutoff(event, message_count=10) == 5
 
     def test_cutoff_past_message_count_rejected(self):
+        """Verify cutoff past message count rejected."""
         event = {"cutoff_index": 12}
         assert validated_summarization_cutoff(event, message_count=10) is None
         assert summarization_cutoff(event, message_count=10) == 0
 
     def test_malformed_event(self):
+        """Verify malformed event."""
         assert validated_summarization_cutoff("not a dict") is None
         assert validated_summarization_cutoff({"cutoff_index": -1}) is None
         assert validated_summarization_cutoff({"cutoff_index": True}) is None
@@ -85,12 +108,15 @@ class TestSummarizationCutoff:
 
     def test_log_malformed_summarization_event(self):
         # Should not raise
+        """Verify log malformed summarization event."""
         log_malformed_summarization_event({"cutoff_index": "invalid"}, message_count=5)
         log_malformed_summarization_event("unexpected string", message_count=5)
 
 
 class TestBuildGoalStateNotice:
+    """Test suite or helper class for test build goal state notice."""
     def test_embedded_objective_and_criteria(self):
+        """Verify embedded objective and criteria."""
         state = {
             "_goal_objective": "Deploy ECS service to production",
             "_goal_rubric": "- Tasks are healthy\n- ALB target group 200 OK",
@@ -106,6 +132,7 @@ class TestBuildGoalStateNotice:
         assert "- Rubric active: yes" in notice.content
 
     def test_oversized_state_graceful_degradation(self):
+        """Verify oversized state graceful degradation."""
         oversized_text = "x" * (GOAL_APPLICATION_CHAR_LIMIT + 100)
         state = {
             "_goal_objective": oversized_text,
@@ -122,6 +149,7 @@ class TestBuildGoalStateNotice:
         assert "Saved goal/rubric state is too large to include safely" in notice.content
 
     def test_latest_goal_state_notice_and_index(self):
+        """Verify latest goal state notice and index."""
         state = {
             "_goal_objective": "Test objective",
             "_goal_status": "active",
@@ -142,12 +170,15 @@ class TestBuildGoalStateNotice:
 
 
 class TestGoalContinuation:
+    """Test suite or helper class for test goal continuation."""
     def test_created_persisted(self):
+        """Verify created persisted."""
         msg = build_goal_continuation("created")
         assert "The accepted goal state is saved." in msg.content
         assert "goal/rubric state notice" in msg.content
 
     def test_created_unsaved_fallback(self):
+        """Verify created unsaved fallback."""
         msg = build_goal_continuation(
             "created",
             unsaved_objective="Fix VPC routing",
@@ -159,7 +190,9 @@ class TestGoalContinuation:
 
 
 class TestGoalPlanNoticeAndTodoSeeding:
+    """Test suite or helper class for test goal plan notice and todo seeding."""
     def test_notice_embeds_implementation_plan_when_active(self):
+        """Verify notice embeds implementation plan when active."""
         state = {
             "_goal_objective": "Upgrade EKS cluster to 1.31",
             "_goal_plan": "## Summary\nUpgrade control plane then managed node groups.",
@@ -170,6 +203,7 @@ class TestGoalPlanNoticeAndTodoSeeding:
         assert "<implementation_plan>## Summary\nUpgrade control plane then managed node groups.</implementation_plan>" in notice.content
 
     def test_goal_tools_middleware_auto_seeds_todos_once(self):
+        """Verify goal tools middleware auto seeds todos once."""
         from talkops.middleware.goal_tools import GoalToolsMiddleware
 
         state: Any = {

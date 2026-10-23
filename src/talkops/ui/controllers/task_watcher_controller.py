@@ -1,7 +1,20 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Background task watcher and reactive agent wakeup controller for `TalkOpsApp`.
 
-Modeled after Antigravity CLI's ``startMessageWatcherLocked`` (`runner.go`) and
-``backgroundTaskLoop`` (`manager.go`):
+Coordinates background process monitoring and agent wakeup:
 - Subscribes to background task lifecycle events (both in-process via
   `BackgroundTaskManager` and over SSE `/api/v1/threads/{thread_id}/tasks/stream`
   when connected to the LangGraph server).
@@ -17,6 +30,8 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from talkops.tasks.manager import get_background_task_manager
 from talkops.utils.logger import get_logger
 
@@ -30,6 +45,7 @@ class TaskWatcherController:
     """Watches background shell tasks for the active thread and wakes the idle agent."""
 
     def __init__(self, app: TalkOpsApp) -> None:
+        """Initialize TaskWatcherController."""
         self._app = app
         self._watch_task: asyncio.Task[None] | None = None
         self._watched_thread_id: str | None = None
@@ -111,8 +127,6 @@ class TaskWatcherController:
 
     async def _watch_remote_sse(self, thread_id: str) -> None:
         """Connect to `/api/v1/threads/{thread_id}/tasks/stream` when using a remote server."""
-        import httpx
-
         backoff = 1.5
         while not getattr(self._app, "_exit", False):
             server_url, headers = self._resolve_remote_endpoint()

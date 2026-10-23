@@ -1,6 +1,21 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for goal state size limits and validators."""
 
 import pytest
+
 from talkops.state.goal_state_limits import (
     GOAL_APPLICATION_CHAR_LIMIT,
     GOAL_NOTICE_TEXT_CHAR_LIMIT,
@@ -17,6 +32,7 @@ from talkops.state.goal_state_limits import (
 
 def test_validate_goal_objective():
     # Valid
+    """Verify validate goal objective."""
     validate_goal_objective("Deploy VPC with 3 public and 3 private subnets")
 
     # Empty / whitespace
@@ -33,6 +49,7 @@ def test_validate_goal_objective():
 
 def test_validate_rubric():
     # Valid
+    """Verify validate rubric."""
     validate_rubric("- Terraform plan has 0 errors\n- S3 bucket versioning is enabled")
 
     # Empty / whitespace
@@ -49,6 +66,7 @@ def test_validate_rubric():
 
 def test_validate_goal_status_note():
     # Valid
+    """Verify validate goal status note."""
     validate_goal_status_note("All unit tests pass and terraform validate succeeded.")
 
     # Empty / whitespace
@@ -63,6 +81,7 @@ def test_validate_goal_status_note():
 
 
 def test_validate_goal_application():
+    """Verify validate goal application."""
     obj = "Set up EKS cluster with managed node groups"
     crit = "- Cluster status is ACTIVE\n- Node groups have 2 ready nodes"
     validate_goal_application(obj, crit)

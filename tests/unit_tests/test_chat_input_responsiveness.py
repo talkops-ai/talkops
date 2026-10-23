@@ -1,6 +1,21 @@
-"""Unit tests for ChatInput responsiveness, mode prefixes, and autocomplete."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for ChatInput responsiveness, mode prefixes, and autocomplete."""
+import asyncio
 from unittest.mock import MagicMock
+
 import pytest
 from textual.events import Click, Key
 
@@ -10,11 +25,17 @@ from talkops.ui.widgets.autocomplete import (
     MultiCompletionManager,
     SlashCommandController,
 )
-from talkops.ui.widgets.chat_input import ChatInput, CompletionPopup, _CompletionViewAdapter
+from talkops.ui.widgets.chat_input import (
+    ChatInput,
+    CompletionPopup,
+    _CompletionViewAdapter,
+)
 
 
 class DummyApp:
+    """Test suite or helper class for dummy app."""
     def __init__(self):
+        """Initialize DummyApp."""
         self._pending_approval_widget = None
         self._pending_ask_user_widget = None
         self._pending_goal_review_widget = None
@@ -22,6 +43,7 @@ class DummyApp:
 
 @pytest.fixture
 def chat_input():
+    """Provide chat input test helper or fixture."""
     widget = ChatInput()
     widget._app = DummyApp()
     widget._completion_view = _CompletionViewAdapter(widget)
@@ -55,7 +77,6 @@ def test_backspace_exits_command_mode(chat_input):
 
     event = Key(key="backspace", character=None)
     # Simulate _handle_key_event
-    import asyncio
     handled = asyncio.run(chat_input._handle_key_event(event))
     assert handled is True
     assert chat_input.mode == "normal"
@@ -80,7 +101,6 @@ def test_space_completes_with_trailing_space_and_argument_hint(chat_input):
 
     # Press space on the completion
     space_event = Key(key="space", character=" ")
-    import asyncio
     handled = asyncio.run(chat_input._handle_key_event(space_event))
     assert handled is True
 
@@ -134,6 +154,7 @@ def test_click_on_chat_input_focuses_text_area(chat_input):
     focused = False
 
     def mock_focus(*args, **kwargs):
+        """Provide mock focus test helper or fixture."""
         nonlocal focused
         focused = True
 

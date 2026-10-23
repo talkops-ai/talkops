@@ -1,6 +1,21 @@
-"""Unit tests for ResumeStateMiddleware context token persistence."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for ResumeStateMiddleware context token persistence."""
+from typing import Any
 from unittest.mock import MagicMock
+
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -11,6 +26,7 @@ from talkops.middleware.resume_state import (
 
 
 def test_extract_context_tokens():
+    """Verify extract context tokens."""
     msg = AIMessage(
         content="Testing",
         usage_metadata={"input_tokens": 120, "output_tokens": 30, "total_tokens": 150},
@@ -28,8 +44,7 @@ def test_extract_context_tokens():
 
 
 def test_resume_state_middleware_after_model():
-    from typing import Any
-
+    """Verify resume state middleware after model."""
     mw = ResumeStateMiddleware()
     runtime = MagicMock()
 
@@ -46,8 +61,7 @@ def test_resume_state_middleware_after_model():
 
 
 def test_resume_state_middleware_empty_messages():
-    from typing import Any
-
+    """Verify resume state middleware empty messages."""
     mw = ResumeStateMiddleware()
     runtime = MagicMock()
 
@@ -59,8 +73,7 @@ def test_resume_state_middleware_empty_messages():
 
 @pytest.mark.asyncio
 async def test_resume_state_middleware_aafter_model():
-    from typing import Any
-
+    """Verify resume state middleware aafter model."""
     mw = ResumeStateMiddleware()
     runtime = MagicMock()
 

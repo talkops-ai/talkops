@@ -1,18 +1,32 @@
 #!/usr/bin/env bash
-# Install OpsCloud — AI DevOps & Cloud Operations Agent.
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Install TalkOps — AI DevOps & Cloud Operations Agent.
 #
 # Usage:
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | bash
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | bash -s -- [options]
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | bash -s -- VERSION
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- [options]
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- VERSION
 #
 # Install an exact version:
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | OPSCLOUD_VERSION="0.1.0" bash
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | bash -s -- 0.1.0
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | TALKOPS_VERSION="0.1.0" bash
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- 0.1.0
 #
 # Install directly from the GitHub repository:
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | OPSCLOUD_SOURCE="git" bash
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | bash -s -- --git
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | TALKOPS_SOURCE="git" bash
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- --git
 #
 # Install in editable mode from a local checkout:
 #   ./scripts/install.sh --local
@@ -20,8 +34,8 @@
 # Uninstall:
 #   ./scripts/install.sh --uninstall
 #   # Or manually:
-#   uv tool uninstall opscloud
-#   rm -rf ~/.opscloud
+#   uv tool uninstall talkops-ai
+#   rm -rf ~/.talkops
 #
 # Options:
 #   --help, -h          Show this help message and exit
@@ -33,32 +47,33 @@
 #   --local, --editable Force editable installation from local repository
 #   --python <version>  Python version to provision via uv (default: 3.12)
 #   --extras <extras>   Comma-separated pip extras (e.g. "dev", "sandboxes")
-#   --uninstall         Uninstall opscloud and clean up binaries
+#   --uninstall         Uninstall talkops and clean up binaries
 #
 # Environment variables:
-#   OPSCLOUD_PACKAGE_NAME     — Package name on PyPI (default: "talkops-opscloud")
-#   OPSCLOUD_REPO_URL         — GitHub repo URL (default: "https://github.com/talkops-ai/opscloud")
-#   OPSCLOUD_SOURCE           — "pypi", "git", or "local" (default: auto-detected)
-#   OPSCLOUD_VERSION          — Exact version to install (e.g. "0.1.0")
-#   OPSCLOUD_EXTRAS           — Comma-separated pip extras (e.g. "dev", "sandboxes")
-#   OPSCLOUD_PRERELEASE       — uv pre-release strategy: allow, disallow, if-necessary (default: allow)
-#   OPSCLOUD_PYTHON           — Python version to use (default: 3.12)
-#   OPSCLOUD_YES              — Set to 1 to accept prompts without asking (assume "yes")
-#   OPSCLOUD_RIPGREP_INSTALLER— How to provision ripgrep: "managed" (default), "system", or "skip"
-#   OPSCLOUD_OFFLINE          — Set to 1 to skip external downloads
-#   OPSCLOUD_SKIP_XCODE_CHECK — Set to 1 to bypass macOS Xcode Command Line Tools check
-#   OPSCLOUD_SKIP_DEVOPS_CHECK— Set to 1 to skip checking external DevOps tools (aws, kubectl, etc.)
-#   OPSCLOUD_NO_MODIFY_PATH   — Set to 1 to skip modifying shell profile PATH
-#   OPSCLOUD_VERBOSE          — Set to 1 to enable verbose output
+#   TALKOPS_PACKAGE_NAME     — Package name on PyPI (default: "talkops-ai")
+#   TALKOPS_REPO_URL         — GitHub repo URL (default: "https://github.com/talkops-ai/talkops")
+#   TALKOPS_SOURCE           — "pypi", "git", or "local" (default: auto-detected)
+#   TALKOPS_VERSION          — Exact version to install (e.g. "0.1.0")
+#   TALKOPS_EXTRAS           — Comma-separated pip extras (e.g. "dev", "sandboxes")
+#   TALKOPS_PRERELEASE       — uv pre-release strategy: allow, disallow, if-necessary (default: allow)
+#   TALKOPS_PYTHON           — Python version to use (default: 3.12)
+#   TALKOPS_YES              — Set to 1 to accept prompts without asking (assume "yes")
+#   TALKOPS_RIPGREP_INSTALLER— How to provision ripgrep: "managed" (default), "system", or "skip"
+#   TALKOPS_OFFLINE          — Set to 1 to skip external downloads
+#   TALKOPS_SKIP_XCODE_CHECK — Set to 1 to bypass macOS Xcode Command Line Tools check
+#   TALKOPS_SKIP_DEVOPS_CHECK— Set to 1 to skip checking external DevOps tools (aws, kubectl, etc.)
+#   TALKOPS_NO_MODIFY_PATH   — Set to 1 to skip modifying shell profile PATH
+#   TALKOPS_VERBOSE          — Set to 1 to enable verbose output
 #   UV_BIN                    — Path to uv binary (auto-detected if unset)
 
 set -euo pipefail
 
 # ── Package & Repository Constants ───────────────────────────
 
-PACKAGE_NAME="${OPSCLOUD_PACKAGE_NAME:-talkops-opscloud}"
-PRIMARY_BIN="opscloud"
-REPO_URL="${OPSCLOUD_REPO_URL:-https://github.com/talkops-ai/opscloud}"
+PACKAGE_NAME="${TALKOPS_PACKAGE_NAME:-talkops-ai}"
+PRIMARY_BIN="talkops"
+ALIAS_BIN="ops"
+REPO_URL="${TALKOPS_REPO_URL:-https://github.com/talkops-ai/talkops}"
 DEFAULT_PYTHON="3.12"
 RIPGREP_VERSION="14.1.1"
 
@@ -119,12 +134,12 @@ resolve_latest_pypi_version() {
 
 print_help() {
   cat <<EOF
-${BOLD}OpsCloud Installer${NC} — AI DevOps & Cloud Operations Agent
+${BOLD}TalkOps Installer${NC} — AI DevOps & Cloud Operations Agent
 
 ${BOLD}Usage:${NC}
-  curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | bash
-  curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | bash -s -- [options]
-  curl -LsSf https://raw.githubusercontent.com/talkops-ai/opscloud/main/scripts/install.sh | bash -s -- VERSION
+  curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
+  curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- [options]
+  curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- VERSION
 
 ${BOLD}Options:${NC}
   --help, -h          Show this help message and exit
@@ -136,21 +151,21 @@ ${BOLD}Options:${NC}
   --local, --editable Force editable installation from local directory
   --python <ver>      Python version to provision via uv (default: ${DEFAULT_PYTHON})
   --extras <extras>   Comma-separated pip extras (e.g. "dev", "sandboxes")
-  --uninstall         Uninstall opscloud and remove binaries
+  --uninstall         Uninstall talkops and remove binaries
 
 ${BOLD}Environment Variables:${NC}
-  OPSCLOUD_VERSION          Exact version to install (e.g. "0.1.0")
-  OPSCLOUD_SOURCE           "pypi", "git", or "local" (default: auto)
-  OPSCLOUD_EXTRAS           Comma-separated pip extras
-  OPSCLOUD_PRERELEASE       uv pre-release strategy (default: allow)
-  OPSCLOUD_PYTHON           Python version to use (default: ${DEFAULT_PYTHON})
-  OPSCLOUD_YES              Set to 1 to accept prompts without asking
-  OPSCLOUD_RIPGREP_INSTALLER "managed" (default), "system", or "skip"
-  OPSCLOUD_OFFLINE          Set to 1 to skip external downloads
-  OPSCLOUD_SKIP_XCODE_CHECK Set to 1 to bypass macOS Xcode check
-  OPSCLOUD_SKIP_DEVOPS_CHECK Set to 1 to bypass external DevOps tool checks
-  OPSCLOUD_NO_MODIFY_PATH   Set to 1 to skip shell PATH modifications
-  OPSCLOUD_VERBOSE          Set to 1 for verbose debug logs
+  TALKOPS_VERSION          Exact version to install (e.g. "0.1.0")
+  TALKOPS_SOURCE           "pypi", "git", or "local" (default: auto)
+  TALKOPS_EXTRAS           Comma-separated pip extras
+  TALKOPS_PRERELEASE       uv pre-release strategy (default: allow)
+  TALKOPS_PYTHON           Python version to use (default: ${DEFAULT_PYTHON})
+  TALKOPS_YES              Set to 1 to accept prompts without asking
+  TALKOPS_RIPGREP_INSTALLER "managed" (default), "system", or "skip"
+  TALKOPS_OFFLINE          Set to 1 to skip external downloads
+  TALKOPS_SKIP_XCODE_CHECK Set to 1 to bypass macOS Xcode check
+  TALKOPS_SKIP_DEVOPS_CHECK Set to 1 to bypass external DevOps tool checks
+  TALKOPS_NO_MODIFY_PATH   Set to 1 to skip shell PATH modifications
+  TALKOPS_VERBOSE          Set to 1 for verbose debug logs
   UV_BIN                    Path to custom uv binary
 
 ${BOLD}Repository & Docs:${NC}
@@ -161,13 +176,13 @@ EOF
 # ── Argument Parsing ─────────────────────────────────────────
 
 POSITIONAL_VERSION=""
-REQUESTED_SOURCE="${OPSCLOUD_SOURCE:-}"
-REQUESTED_EXTRAS="${OPSCLOUD_EXTRAS:-}"
-REQUESTED_PYTHON="${OPSCLOUD_PYTHON:-$DEFAULT_PYTHON}"
-REQUESTED_PRERELEASE="${OPSCLOUD_PRERELEASE:-allow}"
+REQUESTED_SOURCE="${TALKOPS_SOURCE:-}"
+REQUESTED_EXTRAS="${TALKOPS_EXTRAS:-}"
+REQUESTED_PYTHON="${TALKOPS_PYTHON:-$DEFAULT_PYTHON}"
+REQUESTED_PRERELEASE="${TALKOPS_PRERELEASE:-allow}"
 ACTION="install"
-ASSUME_YES="${OPSCLOUD_YES:-0}"
-VERBOSE="${OPSCLOUD_VERBOSE:-0}"
+ASSUME_YES="${TALKOPS_YES:-0}"
+VERBOSE="${TALKOPS_VERBOSE:-0}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -176,7 +191,7 @@ while [ $# -gt 0 ]; do
       exit 0
       ;;
     --version|-v)
-      printf "opscloud-installer %s\n" "$(resolve_latest_pypi_version)"
+      printf "talkops-installer %s\n" "$(resolve_latest_pypi_version)"
       exit 0
       ;;
     --yes|-y)
@@ -227,7 +242,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-VERSION="${OPSCLOUD_VERSION:-$POSITIONAL_VERSION}"
+VERSION="${TALKOPS_VERSION:-$POSITIONAL_VERSION}"
 
 # ── Temp File & Directory Tracking ───────────────────────────
 
@@ -321,7 +336,7 @@ detect_platform
 # Determine safe lock directory across platforms
 TMP_ROOT="${TMPDIR:-${TMP:-${TEMP:-/tmp}}}"
 USER_ID="$(id -u 2>/dev/null || echo 0)"
-LOCK_DIR="${TMP_ROOT}/opscloud-install-${USER_ID}.lock"
+LOCK_DIR="${TMP_ROOT}/talkops-install-${USER_ID}.lock"
 
 acquire_install_lock() {
   local attempts=0
@@ -344,17 +359,17 @@ acquire_install_lock
 if [ "$OS" = "windows" ]; then
   log_warn "Detected Windows environment (${raw_os:-bash})."
   log_info "For the best experience with Docker, Terraform, and Kubernetes CLIs,"
-  log_info "running OpsCloud inside WSL (Windows Subsystem for Linux) is recommended."
+  log_info "running TalkOps inside WSL (Windows Subsystem for Linux) is recommended."
   log_info "Proceeding with Git Bash / MSYS compatible installation..."
 elif [ "$IS_WSL" = "1" ]; then
   log_debug "Running inside Windows Subsystem for Linux (WSL)."
 fi
 
-if [ "$OS" = "macos" ] && [ "${OPSCLOUD_SKIP_XCODE_CHECK:-0}" != "1" ]; then
+if [ "$OS" = "macos" ] && [ "${TALKOPS_SKIP_XCODE_CHECK:-0}" != "1" ]; then
   if ! xcode-select -p >/dev/null 2>&1; then
     log_warn "macOS Command Line Tools not found."
     log_info "If compilation is required, run: xcode-select --install"
-    log_info "To skip this check in the future, set: OPSCLOUD_SKIP_XCODE_CHECK=1"
+    log_info "To skip this check in the future, set: TALKOPS_SKIP_XCODE_CHECK=1"
   fi
 fi
 
@@ -522,7 +537,7 @@ resolve_tool_bin_dir
 # ── Lifecycle: Uninstall Action ──────────────────────────────
 
 if [ "$ACTION" = "uninstall" ]; then
-  log_step "Uninstalling OpsCloud..."
+  log_step "Uninstalling TalkOps..."
   
   if "$UV_BIN" tool uninstall "$PACKAGE_NAME" >/dev/null 2>&1; then
     log_success "Removed $PACKAGE_NAME uv tool environment."
@@ -531,7 +546,7 @@ if [ "$ACTION" = "uninstall" ]; then
   fi
 
   # Remove installed binaries
-  for b in "${TOOL_BIN_DIR}/${PRIMARY_BIN}" "${TOOL_BIN_DIR}/${PRIMARY_BIN}.exe"; do
+  for b in "${TOOL_BIN_DIR}/${PRIMARY_BIN}" "${TOOL_BIN_DIR}/${PRIMARY_BIN}.exe" "${TOOL_BIN_DIR}/${ALIAS_BIN}" "${TOOL_BIN_DIR}/${ALIAS_BIN}.exe"; do
     if [ -e "$b" ] || [ -L "$b" ]; then
       rm -f "$b" 2>/dev/null || true
       log_info "Removed $b"
@@ -539,14 +554,14 @@ if [ "$ACTION" = "uninstall" ]; then
   done
 
   printf "\n"
-  if prompt_yn "Do you also want to remove OpsCloud configuration and state (~/.opscloud)?" "n"; then
-    rm -rf "${HOME}/.opscloud" 2>/dev/null || true
-    log_success "Removed ~/.opscloud data directory."
+  if prompt_yn "Do you also want to remove TalkOps configuration and state (~/.talkops)?" "n"; then
+    rm -rf "${HOME}/.talkops" 2>/dev/null || true
+    log_success "Removed ~/.talkops data directory."
   else
-    log_info "Preserved user configuration in ~/.opscloud."
+    log_info "Preserved user configuration in ~/.talkops."
   fi
 
-  printf "\n${GREEN}✔${NC} ${BOLD}OpsCloud has been uninstalled.${NC}\n\n"
+  printf "\n${GREEN}✔${NC} ${BOLD}TalkOps has been uninstalled.${NC}\n\n"
   exit 0
 fi
 
@@ -563,7 +578,7 @@ for bin_candidate in "$PRIMARY_BIN" "${PRIMARY_BIN}.exe"; do
 done
 
 if [ -n "$CURRENT_VERSION" ]; then
-  log_info "Existing OpsCloud ${CURRENT_VERSION} detected."
+  log_info "Existing TalkOps ${CURRENT_VERSION} detected."
 fi
 
 # ── Determine Source Strategy (Local / Git / PyPI) ───────────
@@ -578,8 +593,8 @@ elif [ "$REQUESTED_SOURCE" = "pypi" ]; then
   RESOLVED_SOURCE="pypi"
 else
   # Auto-detection
-  if [ -f "pyproject.toml" ] && [ -d "src/opscloud" ] && [ -z "$VERSION" ]; then
-    log_info "Detected local OpsCloud repository in current directory."
+  if [ -f "pyproject.toml" ] && [ -d "src/talkops" ] && [ -z "$VERSION" ]; then
+    log_info "Detected local TalkOps repository in current directory."
     RESOLVED_SOURCE="local"
   else
     RESOLVED_SOURCE="pypi"
@@ -588,10 +603,10 @@ fi
 
 # ── Ripgrep Provisioning (Fast Search Acceleration) ──────────
 
-RIPGREP_INSTALLER="${OPSCLOUD_RIPGREP_INSTALLER:-managed}"
+RIPGREP_INSTALLER="${TALKOPS_RIPGREP_INSTALLER:-managed}"
 
 provision_ripgrep() {
-  if [ "$RIPGREP_INSTALLER" = "skip" ] || [ "${OPSCLOUD_OFFLINE:-0}" = "1" ]; then
+  if [ "$RIPGREP_INSTALLER" = "skip" ] || [ "${TALKOPS_OFFLINE:-0}" = "1" ]; then
     return 0
   fi
 
@@ -673,7 +688,7 @@ provision_ripgrep() {
     fi
   fi
 
-  log_debug "Could not automatically download ripgrep. OpsCloud will use built-in Python search."
+  log_debug "Could not automatically download ripgrep. TalkOps will use built-in Python search."
 }
 
 provision_ripgrep || true
@@ -681,7 +696,7 @@ provision_ripgrep || true
 # ── Cloud & DevOps Pre-flight Checks ─────────────────────────
 
 check_devops_prerequisites() {
-  if [ "${OPSCLOUD_SKIP_DEVOPS_CHECK:-0}" = "1" ]; then
+  if [ "${TALKOPS_SKIP_DEVOPS_CHECK:-0}" = "1" ]; then
     return 0
   fi
 
@@ -699,7 +714,7 @@ check_devops_prerequisites() {
 
   # Git is particularly important for repo bounds, skills, and plugins
   if ! command -v git >/dev/null 2>&1; then
-    log_warn "git is not installed. OpsCloud relies on git for repository bounds and plugin management."
+    log_warn "git is not installed. TalkOps relies on git for repository bounds and plugin management."
     if [ "$OS" = "macos" ]; then
       log_info "  To install git: brew install git (or xcode-select --install)"
     elif [ "$OS" = "linux" ]; then
@@ -712,7 +727,7 @@ check_devops_prerequisites
 
 # ── Package Installation via UV Tool ─────────────────────────
 
-install_opscloud_tool() {
+install_talkops_tool() {
   local target_source="$1"
   local install_args=(
     "$UV_BIN" "tool" "install"
@@ -729,7 +744,7 @@ install_opscloud_tool() {
   local display_target=""
 
   if [ "$target_source" = "local" ]; then
-    display_target="OpsCloud (local editable: .)"
+    display_target="TalkOps (local editable: .)"
     install_args+=("--editable" ".")
     if [ -n "$REQUESTED_EXTRAS" ]; then
       install_args+=("--extra" "$REQUESTED_EXTRAS")
@@ -739,7 +754,7 @@ install_opscloud_tool() {
     if [ -n "$VERSION" ]; then
       git_spec="${REPO_URL}.git@${VERSION}"
     fi
-    display_target="OpsCloud from GitHub (${git_spec})"
+    display_target="TalkOps from GitHub (${git_spec})"
     local full_spec="${PACKAGE_NAME} @ git+${git_spec}"
     if [ -n "$REQUESTED_EXTRAS" ]; then
       full_spec="${PACKAGE_NAME}[${REQUESTED_EXTRAS}] @ git+${git_spec}"
@@ -765,15 +780,15 @@ install_opscloud_tool() {
   else
     # Capture output for clean error reporting
     local install_log
-    install_log="$(mktemp "${TMP_ROOT}/opscloud-install-output-XXXXXX.log" 2>/dev/null || mktemp /tmp/opscloud-install-output-XXXXXX.log)"
+    install_log="$(mktemp "${TMP_ROOT}/talkops-install-output-XXXXXX.log" 2>/dev/null || mktemp /tmp/talkops-install-output-XXXXXX.log)"
     register_temp "$install_log"
 
     if ! "${install_args[@]}" > "$install_log" 2>&1; then
       # If PyPI failed and source wasn't explicitly pinned to pypi, try git fallback
-      if [ "$target_source" = "pypi" ] && [ -z "${OPSCLOUD_SOURCE:-}" ] && [ "${OPSCLOUD_OFFLINE:-0}" != "1" ]; then
+      if [ "$target_source" = "pypi" ] && [ -z "${TALKOPS_SOURCE:-}" ] && [ "${TALKOPS_OFFLINE:-0}" != "1" ]; then
         log_warn "PyPI resolution for '${PACKAGE_NAME}' did not succeed."
         log_info "Falling back to installing directly from GitHub repository (${REPO_URL})..."
-        install_opscloud_tool "git"
+        install_talkops_tool "git"
         return $?
       else
         log_error "Installation command failed:"
@@ -783,25 +798,27 @@ install_opscloud_tool() {
     fi
   fi
 
-  log_success "OpsCloud package installed successfully."
+  log_success "TalkOps package installed successfully."
   return 0
 }
 
-install_opscloud_tool "$RESOLVED_SOURCE"
+install_talkops_tool "$RESOLVED_SOURCE"
 
 # ── Ensure Executable Permissions ────────────────────────────
 
 ensure_executable_permissions() {
-  local primary_bin_path="${TOOL_BIN_DIR}/${PRIMARY_BIN}"
+  for bin_name in "$PRIMARY_BIN" "$ALIAS_BIN"; do
+    local bin_path="${TOOL_BIN_DIR}/${bin_name}"
 
-  # Windows .exe fallback checks
-  if [ ! -f "$primary_bin_path" ] && [ -f "${primary_bin_path}.exe" ]; then
-    primary_bin_path="${primary_bin_path}.exe"
-  fi
+    # Windows .exe fallback checks
+    if [ ! -f "$bin_path" ] && [ -f "${bin_path}.exe" ]; then
+      bin_path="${bin_path}.exe"
+    fi
 
-  if [ -f "$primary_bin_path" ]; then
-    chmod +x "$primary_bin_path" 2>/dev/null || true
-  fi
+    if [ -f "$bin_path" ]; then
+      chmod +x "$bin_path" 2>/dev/null || true
+    fi
+  done
 }
 
 ensure_executable_permissions
@@ -809,7 +826,7 @@ ensure_executable_permissions
 # ── Configure Shell PATH ─────────────────────────────────────
 
 setup_shell_path() {
-  if [ "${OPSCLOUD_NO_MODIFY_PATH:-0}" = "1" ]; then
+  if [ "${TALKOPS_NO_MODIFY_PATH:-0}" = "1" ]; then
     return 0
   fi
 
@@ -840,13 +857,13 @@ setup_shell_path() {
     fish)
       local fish_conf_dir="${HOME}/.config/fish/conf.d"
       mkdir -p "$fish_conf_dir" 2>/dev/null || true
-      local fish_conf="${fish_conf_dir}/opscloud.env.fish"
+      local fish_conf="${fish_conf_dir}/talkops.env.fish"
       if [ ! -f "$fish_conf" ]; then
         echo "fish_add_path -m ${TOOL_BIN_DIR}" > "$fish_conf"
         log_success "Added ${TOOL_BIN_DIR} to fish path (${fish_conf})"
       fi
       return 0
-      ;;
+    ;;
     *)
       profile_file="${HOME}/.profile"
       ;;
@@ -856,11 +873,11 @@ setup_shell_path() {
     local path_line="export PATH=\"${TOOL_BIN_DIR}:\$PATH\""
     if [ -f "$profile_file" ]; then
       if ! grep -Fq "${TOOL_BIN_DIR}" "$profile_file" 2>/dev/null; then
-        printf "\n# Added by OpsCloud installer\n%s\n" "$path_line" >> "$profile_file"
+        printf "\n# Added by TalkOps installer\n%s\n" "$path_line" >> "$profile_file"
         log_success "Added ${TOOL_BIN_DIR} to PATH in ${profile_file}"
       fi
     else
-      printf "# Added by OpsCloud installer\n%s\n" "$path_line" > "$profile_file"
+      printf "# Added by TalkOps installer\n%s\n" "$path_line" > "$profile_file"
       log_success "Created ${profile_file} with ${TOOL_BIN_DIR} in PATH"
     fi
   fi
@@ -890,33 +907,33 @@ fi
 
 printf "\n"
 printf "${CYAN}  ╔══════════════════════════════════════════════════════════╗${NC}\n"
-printf "${CYAN}  ║${NC}   ${BOLD}TALKOPS / OPSCLOUD${NC}                                    ${CYAN}║${NC}\n"
+printf "${CYAN}  ║${NC}   ${BOLD}TALKOPS${NC}                                                ${CYAN}║${NC}\n"
 printf "${CYAN}  ║${NC}   ${DIM}Autonomous AI Agent for DevOps & Cloud Operations${NC}     ${CYAN}║${NC}\n"
 printf "${CYAN}  ╚══════════════════════════════════════════════════════════╝${NC}\n"
 printf "\n"
 
 if [ -n "$FINAL_VERSION" ]; then
-  printf "${GREEN}✔${NC} ${BOLD}OpsCloud %s installed successfully!${NC}\n\n" "$FINAL_VERSION"
+  printf "${GREEN}✔${NC} ${BOLD}TalkOps %s installed successfully!${NC}\n\n" "$FINAL_VERSION"
 else
-  printf "${GREEN}✔${NC} ${BOLD}OpsCloud installed successfully!${NC}\n\n"
+  printf "${GREEN}✔${NC} ${BOLD}TalkOps installed successfully!${NC}\n\n"
 fi
 
 case ":${PATH}:" in
   *:"${TOOL_BIN_DIR}":*)
-    printf "Launch interactive session:\n"
-    printf "  ${BOLD}opscloud${NC}\n"
+    printf "Launch interactive session (using ${BOLD}talkops${NC} or ${BOLD}ops${NC} alias):\n"
+    printf "  ${BOLD}talkops${NC}   ${DIM}# or: ops${NC}\n"
     ;;
   *)
     printf "${YELLOW}Note:${NC} ${TOOL_BIN_DIR} is not yet active in your current shell session.\n"
-    printf "To use OpsCloud immediately in this terminal:\n"
+    printf "To use TalkOps immediately in this terminal:\n"
     printf "  ${BOLD}export PATH=\"%s:\$PATH\"${NC}\n" "$TOOL_BIN_DIR"
     printf "Then start:\n"
-    printf "  ${BOLD}opscloud${NC}\n"
+    printf "  ${BOLD}talkops${NC}   ${DIM}# or: ops${NC}\n"
     ;;
 esac
 
 printf "\n${BOLD}Quick Commands:${NC}\n"
-printf "  ${CYAN}opscloud doctor${NC}         Verify AWS STS credentials & DevOps toolchain\n"
-printf "  ${CYAN}opscloud /auth${NC}          Configure LLM API keys (Anthropic, Bedrock, OpenAI...)\n"
-printf "  ${CYAN}opscloud -p \"<prompt>\"${NC}  Run non-interactive / headless operational task\n"
-printf "  ${CYAN}opscloud --help${NC}         Show full CLI documentation and subcommands\n\n"
+printf "  ${CYAN}talkops doctor${NC}         Verify AWS STS credentials & DevOps toolchain\n"
+printf "  ${CYAN}talkops /auth${NC}          Configure LLM API keys (Anthropic, Bedrock, OpenAI...)\n"
+printf "  ${CYAN}talkops -p \"<prompt>\"${NC}  Run non-interactive / headless operational task\n"
+printf "  ${CYAN}ops --help${NC}             Show full CLI documentation and subcommands\n\n"

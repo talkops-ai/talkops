@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """TalkOps Textual TUI application orchestrator.
 
 Composes widget tree, manages theme registration, input routing via InputMode,
@@ -22,6 +36,13 @@ client to the adapter, enabling agent prompts.
 
 from __future__ import annotations
 
+import ast
+
+from langchain_core.messages import HumanMessage
+from textual.await_complete import AwaitComplete
+from textual.screen import ModalScreen
+from textual.worker import WorkerState
+
 try:
     import talkops._textual_patches  # noqa: F401
 except ImportError:
@@ -30,15 +51,15 @@ except ImportError:
 import asyncio
 import inspect
 import math
-import sys
 import os
+import sys
 import time
 import uuid
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
-from pathlib import Path
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, ClassVar, Literal, cast
 
 from textual import events, on
@@ -50,17 +71,9 @@ from textual.message import Message
 from textual.theme import Theme
 from textual.worker import Worker
 
-from talkops.approval_mode import ApprovalMode
-from talkops.ui.widgets.approval import (
-    ApprovalDecided,
-    ApprovalMenu,
-    ApprovalModalScreen,
-    assess_tool_risk,
-)
-from talkops.ui.widgets.goal_review import GoalReviewMenu
-from talkops.ui.widgets.autocomplete import AutocompletePopup
-from talkops.ui.widgets.btw_card import BtwCardPanel, BtwExchange
-from talkops.ui.widgets.chat_input import ChatInput, InputMode
+from talkops.approval_mode import ApprovalMode, coerce_approval_mode
+from talkops.input import MediaSnapshot, MediaTracker
+from talkops.mcp.mcp_info import MCPServerInfo
 from talkops.ui.command_registry import (
     ALWAYS_IMMEDIATE,
     IMMEDIATE_CMDS,
@@ -68,20 +81,21 @@ from talkops.ui.command_registry import (
     BypassTier,
     get_command,
 )
-from talkops.mcp.mcp_info import MCPServerInfo
-from talkops.ui.widgets.infra_panel import InfraStatePanel
-from talkops.ui.widgets.messages import (
-    AssistantMessage,
-    ErrorMessage,
-    MessageList,
-    QueuedUserMessage,
-    SystemMessage,
-    UserMessage,
+from talkops.ui.controllers import (
+    BtwController,
+    GoalController,
+    ModalController,
+    PromptController,
+    ServerLifecycleController,
+    ShellController,
+    ThreadController,
 )
-from talkops.ui.widgets.ask_user import AskUserMenu
-from talkops.ui.widgets.notification_center import NotificationCenter
-from talkops.ui.widgets.status import StatusBar
-from talkops.ui.widgets.subagent_panel import SubagentPanel
+from talkops.ui.controllers.server_controller import (
+    _format_mcp_server_changes,
+    _McpRefreshStatus,
+    _ServerRespawnResult,
+)
+from talkops.ui.permission_store import PermissionStore, load_permission_store
 from talkops.ui.textual_adapter import TextualAdapter
 from talkops.ui.theme import (
     DARK_COLORS,
@@ -92,18 +106,36 @@ from talkops.ui.theme import (
     register_app_themes,
     save_theme_preference,
 )
+from talkops.ui.widgets.approval import (
+    ApprovalDecided,
+    ApprovalMenu,
+    ApprovalModalScreen,
+    assess_tool_risk,
+)
+from talkops.ui.widgets.ask_user import AskUserMenu
+from talkops.ui.widgets.autocomplete import AutocompletePopup
+from talkops.ui.widgets.btw_card import BtwCardPanel, BtwExchange
+from talkops.ui.widgets.chat_input import ChatInput, InputMode
+from talkops.ui.widgets.goal_review import GoalReviewMenu
+from talkops.ui.widgets.infra_panel import InfraStatePanel
+from talkops.ui.widgets.messages import (
+    AssistantMessage,
+    ErrorMessage,
+    MessageList,
+    QueuedUserMessage,
+    SystemMessage,
+    UserMessage,
+)
+from talkops.ui.widgets.notification_center import NotificationCenter
+from talkops.ui.widgets.status import StatusBar
+from talkops.ui.widgets.subagent_panel import SubagentPanel
 from talkops.ui.widgets.theme_selector import ThemeSelectorScreen
 from talkops.ui.widgets.toast import show_toast
 from talkops.ui.widgets.welcome import WelcomeBanner
-
-from talkops.ui.permission_store import PermissionStore, load_permission_store
 from talkops.utils.git import (
     read_git_branch_from_filesystem,
     read_git_branch_via_subprocess,
 )
-
-
-
 from talkops.utils.logger import bind_logging_to_thread, get_logger
 
 logger = get_logger(__name__)
@@ -133,7 +165,6 @@ def _format_error_detail(err: Exception) -> str:
 
     err_str = str(err)
     if "RemoteException(" in err_str or (err_str.startswith("{") and "error" in err_str):
-        import ast
         try:
             inner = err_str.split("RemoteException(")[-1].rstrip(")") if "RemoteException(" in err_str else err_str
             parsed = ast.literal_eval(inner)
@@ -162,21 +193,6 @@ def _split_model_spec(spec: str) -> tuple[str, str]:
 
 
 # ── Domain Controllers & MCP Helpers ────────────────────
-
-from talkops.ui.controllers import (
-    BtwController,
-    GoalController,
-    ModalController,
-    PromptController,
-    ServerLifecycleController,
-    ShellController,
-    ThreadController,
-)
-from talkops.ui.controllers.server_controller import (
-    _McpRefreshStatus,
-    _ServerRespawnResult,
-    _format_mcp_server_changes,
-)
 
 
 def _btw_ctrl(app: Any) -> BtwController:
@@ -207,9 +223,6 @@ def _server_ctrl(app: Any) -> ServerLifecycleController:
 def _modals_ctrl(app: Any) -> ModalController:
     ctrl = getattr(app, "__dict__", {}).get("_modals")
     return ctrl if isinstance(ctrl, ModalController) else ModalController(app)
-
-
-from talkops.input import MediaSnapshot, MediaTracker
 
 
 # ── Queued Message ───────────────────────────────────────
@@ -261,6 +274,7 @@ class TalkOpsApp(App):
             server_proc: Any,
             mcp_server_info: list | None = None,
         ) -> None:
+            """Initialize ServerReady."""
             super().__init__()
             self.client = client
             self.server_proc = server_proc
@@ -270,6 +284,7 @@ class TalkOpsApp(App):
         """Posted by ``_start_server_background`` on startup failure."""
 
         def __init__(self, error: Exception) -> None:
+            """Initialize ServerStartFailed."""
             super().__init__()
             self.error = error
 
@@ -302,6 +317,7 @@ class TalkOpsApp(App):
         mcp_server_info: list | None = None,
         **extra_kwargs: Any,
     ) -> None:
+        """Initialize TalkOpsApp."""
         super().__init__()
         self._assistant_id = assistant_id
         self._api_key = api_key or (server_kwargs.get("api_key") if isinstance(server_kwargs, dict) else None) or os.environ.get("TALKOPS_API_KEY")
@@ -357,7 +373,6 @@ class TalkOpsApp(App):
             else:
                 self._settings.model_name = model
 
-        from talkops.approval_mode import ApprovalMode, coerce_approval_mode
         if approval_mode is not None:
             try:
                 self._approval_mode = coerce_approval_mode(
@@ -439,7 +454,6 @@ class TalkOpsApp(App):
             BtwController,
             GoalController,
             ModalController,
-            PromptController,
             ServerLifecycleController,
             ShellController,
             TaskWatcherController,
@@ -601,6 +615,22 @@ class TalkOpsApp(App):
             logger.exception("Failed to register themes")
             self.theme = "talkops-dark"
 
+    def watch_theme(self, theme_name: str) -> None:
+        """Re-render theme-dependent widgets when the active theme changes."""
+        if not self.is_mounted:
+            return
+        try:
+            for banner in self.query(WelcomeBanner):
+                for child in banner.query("*"):
+                    child.refresh(layout=True)
+                banner.refresh(layout=True)
+            for msg in self.query("SystemMessage, UserMessage, ThinkingMessage, ToolCallMessage, ToolGroupSummary, TurnSummary, StatusBar"):
+                if hasattr(msg, "_markdown_cache"):
+                    msg._markdown_cache = None  # type: ignore[attr-defined]
+                msg.refresh(layout=True)
+        except Exception:
+            logger.debug("Could not refresh widgets on theme change", exc_info=True)
+
     def get_theme_variable_defaults(self) -> dict[str, str]:
         """Return custom CSS variable defaults for the current theme.
 
@@ -614,7 +644,7 @@ class TalkOpsApp(App):
         Returns:
             Dict of CSS variable names to hex color values.
         """
-        from talkops.ui.theme import get_css_variable_defaults, get_theme_colors
+        from talkops.ui.theme import get_theme_colors
 
         colors = get_theme_colors(self)
         return get_css_variable_defaults(colors=colors)
@@ -623,6 +653,7 @@ class TalkOpsApp(App):
     # ── Layout ───────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         from talkops.ui.widgets.input_dock import InputDock
 
         yield MessageList(id="messages")
@@ -769,6 +800,45 @@ class TalkOpsApp(App):
         except Exception:
             pass
 
+    def _ensure_welcome_banner(self) -> None:
+        """Ensure the WelcomeBanner is present in MessageList and synced with current state."""
+        try:
+            messages_widget = self.query_one("#messages", MessageList)
+        except Exception:
+            return
+        try:
+            banner = messages_widget.query_one(WelcomeBanner)
+        except Exception:
+            eff = getattr(self, "_reasoning_effort", None) or (
+                getattr(getattr(self, "_settings", None), "reasoning_effort", None)
+            )
+            if not eff and self._model:
+                from talkops.model.reasoning import default_effort_for_model
+
+                eff = default_effort_for_model(self._model)
+            banner = WelcomeBanner(
+                model_spec=self._model or "",
+                effort=str(eff) if eff else "",
+                mcp_servers=self._mcp_server_info or None,
+                mcp_disabled=bool(
+                    (getattr(self, "_mcp_preload_kwargs", None) or {}).get("no_mcp")
+                ),
+            )
+            first_child = messages_widget.children[0] if messages_widget.children else None
+            if first_child is not None:
+                messages_widget.mount(banner, before=first_child)
+            else:
+                messages_widget.mount(banner)
+        if getattr(self, "_server_startup_error", None) is not None:
+            banner.set_error()
+        elif getattr(self, "_client", None) is not None and not getattr(self, "_connecting", False):
+            banner.set_connected()
+        elif getattr(self, "_connecting", False):
+            banner.set_starting()
+        self._sync_status_model()
+        self._sync_status_cloud()
+        self._sync_banner_mcp()
+
     async def _set_spinner(self, status: str | None) -> None:
         """Show, update, or hide the loading spinner in the message list."""
         from talkops.ui.widgets.loading import LoadingWidget
@@ -839,6 +909,7 @@ class TalkOpsApp(App):
     # ── Deferred Server Startup (ServerLifecycleController) ──
 
     async def maybe_start_deferred_server(self) -> bool:
+        """Execute maybe start deferred server on TalkOpsApp."""
         return await _server_ctrl(self).maybe_start_deferred_server()
 
     async def _start_server_background(self) -> None:
@@ -928,7 +999,6 @@ class TalkOpsApp(App):
         """Handle clicks anywhere in the terminal to restore focus to chat input."""
         if not self._chat_input:
             return
-        from textual.screen import ModalScreen
         if isinstance(self.screen, ModalScreen):
             return
         # Don't steal focus from active approval or interactive prompt widgets.
@@ -1099,27 +1169,35 @@ class TalkOpsApp(App):
         _btw_ctrl(self).refresh_btw_card()
 
     def is_btw_active(self) -> bool:
+        """Return whether btw active."""
         return _btw_ctrl(self).is_btw_active()
 
     def is_btw_open(self) -> bool:
+        """Return whether btw open."""
         return _btw_ctrl(self).is_btw_open()
 
     def show_btw_history(self) -> bool:
+        """Display btw history."""
         return _btw_ctrl(self).show_btw_history()
 
     def dismiss_btw_response(self) -> None:
+        """Dismiss btw response."""
         _btw_ctrl(self).dismiss_btw_response()
 
     def clear_active_btw(self) -> None:
+        """Clear active btw."""
         _btw_ctrl(self).clear_active_btw()
 
     def toggle_btw_expanded(self) -> None:
+        """Toggle btw expanded."""
         _btw_ctrl(self).toggle_btw_expanded()
 
     def navigate_btw(self, delta: int) -> None:
+        """Execute navigate btw on TalkOpsApp."""
         _btw_ctrl(self).navigate_btw(delta)
 
     def get_btw_copy_status(self) -> tuple[str | None, str | None]:
+        """Retrieve btw copy status."""
         return _btw_ctrl(self).get_btw_copy_status()
 
     async def _send_ephemeral_message(self, question: str) -> None:
@@ -1232,6 +1310,8 @@ class TalkOpsApp(App):
             message_kwargs: Optional metadata kwargs to attach to the HumanMessage.
         """
         if self._adapter is None:
+            self._agent_running = False
+            self._agent_worker = None
             return
 
         self._agent_turn_started = True
@@ -1258,7 +1338,10 @@ class TalkOpsApp(App):
                 self._agent_thread_id,
                 message[:80] + ("..." if len(message) > 80 else ""),
             )
-            from talkops.config.cloud_profiles import get_active_aws_profile, get_active_aws_region
+            from talkops.config.cloud_profiles import (
+                get_active_aws_profile,
+                get_active_aws_region,
+            )
 
             active_aws_prof = get_active_aws_profile()
             active_aws_reg = get_active_aws_region()
@@ -1293,7 +1376,9 @@ class TalkOpsApp(App):
                 and message
                 and message.strip()
             ):
-                from talkops.state.conversation_title import schedule_conversation_title_generation
+                from talkops.state.conversation_title import (
+                    schedule_conversation_title_generation,
+                )
 
                 schedule_conversation_title_generation(
                     self._agent_thread_id,
@@ -1370,7 +1455,7 @@ class TalkOpsApp(App):
                 if self._adapter and self._adapter._set_spinner:
                     try:
                         await self._adapter._set_spinner(None)
-                    except Exception:
+                    except (asyncio.CancelledError, Exception):
                         pass
 
                 # ── Goal state synchronization from checkpoint ──
@@ -1383,26 +1468,28 @@ class TalkOpsApp(App):
                 # ── Session cost & token state synchronization from checkpoint ──
                 try:
                     await self._sync_session_cost_from_checkpoint()
-                except Exception:
-                    logger.exception("Error during agent cleanup session cost sync")
+                except (asyncio.CancelledError, Exception):
+                    logger.debug("Error during agent cleanup session cost sync", exc_info=True)
 
-            except Exception:
-                logger.exception("Error during agent cleanup goal sync")
+            except (asyncio.CancelledError, Exception):
+                logger.debug("Error during agent cleanup goal sync", exc_info=True)
 
             # Regroup completed tools at turn boundary
             try:
                 await self._regroup_completed_tools()
-            except Exception:
-                logger.exception("Error during agent turn regrouping")
+            except (asyncio.CancelledError, Exception):
+                logger.debug("Error during agent turn regrouping", exc_info=True)
 
             # Turn footer (after cost sync so tokens/cost are reconciled,
             # before the queue drains so it sits under *this* turn).
             try:
                 await self._mount_turn_summary()
-            except Exception:
-                logger.exception("Error mounting turn summary")
+            except (asyncio.CancelledError, Exception):
+                logger.debug("Error mounting turn summary", exc_info=True)
 
-            # Process next message from queue
+            # Release reconciliation flag BEFORE draining queue so _process_next_from_queue
+            # does not bail out early on `self._agent_reconciling == True`.
+            self._agent_reconciling = False
             if not self._startup_sequence_running:
                 await self._process_next_from_queue()
         finally:
@@ -2039,18 +2126,23 @@ class TalkOpsApp(App):
         await _threads_ctrl(self).regroup_completed_tools()
 
     async def resume_thread(self, thread_id: str, *, is_new: bool = False) -> None:
+        """Execute resume thread on TalkOpsApp."""
         await _threads_ctrl(self).resume_thread(thread_id, is_new=is_new)
 
     async def fork_thread(self, *, source_thread_id: str | None = None) -> tuple[str, str]:
+        """Execute fork thread on TalkOpsApp."""
         return await _threads_ctrl(self).fork_thread(source_thread_id=source_thread_id)
 
     async def invoke_compact_conversation(self, thread_id: str | None = None, force: bool = True) -> None:
+        """Execute invoke compact conversation on TalkOpsApp."""
         await _threads_ctrl(self).invoke_compact_conversation(thread_id=thread_id, force=force)
 
     def toggle_timestamps(self, visible: bool | None = None) -> bool:
+        """Toggle timestamps."""
         return _threads_ctrl(self).toggle_timestamps(visible=visible)
 
     def get_context_tokens(self) -> int:
+        """Retrieve context tokens."""
         return _threads_ctrl(self).get_context_tokens()
 
     async def _get_conversation_token_count(self) -> int | None:
@@ -2060,9 +2152,11 @@ class TalkOpsApp(App):
         return await _threads_ctrl(self).has_conversation_messages()
 
     async def get_conversation_token_count(self) -> int | None:
+        """Retrieve conversation token count."""
         return await self._get_conversation_token_count()
 
     def get_thread_messages(self) -> list:
+        """Retrieve thread messages."""
         return _threads_ctrl(self).get_thread_messages()
 
 
@@ -2095,7 +2189,6 @@ class TalkOpsApp(App):
 
     def get_discovered_skills(self) -> list[dict[str, Any]]:
         """Get list of discovered skills (project, user, plugin, built-in)."""
-        from pathlib import Path
         from talkops.config.settings import settings
         from talkops.skills.loader import list_skills
 
@@ -2182,7 +2275,6 @@ class TalkOpsApp(App):
             else f"Thinking (/{cmd_label})"
         )
         await self._set_spinner(spinner)
-        from langchain_core.messages import HumanMessage
 
         self._agent_worker = self.run_worker(
             self._run_agent_task(
@@ -2207,7 +2299,6 @@ class TalkOpsApp(App):
         """Set default model in settings."""
         self._model = model_name
         self._manual_model = model_name
-        from talkops.approval_mode import ApprovalMode
         if getattr(self, "_approval_mode", ApprovalMode.MANUAL) is ApprovalMode.MANUAL:
             await self._restore_manual_default_model()
 
@@ -2368,7 +2459,6 @@ class TalkOpsApp(App):
 
     async def _on_smart_approve_enabled(self) -> bool:
         """Enable Smart mode when selected in approval menu."""
-        from talkops.approval_mode import ApprovalMode
         return await self._set_approval_mode(ApprovalMode.SMART)
 
     async def _on_auto_approve_enabled(self) -> bool:
@@ -2514,11 +2604,6 @@ class TalkOpsApp(App):
     @on(TextualAdapter.StreamError)
     async def _on_stream_error(self, event: TextualAdapter.StreamError) -> None:
         show_toast(self, event.error, title="Stream Error", severity="error")
-        try:
-            messages = self.query_one("#messages", MessageList)
-            await self._mount_message(ErrorMessage(event.error))
-        except NoMatches:
-            pass
 
     async def on_markdown_link_clicked(self, event: Any) -> None:
         """Handle link clicks from any Markdown widget across the application."""
@@ -2634,7 +2719,7 @@ class TalkOpsApp(App):
     def action_interrupt(self) -> None:
         """Handle escape key or interrupt request.
 
-        Priority order (aligned with dcode):
+        Priority order:
         1. If modal screen is active, dismiss it
         2. If completion popup is open, dismiss it
         3. If input is in command/shell mode, exit to normal mode
@@ -2647,8 +2732,6 @@ class TalkOpsApp(App):
            has appeared yet for the turn)
         9. Otherwise, a second Esc clears the chat input draft (undoable)
         """
-        from textual.screen import ModalScreen
-
         clear_was_pending = getattr(self, "_clear_input_pending", False)
         self._clear_input_pending = False
 
@@ -2745,8 +2828,6 @@ class TalkOpsApp(App):
 
     def on_paste(self, event: events.Paste) -> None:
         """Route unfocused paste events to chat input for drag/drop reliability."""
-        from textual.screen import ModalScreen
-
         if not self._chat_input:
             return
         try:
@@ -2780,8 +2861,10 @@ class TalkOpsApp(App):
             messages.clear()
         except NoMatches:
             pass
+        self._ensure_welcome_banner()
 
     async def action_toggle_auto_approve(self) -> None:
+        """Execute the toggle auto approve action."""
         await _modals_ctrl(self).action_toggle_auto_approve()
 
     async def _write_live_approval_mode(self, mode: ApprovalMode | None = None) -> bool:
@@ -2800,12 +2883,15 @@ class TalkOpsApp(App):
         _modals_ctrl(self).notify_auto_mode_enabled_once()
 
     def action_toggle_tool_output(self) -> None:
+        """Execute the toggle tool output action."""
         _modals_ctrl(self).action_toggle_tool_output()
 
     def action_toggle_debug_console(self) -> None:
+        """Execute the toggle debug console action."""
         _modals_ctrl(self).action_toggle_debug_console()
 
     async def action_open_editor(self) -> None:
+        """Execute the open editor action."""
         await _modals_ctrl(self).action_open_editor()
 
     async def _open_text_area_in_editor(
@@ -2828,6 +2914,7 @@ class TalkOpsApp(App):
         )
 
     def action_open_notifications(self) -> None:
+        """Execute the open notifications action."""
         _modals_ctrl(self).action_open_notifications()
 
     def _open_notification_center(self) -> None:
@@ -2862,6 +2949,7 @@ class TalkOpsApp(App):
         await _threads_ctrl(self).show_thread_selector()
 
     async def get_recent_threads(self, limit: int = 20) -> list:
+        """Retrieve recent threads."""
         return await _threads_ctrl(self).get_recent_threads(limit=limit)
 
     def _sync_status_cloud(self) -> None:
@@ -2886,7 +2974,6 @@ class TalkOpsApp(App):
                 "Attempted to pop screen when only default screen remains on stack (%r)",
                 screen_stack,
             )
-            from textual.await_complete import AwaitComplete
 
             async def _noop() -> None:
                 pass
@@ -2952,7 +3039,6 @@ class TalkOpsApp(App):
 
     @on(Worker.StateChanged)
     def _on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-        from textual.worker import WorkerState
 
         worker = event.worker
         if worker is self._agent_worker and event.state in {
@@ -3049,6 +3135,12 @@ class TalkOpsApp(App):
                 self._server_proc.stop()
             except Exception:
                 logger.debug("Failed to stop server process during exit", exc_info=True)
+        try:
+            from talkops.state.session import release_all_thread_presence
+
+            release_all_thread_presence()
+        except Exception:
+            pass
         # Return thread_id so the CLI can print a resume hint
         if result is None:
             result = self._agent_thread_id
@@ -3085,9 +3177,19 @@ class TalkOpsApp(App):
         # 4. Stop server process
         if self._server_proc is not None:
             try:
-                self._server_proc.stop()
+                if hasattr(self._server_proc, "astop"):
+                    await self._server_proc.astop()
+                else:
+                    self._server_proc.stop()
             except Exception:
                 pass
+        try:
+            from talkops.state.session import release_all_thread_presence
+
+            release_all_thread_presence()
+        except Exception:
+            pass
 
     def action_quit_app(self) -> None:
+        """Execute the quit app action."""
         self.exit()

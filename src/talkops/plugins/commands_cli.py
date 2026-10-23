@@ -1,8 +1,23 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """CLI helpers for plugin management in TalkOps."""
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -61,7 +76,6 @@ def setup_plugin_parser(
     Returns:
         Plugin command parser.
     """
-
     if add_output_args is None:
         from talkops.output import add_json_output_arg
 
@@ -203,7 +217,6 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
         project_root = _resolve_project_root("project")
         rows = _plugin_list_rows(project_root=project_root)
         if output_format == "json":
-            import json
             text = json.dumps({"plugins": rows}, indent=2)
             print(text)
             return None
@@ -212,9 +225,15 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
             print(text)
             return text
 
-        from talkops.plugins.store import load_all_enabled_plugin_ids, load_installed_plugins
+        from talkops.plugins.store import (
+            load_all_enabled_plugin_ids,
+            load_installed_plugins,
+        )
 
-        installed_ids = load_installed_plugins()
+        installed_ids = load_installed_plugins(
+            project_root=project_root,
+            include_foreign_projects=False,
+        )
         enabled_ids = load_all_enabled_plugin_ids(project_root=project_root)
 
         lines: list[str] = []
@@ -277,11 +296,18 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
             print(text)
             return text
 
-        from talkops.plugins.store import load_all_enabled_plugin_ids, load_installed_plugins
+        from talkops.plugins.store import (
+            load_all_enabled_plugin_ids,
+            load_installed_plugins,
+        )
 
-        records = load_marketplace_records(project_root=_resolve_project_root("project"))
-        installed = load_installed_plugins()
-        enabled = load_all_enabled_plugin_ids()
+        project_root = _resolve_project_root("project")
+        records = load_marketplace_records(project_root=project_root)
+        installed = load_installed_plugins(
+            project_root=project_root,
+            include_foreign_projects=False,
+        )
+        enabled = load_all_enabled_plugin_ids(project_root=project_root)
         matches: list[dict[str, Any]] = []
 
         for mp_name, record in sorted(records.items()):
@@ -315,7 +341,6 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
                     )
 
         if output_format == "json":
-            import json
 
             text = json.dumps({"query": query, "results": matches}, indent=2)
             print(text)
@@ -410,7 +435,6 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
                 for record in records.values()
             ]
             if output_format == "json":
-                import json
                 text = json.dumps({"marketplaces": rows}, indent=2)
                 print(text)
                 return None
@@ -458,7 +482,6 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
                     raise SystemExit(1) from exc
 
                 if output_format == "json":
-                    import json
 
                     text = json.dumps(
                         {
@@ -477,7 +500,6 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
 
             refreshed = refresh_all_marketplaces()
             if output_format == "json":
-                import json
 
                 rows = [
                     {
@@ -508,7 +530,6 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
                 raise SystemExit(1) from exc
 
             if output_format == "json":
-                import json
 
                 text = json.dumps(
                     {
@@ -527,7 +548,6 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
 
         refreshed = refresh_all_marketplaces()
         if output_format == "json":
-            import json
 
             rows = [
                 {

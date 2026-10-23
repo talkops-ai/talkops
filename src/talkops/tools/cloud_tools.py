@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Multi-Cloud context discovery, status, and switching tools for TalkOps agents."""
 
 from __future__ import annotations
@@ -31,6 +45,7 @@ def cloud_list_contexts(
 
     Args:
         provider: Optional filter ('aws', 'azure', 'gcp', 'k8s'). Omit to list all providers.
+        config: Optional LangChain RunnableConfig injected at runtime.
     """
     del config
     prov_filter: CloudProviderType | None = (
@@ -82,6 +97,7 @@ def cloud_switch_context(
         provider: Cloud provider ('aws', 'azure', 'gcp', 'k8s').
         target_id: Profile name, subscription ID/name, gcloud config name, kubeconfig context, or '@ambient' / '@in-cluster'.
         region: Optional region, location, or Kubernetes namespace override.
+        config: Optional LangChain RunnableConfig injected at runtime.
     """
     del config
     prov_norm = provider.lower().strip()
@@ -129,6 +145,7 @@ def cloud_get_status(
 
     Args:
         verify_live: When True, performs a live STS / CLI / metadata identity check.
+        config: Optional LangChain RunnableConfig injected at runtime.
     """
     del config
     active_prov, active_target, active_region = get_active_cloud_target()

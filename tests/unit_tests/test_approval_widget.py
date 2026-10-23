@@ -1,8 +1,30 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for the interactive HITL approval widget and risk assessment."""
+
+from __future__ import annotations
+
 import asyncio
 import os
+
 import pytest
+from rich.markup import render
 from textual.app import App, ComposeResult
+
 from talkops.approval_mode import ApprovalMode
+from talkops.ui.app import TalkOpsApp
 from talkops.ui.widgets.approval import (
     ApprovalDecided,
     ApprovalMenu,
@@ -11,7 +33,6 @@ from talkops.ui.widgets.approval import (
     get_target_context_pill,
     highlight_command,
 )
-from talkops.ui.app import TalkOpsApp
 
 
 def test_approval_menu_build_options_shows_smart_mode():
@@ -123,6 +144,7 @@ async def test_app_on_smart_approve_enabled_activates_smart_mode():
 
 
 def test_assess_tool_risk_destructive_keywords():
+    """Verify assess tool risk destructive keywords."""
     assert assess_tool_risk("execute", {"command": "terraform destroy -auto-approve"}, is_prod=False) == "high"
     assert assess_tool_risk("execute", {"command": "rm -rf /tmp/data"}, is_prod=False) == "high"
     assert assess_tool_risk("execute", {"command": "kubectl delete pod my-pod"}, is_prod=False) == "high"
@@ -133,6 +155,7 @@ def test_assess_tool_risk_destructive_keywords():
 
 def test_assess_tool_risk_prod_detection():
     # Explicit is_prod
+    """Verify assess tool risk prod detection."""
     assert assess_tool_risk("execute", {"command": "ls -la"}, is_prod=True) == "prod"
     # Auto-detected prod via aws_profile
     assert assess_tool_risk("execute", {"command": "ls -la"}, aws_profile="client-prod") == "prod"
@@ -143,6 +166,7 @@ def test_assess_tool_risk_prod_detection():
 
 
 def test_highlight_command_and_prompt_prefix():
+    """Verify highlight command and prompt prefix."""
     content = highlight_command("rm -rf /var/log")
     rendered = str(content)
     assert "$" in rendered
@@ -150,22 +174,27 @@ def test_highlight_command_and_prompt_prefix():
 
 
 def test_get_target_context_pill():
+    """Verify get target context pill."""
     pill = get_target_context_pill(aws_profile="client-prod", aws_region="us-east-1")
     assert "aws: client-prod" in pill
     assert "us-east-1" in pill
 
 
 class DummyApprovalMenuApp(App[None]):
+    """Test suite or helper class for dummy approval menu app."""
     def __init__(self, menu: ApprovalMenu) -> None:
+        """Initialize DummyApprovalMenuApp."""
         super().__init__()
         self._menu = menu
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield self._menu
 
 
 @pytest.mark.asyncio
 async def test_approval_menu_mount_chrome_and_navigation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify approval menu mount chrome and navigation."""
     monkeypatch.setenv("AWS_PROFILE", "client-prod")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
 
@@ -214,19 +243,24 @@ async def test_approval_menu_mount_chrome_and_navigation(monkeypatch: pytest.Mon
 
 
 class DummyApprovalModalApp(App[None]):
+    """Test suite or helper class for dummy approval modal app."""
     def __init__(self, screen_instance: ApprovalModalScreen) -> None:
+        """Initialize DummyApprovalModalApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
 @pytest.mark.asyncio
 async def test_approval_modal_screen_actions() -> None:
+    """Verify approval modal screen actions."""
     modal = ApprovalModalScreen(
         tool_name="execute",
         call_id="call-42",
@@ -248,7 +282,6 @@ async def test_approval_modal_screen_actions() -> None:
 
 def test_smart_mode_option_display_no_strikethrough():
     """Verify that formatting (s) Enable Smart mode does not trigger Rich strikethrough."""
-    from rich.markup import render
     from talkops.ui.widgets.approval import ApprovalMenu
 
     menu = ApprovalMenu([{"name": "execute", "args": {"command": "ls"}}])
@@ -461,7 +494,9 @@ async def test_write_and_edit_tools_collapse_under_forward_arrow_summary():
     )
 
     class DummyMessagesApp(App[None]):
+        """Test suite or helper class for dummy messages app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield MessageList(id="messages")
 
     app = DummyMessagesApp()

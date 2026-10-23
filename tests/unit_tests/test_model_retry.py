@@ -1,26 +1,45 @@
-"""Unit tests for CodeModelRetryMiddleware and transient error resilience."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for CodeModelRetryMiddleware and transient error resilience."""
 import asyncio
+from typing import Any
 from unittest.mock import MagicMock
+
 import pytest
 from langgraph.errors import GraphBubbleUp
 
 from talkops.middleware.model_retry import (
+    MODEL_RETRY_EVENT_TYPE,
     CodeModelRetryMiddleware,
     compute_delay,
     is_transient_error,
-    MODEL_RETRY_EVENT_TYPE,
 )
 
 
 class DummyExceptionWithStatus(Exception):
+    """Test suite or helper class for dummy exception with status."""
     def __init__(self, message: str, status_code: int):
+        """Initialize DummyExceptionWithStatus."""
         super().__init__(message)
         self.status_code = status_code
 
 
 class DummyExceptionWithResponse(Exception):
+    """Test suite or helper class for dummy exception with response."""
     def __init__(self, message: str, status_code: int):
+        """Initialize DummyExceptionWithResponse."""
         super().__init__(message)
         self.response = MagicMock()
         self.response.status_code = status_code
@@ -28,6 +47,7 @@ class DummyExceptionWithResponse(Exception):
 
 def test_is_transient_error_status_codes():
     # Transient HTTP status codes
+    """Verify is transient error status codes."""
     assert is_transient_error(DummyExceptionWithStatus("Rate limited", 429)) is True
     assert is_transient_error(DummyExceptionWithStatus("Server error", 500)) is True
     assert is_transient_error(DummyExceptionWithStatus("Bad gateway", 502)) is True
@@ -47,9 +67,9 @@ def test_is_transient_error_status_codes():
 
 
 def test_is_transient_error_control_flow_and_signals():
-    from typing import Any
 
     # Never retry control flow or termination exceptions
+    """Verify is transient error control flow and signals."""
     kb_exc: Any = KeyboardInterrupt()
     sys_exc: Any = SystemExit()
     assert is_transient_error(kb_exc) is False
@@ -69,6 +89,7 @@ def test_is_transient_error_control_flow_and_signals():
 
 def test_compute_delay():
     # Delay should increase with attempts and stay within bounds
+    """Verify compute delay."""
     d1 = compute_delay(1)
     d2 = compute_delay(2)
     d3 = compute_delay(3)
@@ -79,6 +100,7 @@ def test_compute_delay():
 
 
 def test_model_retry_middleware_success():
+    """Verify model retry middleware success."""
     mw = CodeModelRetryMiddleware(max_retries=3)
     request = MagicMock()
     handler = MagicMock(return_value="success_response")
@@ -89,8 +111,7 @@ def test_model_retry_middleware_success():
 
 
 def test_model_retry_middleware_retries_and_recovers(monkeypatch):
-    from typing import Any
-
+    """Verify model retry middleware retries and recovers."""
     monkeypatch.setattr("time.sleep", lambda _: None)
 
     mw = CodeModelRetryMiddleware(max_retries=3)
@@ -104,6 +125,7 @@ def test_model_retry_middleware_retries_and_recovers(monkeypatch):
     calls = 0
 
     def failing_then_succeeding_handler(req: Any) -> Any:
+        """Provide failing then succeeding handler test helper or fixture."""
         nonlocal calls
         calls += 1
         if calls < 3:
@@ -120,6 +142,7 @@ def test_model_retry_middleware_retries_and_recovers(monkeypatch):
 
 
 def test_model_retry_middleware_exhausts_retries(monkeypatch):
+    """Verify model retry middleware exhausts retries."""
     monkeypatch.setattr("time.sleep", lambda _: None)
 
     mw = CodeModelRetryMiddleware(max_retries=2)
@@ -136,6 +159,7 @@ def test_model_retry_middleware_exhausts_retries(monkeypatch):
 
 
 def test_model_retry_middleware_non_transient_no_retry():
+    """Verify model retry middleware non transient no retry."""
     mw = CodeModelRetryMiddleware(max_retries=3)
     request = MagicMock()
     handler = MagicMock(side_effect=ValueError("Non transient parameter error"))
@@ -148,9 +172,9 @@ def test_model_retry_middleware_non_transient_no_retry():
 
 @pytest.mark.asyncio
 async def test_async_model_retry_middleware(monkeypatch):
-    from typing import Any
-
+    """Verify async model retry middleware."""
     async def dummy_sleep(_):
+        """Provide dummy sleep test helper or fixture."""
         pass
 
     monkeypatch.setattr(asyncio, "sleep", dummy_sleep)
@@ -162,6 +186,7 @@ async def test_async_model_retry_middleware(monkeypatch):
     calls = 0
 
     async def async_handler(req: Any) -> Any:
+        """Provide async handler test helper or fixture."""
         nonlocal calls
         calls += 1
         if calls == 1:

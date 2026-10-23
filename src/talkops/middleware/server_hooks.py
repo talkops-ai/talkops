@@ -1,15 +1,29 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """LangGraph interrupt bridge for server-owned Hooks v2 events."""
 
 from __future__ import annotations
 
+import hashlib
+import json
+import time
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-import hashlib
-import json
 from pathlib import Path
-import time
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -36,12 +50,17 @@ from langchain.agents.middleware.types import (
     ResponseT,
     hook_config,
 )
+from langchain_core.callbacks.manager import (
+    adispatch_custom_event,
+    dispatch_custom_event,
+)
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
     ToolCall,
     ToolMessage,
 )
+from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.types import Command, interrupt
 
 from talkops.hooks.interrupt import (
@@ -154,7 +173,6 @@ def _subagent_transcript_config(
         yield
         return
 
-    from langchain_core.runnables.config import var_child_runnable_config
     from talkops.middleware.cost_tracking import ACTIVE_SESSION_THREAD_ID
 
     metadata = config.get("metadata")
@@ -287,7 +305,6 @@ class ServerHooksMiddleware(AgentMiddleware[ServerHooksState, ContextT, Response
         started = time.perf_counter()
 
         if call.name in _SUBAGENT_TOOL_NAMES:
-            from langchain_core.callbacks.manager import dispatch_custom_event
 
             subagent_type = str(
                 call.args.get("subagent_type") or call.args.get("name") or call.args.get("agent") or call.name
@@ -348,7 +365,6 @@ class ServerHooksMiddleware(AgentMiddleware[ServerHooksState, ContextT, Response
         duration_ms = int((time.perf_counter() - started) * 1000)
 
         if call.name in _SUBAGENT_TOOL_NAMES:
-            from langchain_core.callbacks.manager import dispatch_custom_event
 
             outcome = "error" if _tool_result_failed(result, call.id) else "complete"
             finish_payload = {
@@ -401,7 +417,6 @@ class ServerHooksMiddleware(AgentMiddleware[ServerHooksState, ContextT, Response
         started = time.perf_counter()
 
         if call.name in _SUBAGENT_TOOL_NAMES:
-            from langchain_core.callbacks.manager import adispatch_custom_event
 
             subagent_type = str(
                 call.args.get("subagent_type") or call.args.get("name") or call.args.get("agent") or call.name
@@ -462,7 +477,6 @@ class ServerHooksMiddleware(AgentMiddleware[ServerHooksState, ContextT, Response
         duration_ms = int((time.perf_counter() - started) * 1000)
 
         if call.name in _SUBAGENT_TOOL_NAMES:
-            from langchain_core.callbacks.manager import adispatch_custom_event
 
             outcome = "error" if _tool_result_failed(result, call.id) else "complete"
             finish_payload = {

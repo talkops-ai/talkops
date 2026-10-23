@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for /reload and /restart slash commands, formatting, and lifecycles."""
 
 from __future__ import annotations
@@ -7,24 +21,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 from talkops.commands._base import CommandContext
 from talkops.commands.power.runtime import ReloadHandler, RestartHandler
 from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
 from talkops.server import ServerConfig, ServerProcess
 from talkops.ui.app import (
     TalkOpsApp,
-    _ServerRespawnResult,
     _format_mcp_server_changes,
+    _ServerRespawnResult,
 )
 from talkops.ui.command_registry import (
     COMMANDS,
     BypassTier,
     get_all_entries,
 )
-from talkops.ui.widgets.messages import SystemMessage
 from talkops.ui.widgets.autocomplete import CompletionView, SlashCommandController
-
+from talkops.ui.widgets.messages import SystemMessage
 
 # ── 1. Autocomplete Order & SlashCommand Metadata Tests ──────────
 
@@ -33,6 +45,7 @@ class MockCompletionView(CompletionView):
     """Stub view to capture autocomplete render calls."""
 
     def __init__(self) -> None:
+        """Initialize MockCompletionView."""
         self.suggestions: list[tuple[str, str]] = []
         self.selected_index: int = 0
         self.visible: bool = False
@@ -40,15 +53,18 @@ class MockCompletionView(CompletionView):
     def render_completion_suggestions(
         self, suggestions: list[tuple[str, str]], selected_index: int
     ) -> None:
+        """Provide render completion suggestions test helper or fixture."""
         self.suggestions = suggestions
         self.selected_index = selected_index
         self.visible = True
 
     def clear_completion_suggestions(self) -> None:
+        """Provide clear completion suggestions test helper or fixture."""
         self.suggestions = []
         self.visible = False
 
     def replace_completion_range(self, start: int, end: int, replacement: str) -> None:
+        """Provide replace completion range test helper or fixture."""
         pass
 
 
@@ -242,7 +258,7 @@ def test_format_mcp_server_changes_diffs():
 
 @pytest.mark.asyncio
 async def test_run_reload_unlocked_report_matches_expected():
-    """Verify /reload outputs the exact structured report matching dcode."""
+    """Verify /reload outputs the expected structured reload report."""
     app = TalkOpsApp(defer_server_start=True)
 
     # Mock settings reload (no changes)
@@ -526,9 +542,9 @@ async def test_run_reload_detects_aws_profile_and_pool_changes():
 
 def test_clear_caches_flushes_pool_and_aws_caches():
     """Verify clear_caches flushes model pool manager instances and AWS profile cache."""
+    from talkops.config import cloud_profiles
     from talkops.model.config import clear_caches
     from talkops.model.pool import get_model_pool_manager
-    from talkops.config import cloud_profiles
 
     pool_mgr = get_model_pool_manager()
     mock_instance = MagicMock()
@@ -726,4 +742,44 @@ async def test_run_reload_unlocked_sets_and_clears_busy_status_and_reports_defer
     assert len(mounted_messages) == 1
     content = getattr(mounted_messages[0], "_raw_content", "")
     assert "local server hasn't started yet" in content
+
+
+@pytest.mark.asyncio
+async def test_respawn_server_passes_preload_kwargs_to_preload_mcp_server_info():
+    """Verify _respawn_server forwards _mcp_preload_kwargs to preload_mcp_server_info without TypeError."""
+    app = TalkOpsApp(
+        defer_server_start=True,
+        mcp_preload_kwargs={
+            "mcp_config_path": None,
+            "no_mcp": False,
+            "trust_project_mcp": None,
+        },
+    )
+    mock_proc = MagicMock()
+    mock_proc.is_in_process = True
+    mock_proc.restart = AsyncMock(return_value="inprocess://local")
+    mock_proc.create_client = MagicMock(return_value=MagicMock())
+    app._server_proc = mock_proc
+
+    mock_info = MCPServerInfo(
+        name="aws_docs",
+        transport="stdio",
+        tools=[MCPToolInfo(name="search", description="search docs")],
+        status="ok",
+    )
+    with patch(
+        "talkops.mcp.preload.preload_mcp_server_info",
+        AsyncMock(return_value=[mock_info]),
+    ) as mock_preload:
+        res = await app._respawn_server()
+
+    assert res.restarted is True
+    assert res.mcp_status == "fresh"
+    assert res.mcp_server_info == [mock_info]
+    mock_preload.assert_awaited_once_with(
+        mcp_config_path=None,
+        no_mcp=False,
+        trust_project_mcp=None,
+    )
+
 

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Ephemeral `/btw` side-question controller extracted from `TalkOpsApp`."""
 
 from __future__ import annotations
@@ -20,6 +34,7 @@ class BtwController:
     """Manages ephemeral `/btw` side-question state, history, and worker execution."""
 
     def __init__(self, app: TalkOpsApp) -> None:
+        """Initialize BtwController."""
         self._app = app
 
     def refresh_btw_card(self) -> None:
@@ -141,7 +156,10 @@ class BtwController:
 
     async def run_btw_task(self, item_index: int, question: str) -> None:
         """Execute the isolated `/btw` side question with a 60-second timeout."""
-        from talkops.config.cloud_profiles import get_active_aws_profile, get_active_aws_region
+        from talkops.config.cloud_profiles import (
+            get_active_aws_profile,
+            get_active_aws_region,
+        )
         from talkops.middleware.btw import BTW_TIMEOUT_SECONDS, format_btw_prompt
         from talkops.ui.app import _format_error_detail
 
@@ -184,7 +202,11 @@ class BtwController:
                                 app._btw_items[item_index].answer = "".join(fragments)
                                 app._refresh_btw_card()
                 elif hasattr(client, "astream"):
-                    from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+                    from langchain_core.messages import (
+                        AIMessage,
+                        AIMessageChunk,
+                        HumanMessage,
+                    )
 
                     temp_tid = f"btw-{uuid.uuid4()}"
                     seed_msgs = [

@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Estimate and persist cumulative model cost for each thread.
 
 The graph owns the durable total. `CostTrackingMiddleware` is the only writer of
@@ -9,14 +23,14 @@ lifetime figure.
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextvars import ContextVar
-from dataclasses import dataclass
 import logging
 import math
 import operator
 import threading
+from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, NotRequired, TypedDict, override
 from uuid import UUID
 
@@ -437,6 +451,7 @@ class _SessionCostRecorder(BaseCallbackHandler):
     run_inline = True
 
     def __init__(self) -> None:
+        """Initialize _SessionCostRecorder."""
         self._lock = threading.Lock()
         self._run_contexts: OrderedDict[UUID, _ModelCallContext] = OrderedDict()
         self._records: OrderedDict[str, list[_ModelCallRecord]] = OrderedDict()
@@ -489,6 +504,7 @@ class _SessionCostRecorder(BaseCallbackHandler):
         metadata: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        """Handle chat model start events."""
         self._start(run_id, metadata)
 
     def on_llm_start(
@@ -500,6 +516,7 @@ class _SessionCostRecorder(BaseCallbackHandler):
         metadata: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        """Handle llm start events."""
         self._start(run_id, metadata)
 
     def on_llm_end(
@@ -509,6 +526,7 @@ class _SessionCostRecorder(BaseCallbackHandler):
         run_id: UUID,
         **kwargs: Any,
     ) -> None:
+        """Handle llm end events."""
         with self._lock:
             context = self._run_contexts.pop(run_id, None)
         if context is None or not context.thread_id:
@@ -542,6 +560,7 @@ class _SessionCostRecorder(BaseCallbackHandler):
         run_id: UUID,
         **kwargs: Any,
     ) -> None:
+        """Handle llm error events."""
         with self._lock:
             self._run_contexts.pop(run_id, None)
 
@@ -551,6 +570,7 @@ class _SessionCostRecorder(BaseCallbackHandler):
         *,
         scope: str | None = None,
     ) -> list[_ModelCallRecord]:
+        """Execute drain on _SessionCostRecorder."""
         with self._lock:
             records = self._records.get(thread_id, [])
             if scope is None:
@@ -564,6 +584,7 @@ class _SessionCostRecorder(BaseCallbackHandler):
             return claimed
 
     def restore(self, thread_id: str, records: list[_ModelCallRecord]) -> None:
+        """Execute restore on _SessionCostRecorder."""
         if not records:
             return
         with self._lock:
@@ -764,6 +785,7 @@ class CostTrackingMiddleware(AgentMiddleware[CostState, ContextT]):
     state_schema = CostState
 
     def __init__(self, *, nested: bool = False) -> None:
+        """Initialize CostTrackingMiddleware."""
         super().__init__()
         self._nested = nested
 
@@ -772,6 +794,7 @@ class CostTrackingMiddleware(AgentMiddleware[CostState, ContextT]):
         state: CostState,
         runtime: Runtime[ContextT],
     ) -> dict[str, Any] | None:
+        """Execute synchronous pre-agent lifecycle hook."""
         tid = _thread_id(runtime)
         if tid:
             ACTIVE_SESSION_THREAD_ID.set(tid)
@@ -790,6 +813,7 @@ class CostTrackingMiddleware(AgentMiddleware[CostState, ContextT]):
         state: CostState,
         runtime: Runtime[ContextT],
     ) -> dict[str, Any] | None:
+        """Execute asynchronous pre-agent lifecycle hook."""
         return self.before_agent(state, runtime)
 
     @override
@@ -798,6 +822,7 @@ class CostTrackingMiddleware(AgentMiddleware[CostState, ContextT]):
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
     ) -> ModelResponse[ResponseT] | ExtendedModelResponse[ResponseT]:
+        """Intercept and wrap synchronous model invocation."""
         tid = _thread_id(request.runtime)
         token = ACTIVE_SESSION_THREAD_ID.set(tid) if tid else None
         try:
@@ -812,6 +837,7 @@ class CostTrackingMiddleware(AgentMiddleware[CostState, ContextT]):
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
     ) -> ModelResponse[ResponseT] | ExtendedModelResponse[ResponseT]:
+        """Intercept and wrap asynchronous model invocation."""
         tid = _thread_id(request.runtime)
         token = ACTIVE_SESSION_THREAD_ID.set(tid) if tid else None
         try:
@@ -825,6 +851,7 @@ class CostTrackingMiddleware(AgentMiddleware[CostState, ContextT]):
         state: CostState,
         runtime: Runtime[ContextT],
     ) -> dict[str, Any] | None:
+        """Execute synchronous post-model lifecycle hook."""
         try:
             return self._charge(state, runtime, price_latest_message=True)
         except Exception:
@@ -836,6 +863,7 @@ class CostTrackingMiddleware(AgentMiddleware[CostState, ContextT]):
         state: CostState,
         runtime: Runtime[ContextT],
     ) -> dict[str, Any] | None:
+        """Execute synchronous post-agent lifecycle hook."""
         try:
             return self._after_agent_update(state, runtime)
         except Exception:

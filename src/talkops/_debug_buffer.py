@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 r"""In-memory ring buffer of recent log records for the in-app Debug Console.
 
 A lightweight `logging.Handler` keeps the most recent structured log records in
@@ -196,15 +210,15 @@ def install_log_buffer(
     """Attach the in-memory buffer handler to *target* (idempotent).
 
     Lowers *target*'s level to at most `INFO` so the console shows a useful tail
-    even when `OPSCODE_DEBUG` is off; never raises the level. In
+    even when `TALKOPS_DEBUG` is off; never raises the level. In
     `__init__.py` this runs *before* `configure_debug_logging`, which then sets
-    the final level (honoring `OPSCODE_DEBUG` and
-    `OPSCODE_LOG_LEVEL`) over this `INFO` floor — so any startup warnings
+    the final level (honoring `TALKOPS_DEBUG` and
+    `TALKOPS_LOG_LEVEL`) over this `INFO` floor — so any startup warnings
     `configure_debug_logging` emits are captured by the already-installed buffer.
     On a fresh `NOTSET` logger the `NOTSET` branch forces `INFO` without
-    consulting `OPSCODE_LOG_LEVEL`; the `> INFO and no env` branch only
+    consulting `TALKOPS_LOG_LEVEL`; the `> INFO and no env` branch only
     matters on reconfiguration (e.g. an `importlib.reload`), where it preserves
-    an explicit `OPSCODE_LOG_LEVEL` rather than clobbering it with `INFO`.
+    an explicit `TALKOPS_LOG_LEVEL` rather than clobbering it with `INFO`.
 
     Lowering the level does not spill log output onto the terminal: because this
     handler is present in the propagation chain, `Logger.callHandlers` finds a

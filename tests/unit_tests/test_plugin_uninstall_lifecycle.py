@@ -1,11 +1,28 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for plugin uninstall lifecycle, scope resolution, and persistence."""
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
+from typing import Any
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.widgets._option_list import Option
 
 from talkops.plugins.discovery import (
     uninstall_plugin,
@@ -19,8 +36,8 @@ from talkops.plugins.store import (
 )
 from talkops.ui.widgets.plugin_manager import (
     PluginManagerScreen,
-    _PluginRow,
     _load_manager_state,
+    _PluginRow,
 )
 
 
@@ -28,13 +45,16 @@ class DummyPluginManagerApp(App):
     """Minimal textual app to mount and test PluginManagerScreen."""
 
     def __init__(self, screen_instance: PluginManagerScreen) -> None:
+        """Initialize DummyPluginManagerApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
@@ -166,7 +186,7 @@ def test_uninstall_multi_scope_cache_retention(isolated_plugin_env: Path) -> Non
 
 
 def test_global_uninstall_removes_all_scopes(isolated_plugin_env: Path) -> None:
-    """Verify that calling uninstall without scope (dcode style) removes all scoped entries."""
+    """Verify that calling uninstall without scope removes all scoped entries."""
     repo_a = isolated_plugin_env / "repo_a"
     repo_b = isolated_plugin_env / "repo_b"
     repo_a.mkdir()
@@ -246,9 +266,8 @@ async def test_tui_action_uninstall_integration(isolated_plugin_env: Path) -> No
         screen._selected_plugin = row
 
         # Simulate clicking uninstall action
-        from typing import Any
-        from textual.widgets._option_list import Option
         class DummyOptionSelected:
+            """Test suite or helper class for dummy option selected."""
             option_id = "action:uninstall"
             option = Option("Uninstall", id="action:uninstall")
 
@@ -304,10 +323,9 @@ async def test_tui_action_uninstall_cross_project_preservation(
         await pilot.pause()
         screen._selected_plugin = installed_rows[0]
 
-        from typing import Any
-        from textual.widgets._option_list import Option
 
         class DummyOptionSelected:
+            """Test suite or helper class for dummy option selected."""
             option = Option("Uninstall", id="action:uninstall")
 
         ev2: Any = DummyOptionSelected()
@@ -323,7 +341,6 @@ def test_cli_uninstall_command_success_and_failure(
     isolated_plugin_env: Path,
 ) -> None:
     """Verify CLI plugin uninstall command handles success and errors properly."""
-    import argparse
     from talkops.plugins.commands_cli import execute_plugin_command
 
     cache_dir = isolated_plugin_env / "cache" / "cli_test"
@@ -349,3 +366,79 @@ def test_cli_uninstall_command_success_and_failure(
     with pytest.raises(SystemExit) as exc_info:
         execute_plugin_command(args)
     assert exc_info.value.code == 1
+
+
+@pytest.mark.asyncio
+async def test_tui_toggle_enabled_respects_project_scope(
+    isolated_plugin_env: Path,
+) -> None:
+    """Verify TUI toggle-enabled action updates the plugin's installed project/local scope."""
+    from talkops.plugins.store import load_all_enabled_plugin_ids
+
+    repo = isolated_plugin_env / "scoped_repo"
+    (repo / ".talkops").mkdir(parents=True)
+
+    cache_dir = isolated_plugin_env / "cache" / "scoped_toggle"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "plugin.json").write_text('{"name": "aws-networking"}', encoding="utf-8")
+
+    pid = "aws-networking@talkops-devops-plugins"
+    add_installed_plugin(
+        pid,
+        install_path=str(cache_dir),
+        version="0.1.0",
+        scope="project",
+        project_root=repo,
+    )
+    set_plugin_enabled_for_scope(pid, True, scope="project", project_root=repo)
+    assert pid in load_all_enabled_plugin_ids(project_root=repo)
+
+    screen = PluginManagerScreen(project_root=repo)
+    app = DummyPluginManagerApp(screen)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        row = next(r for r in screen._state.installed_plugins if r.plugin_id == pid)
+        assert row.enabled is True
+        assert row.scope == "project"
+        screen._selected_plugin = row
+
+        class DummyOptionSelected:
+            """Test helper for option selection."""
+
+            option = Option("Disable plugin", id="action:toggle-enabled")
+
+        ev: Any = DummyOptionSelected()
+        await screen.on_option_list_option_selected(ev)
+        await pilot.pause()
+
+        assert pid not in load_all_enabled_plugin_ids(project_root=repo)
+        assert pid not in load_user_enabled_plugin_ids()
+
+
+def test_uninstall_cleans_orphan_plugin_data_and_reports_workspace_registered(
+    isolated_plugin_env: Path,
+) -> None:
+    """Verify full uninstall cleans up plugin_data_dir and workspace-registered plugins report path."""
+    from talkops.plugins.store import ensure_plugin_data_dir, plugin_data_dir
+
+    cache_dir = isolated_plugin_env / "cache" / "data_cleanup"
+    cache_dir.mkdir(parents=True)
+    pid = "data-plugin@market"
+
+    add_installed_plugin(pid, install_path=str(cache_dir), version="1.0.0", scope="user")
+    data_dir = ensure_plugin_data_dir(pid)
+    (data_dir / "state.db").write_text("cached", encoding="utf-8")
+    assert data_dir.is_dir()
+
+    uninstall_plugin(pid, scope="user")
+    assert not plugin_data_dir(pid).exists()
+
+    # Unmanaged workspace plugin in .agents/plugins/<name> reports its registration path
+    repo = isolated_plugin_env / "ws_repo"
+    ws_plugin = repo / ".agents" / "plugins" / "repo-local-plugin"
+    ws_plugin.mkdir(parents=True)
+    (ws_plugin / "plugin.json").write_text('{"name": "repo-local-plugin"}', encoding="utf-8")
+
+    with pytest.raises(PluginNotFoundError, match="registered at"):
+        uninstall_plugin("repo-local-plugin@project", scope="project", project_root=repo)

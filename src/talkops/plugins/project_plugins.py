@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Auto-discovery and loading of project-local plugin marketplaces.
 
 When a project contains a marketplace manifest inside its ``.talkops`` directory
@@ -32,7 +46,6 @@ from talkops.plugins.models import (
     ComponentInventory,
     PluginInstance,
 )
-
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -245,7 +258,7 @@ def load_project_plugins(project_root: Path | str | None) -> ProjectPluginResult
 
     # Check candidate locations for marketplace manifest
     manifest_path = None
-    for candidate in (root / ".talkops", root / ".opscode", root):
+    for candidate in (root / ".talkops", root):
         if candidate.is_dir():
             manifest_path = find_marketplace_manifest(candidate)
             if manifest_path is not None:
@@ -272,7 +285,7 @@ def load_project_plugins(project_root: Path | str | None) -> ProjectPluginResult
 
     for entry in marketplace.plugins:
         plugin_id = f"{entry.name}@{marketplace.name}"
-        if plugin_id in disabled_ids:
+        if plugin_id in disabled_ids or entry.name in disabled_ids:
             logger.info("Skipping project plugin %s (explicitly disabled)", plugin_id)
             continue
 

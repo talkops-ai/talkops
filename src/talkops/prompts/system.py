@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """System prompt builder for TalkOps.
 
 Template-based system prompt generation with model identity injection,
@@ -7,8 +21,8 @@ and dynamic runtime execution mode tailoring (interactive vs headless).
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Sequence
 
 from talkops.prompts.types import CloudProvider, normalize_cloud_provider
@@ -130,26 +144,24 @@ def build_cloud_provider_section(
     if provider_enum == CloudProvider.AWS:
         return (
             "### Cloud Platform Context: AWS\n"
-            "Active cloud target is **Amazon Web Services (AWS)**. Leverage built-in skills "
-            "(`aws-core`, `aws-terraform`, `aws-eks-autopilot`, `aws-iam-governance`, "
-            "`aws-vpc-networking`, `aws-cost-finops`, `aws-cloudwatch`) for verified CLI idioms, "
-            "authentication workflows, and deterministic playbooks."
+            "Active cloud target is **Amazon Web Services (AWS)**. Consult active skills in the Skills System "
+            "for verified CLI idioms, authentication workflows (`aws sts get-caller-identity`), and deterministic playbooks."
         )
     if provider_enum == CloudProvider.AZURE:
         return (
             "### Cloud Platform Context: Azure\n"
-            "Active cloud target is **Microsoft Azure**. Leverage built-in skill `azure-ops` "
+            "Active cloud target is **Microsoft Azure**. Consult active skills in the Skills System "
             "for subscription scoping (`az account show`), Entra ID, Managed Identities, AKS, and KQL queries."
         )
     if provider_enum == CloudProvider.GCP:
         return (
             "### Cloud Platform Context: Google Cloud (GCP)\n"
-            "Active cloud target is **Google Cloud Platform (GCP)**. Leverage built-in skill `gcp-ops` "
+            "Active cloud target is **Google Cloud Platform (GCP)**. Consult active skills in the Skills System "
             "for project verification, Workload Identity Federation, Service Account Impersonation, and GKE."
         )
     return (
         "### Cloud Platform Context: Multi-Cloud\n"
-        "Active environment spans **Multi-Cloud / Hybrid** architectures. Leverage built-in skill `multi-cloud-ops` "
+        "Active environment spans **Multi-Cloud / Hybrid** architectures. Consult active skills in the Skills System "
         "for provider context isolation, workload portability, and cross-provider IaC."
     )
 
@@ -288,10 +300,9 @@ def build_slash_commands_section(
 ) -> str:
     """Build the `<slash_commands>` system prompt section for interactive sessions.
 
-    Modeled on Antigravity CLI's `SlashCommandsSection`: instructs the model that
-    slash commands are user-facing TUI shortcuts it cannot execute itself, and lists
-    each recommendable command's `model_facing_description` so the model can
-    selectively suggest follow-up commands when contextually helpful.
+    Instructs the model that slash commands are user-facing TUI shortcuts it cannot
+    execute itself, and lists each recommendable command's `model_facing_description`
+    so the model can selectively suggest follow-up commands when contextually helpful.
     """
     if not interactive or is_subagent:
         return ""
@@ -710,7 +721,10 @@ The above `<agent_memory>` was loaded from files in your filesystem (e.g., `AGEN
 **When to Update Memory (via `edit_file` or `write_file`):**
 - When the operator explicitly asks you to remember a preference (e.g., "always deploy to us-west-2", "use Graviton instances for EKS").
 - When you discover durable architectural patterns, VPC topology constraints, or persistent platform quirks.
-- When the operator corrects your execution or provides workflow guidance. Capture WHY and encode it as a reusable operational pattern.
+- When the operator corrects your execution or you recover from a non-obvious failure mode. Capture it as a structured **Causal Experience (`Cue -> Lesson -> Evidence`)**:
+  - **Cue**: The exact error code, CLI/API symptom, or environment trigger.
+  - **Lesson**: Why the naive approach failed and the verified action to take instead.
+  - **Evidence**: The command, resource type, or manifest that proved the fix.
 
 **When NOT to Update Memory:**
 - Transient or single-turn diagnostic outputs (e.g., ephemeral instance IDs, timestamps, temporary error logs).

@@ -1,15 +1,28 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Live docked panel (`BackgroundTaskPanel`) for non-blocking background shell commands.
 
-Modeled after Antigravity CLI's ``ActiveItemsModel`` (`active_items.go`), rendering
-up to 5 active/recent background processes above `ChatInput` with live elapsed
+Renders up to 5 active/recent background processes above `ChatInput` with live elapsed
 timers, spinner frames, recent stdout activity badges, and interactive stdin alerts.
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
-import time
 from typing import TYPE_CHECKING, Any
 
 from textual import events
@@ -63,13 +76,16 @@ class _TaskRowRecord:
     log_path: str = ""
 
     def is_active(self) -> bool:
+        """Return whether active."""
         return self.status in {"running", "waiting_for_input"}
 
     def elapsed_seconds(self) -> float:
+        """Execute elapsed seconds on _TaskRowRecord."""
         end = self.completed_at if self.completed_at is not None else time.time()
         return max(0.0, end - self.started_at)
 
     def start_time_str(self) -> str:
+        """Start time str."""
         try:
             return datetime.fromtimestamp(self.started_at).strftime("%H:%M:%S")
         except Exception:
@@ -112,6 +128,7 @@ class BackgroundTaskPanel(Vertical):
     expanded: reactive[bool] = reactive(default=True, init=False)
 
     def __init__(self, *, id: str = "background-task-panel", **kwargs: Any) -> None:
+        """Initialize BackgroundTaskPanel."""
         super().__init__(id=id, **kwargs)
         self._records: dict[str, _TaskRowRecord] = {}
         self._order: list[str] = []
@@ -119,18 +136,22 @@ class BackgroundTaskPanel(Vertical):
         self._timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield Static("", id="bg-task-header", markup=False)
         yield Static("", id="bg-task-rows", markup=False)
 
     def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         if self._visible_records():
             self._ensure_timer()
             self._refresh()
 
     def on_unmount(self) -> None:
+        """Clean up component resources when unmounted from the DOM."""
         self._stop_timer()
 
     def on_click(self, event: events.Click) -> None:
+        """Handle mouse click events."""
         if getattr(event, "chain", 1) > 1 or bool(
             getattr(self.screen, "selections", None)
         ):

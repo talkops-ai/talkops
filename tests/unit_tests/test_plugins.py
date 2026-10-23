@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TalkOps local filesystem plugin management.
 
 Tests cover:
@@ -25,7 +39,10 @@ import pytest
 from talkops.commands._base import CommandContext
 from talkops.plugins.adapters.agents import plugin_subagents
 from talkops.plugins.adapters.commands import plugin_commands
-from talkops.plugins.adapters.mcp import _try_repair_mcp_json, discover_plugin_mcp_configs
+from talkops.plugins.adapters.mcp import (
+    _try_repair_mcp_json,
+    discover_plugin_mcp_configs,
+)
 from talkops.plugins.commands_cli import execute_plugin_command, setup_plugin_parser
 from talkops.plugins.manifest import build_inventory, load_manifest
 from talkops.plugins.marketplace import parse_marketplace_source
@@ -56,11 +73,11 @@ from talkops.plugins.store import (
     uninstall_plugin,
 )
 
-
 # ── Plugin ID and Source Parsing ─────────────────────────────
 
 
 def test_split_plugin_id():
+    """Verify split plugin id."""
     name, mp = split_plugin_id("financial-analysis@official")
     assert name == "financial-analysis"
     assert mp == "official"
@@ -70,6 +87,7 @@ def test_split_plugin_id():
 
 
 def test_parse_marketplace_source():
+    """Verify parse marketplace source."""
     src_gh = parse_marketplace_source("talkops/plugins")
     assert isinstance(src_gh, RepositoryMarketplaceSource)
     assert src_gh.value == "talkops/plugins"
@@ -82,6 +100,7 @@ def test_parse_marketplace_source():
 
 
 def test_load_manifest_and_inventory(tmp_path: Path):
+    """Verify load manifest and inventory."""
     plugin_dir = tmp_path / "my_plugin"
     plugin_dir.mkdir()
     manifest_file = plugin_dir / "plugin.json"
@@ -111,6 +130,7 @@ def test_load_manifest_and_inventory(tmp_path: Path):
 
 
 def test_build_inventory_detects_all_components(tmp_path: Path):
+    """Verify build inventory detects all components."""
     plugin_dir = tmp_path / "comprehensive_plugin"
     plugin_dir.mkdir()
     agents_dir = plugin_dir / "agents"
@@ -139,6 +159,7 @@ class TestScopedEnablement:
     """Tests for scoped settings.json enablement files."""
 
     def test_write_and_read_settings_enabled_plugins(self, tmp_path: Path):
+        """Verify write and read settings enabled plugins."""
         settings_file = tmp_path / "settings.json"
         _write_settings_enabled_plugins(settings_file, {"a@mp", "b@mp"})
 
@@ -146,16 +167,19 @@ class TestScopedEnablement:
         assert result == frozenset({"a@mp", "b@mp"})
 
     def test_read_nonexistent_settings_file(self, tmp_path: Path):
+        """Verify read nonexistent settings file."""
         result = _load_settings_enabled_plugins(tmp_path / "missing.json")
         assert result == frozenset()
 
     def test_read_corrupt_settings_file(self, tmp_path: Path):
+        """Verify read corrupt settings file."""
         bad_file = tmp_path / "settings.json"
         bad_file.write_text("not-json!!!", encoding="utf-8")
         result = _load_settings_enabled_plugins(bad_file)
         assert result == frozenset()
 
     def test_preserves_other_keys(self, tmp_path: Path):
+        """Verify preserves other keys."""
         settings_file = tmp_path / "settings.json"
         settings_file.write_text(
             json.dumps({"model": "gpt-4o", "enabledPlugins": {"old@mp": True}}),
@@ -167,6 +191,7 @@ class TestScopedEnablement:
         assert data["enabledPlugins"] == {"new@mp": True}
 
     def test_user_scope_enablement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify user scope enablement."""
         monkeypatch.setattr(
             "talkops.plugins.store._user_settings_path", lambda: tmp_path / "settings.json"
         )
@@ -177,6 +202,7 @@ class TestScopedEnablement:
         assert "test@mp" not in load_user_enabled_plugin_ids()
 
     def test_project_scope_enablement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify project scope enablement."""
         from talkops.config import paths
 
         project_root = tmp_path / "myproject"
@@ -193,6 +219,7 @@ class TestScopedEnablement:
         assert "test@mp" in result
 
     def test_local_scope_enablement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify local scope enablement."""
         from talkops.config import paths
 
         project_root = tmp_path / "myproject"
@@ -212,6 +239,7 @@ class TestScopedEnablement:
         assert "test@mp" in result
 
     def test_merged_enablement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify merged enablement."""
         from talkops.config import paths
 
         user_settings = tmp_path / "user" / "settings.json"
@@ -245,6 +273,7 @@ class TestScopedEnablement:
         assert merged == frozenset({"user-plugin@mp", "project-plugin@mp", "local-plugin@mp"})
 
     def test_scope_validation(self):
+        """Verify scope validation."""
         with pytest.raises(ValueError, match="project_root required"):
             set_plugin_enabled_for_scope("x@mp", True, scope="project")
         with pytest.raises(ValueError, match="project_root required"):
@@ -258,6 +287,7 @@ class TestScopedInstallRegistry:
     """Tests for array-per-plugin install registry with scope metadata."""
 
     def test_add_scoped_install_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify add scoped install entry."""
         state_dir = tmp_path / "state"
         monkeypatch.setattr(
             "talkops.plugins.store._installed_plugins_path",
@@ -279,6 +309,7 @@ class TestScopedInstallRegistry:
         assert all_entries["test@mp"][0].scope == "user"
 
     def test_multi_scope_install(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify multi scope install."""
         state_dir = tmp_path / "state"
         monkeypatch.setattr(
             "talkops.plugins.store._installed_plugins_path",
@@ -308,6 +339,7 @@ class TestScopedInstallRegistry:
         assert scopes == {"user", "project"}
 
     def test_replace_same_scope_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify replace same scope entry."""
         state_dir = tmp_path / "replace_test_state"
         monkeypatch.setattr(
             "talkops.plugins.store._installed_plugins_path",
@@ -334,6 +366,7 @@ class TestScopedInstallRegistry:
     def test_backward_compat_load_installed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
+        """Verify backward compat load installed."""
         state_dir = tmp_path / "compat_test_state"
         monkeypatch.setattr(
             "talkops.plugins.store._installed_plugins_path",
@@ -369,6 +402,7 @@ class TestScopedUninstall:
     """Tests for scope-aware uninstall logic."""
 
     def test_remove_single_scope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify remove single scope."""
         state_dir = tmp_path / "remove_single_state"
         monkeypatch.setattr(
             "talkops.plugins.store._installed_plugins_path",
@@ -400,6 +434,7 @@ class TestScopedUninstall:
         assert remaining["test@mp"][0].scope == "user"
 
     def test_remove_all_scopes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify remove all scopes."""
         state_dir = tmp_path / "remove_all_state"
         monkeypatch.setattr(
             "talkops.plugins.store._installed_plugins_path",
@@ -419,6 +454,7 @@ class TestScopedUninstall:
     def test_uninstall_deletes_cache_only_when_orphaned(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
+        """Verify uninstall deletes cache only when orphaned."""
         state_dir = tmp_path / "uninstall_orphan_state"
         monkeypatch.setattr(
             "talkops.plugins.store._installed_plugins_path",
@@ -489,6 +525,7 @@ class TestCLIPluginCommands:
     """Tests for talkops plugin CLI parsing and execution."""
 
     def test_setup_parser_subcommands(self):
+        """Verify setup parser subcommands."""
         parser = argparse.ArgumentParser()
         sub = parser.add_subparsers(dest="subcommand")
         setup_plugin_parser(sub)
@@ -506,6 +543,7 @@ class TestCLIPluginCommands:
         assert args_enable.scope == "local"
 
     def test_execute_plugin_list_empty(self, monkeypatch: pytest.MonkeyPatch):
+        """Verify execute plugin list empty."""
         monkeypatch.setattr(
             "talkops.plugins.commands_cli.list_available_plugins", lambda **kwargs: []
         )
@@ -514,6 +552,7 @@ class TestCLIPluginCommands:
         assert output == "No plugin marketplaces configured."
 
     def test_execute_plugin_list_json(self, monkeypatch: pytest.MonkeyPatch):
+        """Verify execute plugin list json."""
         monkeypatch.setattr(
             "talkops.plugins.commands_cli.list_available_plugins",
             lambda **kwargs: [("p1@mp", "Test Plugin", True)],
@@ -523,9 +562,11 @@ class TestCLIPluginCommands:
         assert output is None  # Printed JSON to stdout
 
     def test_execute_plugin_enable_disable(self, monkeypatch: pytest.MonkeyPatch):
+        """Verify execute plugin enable disable."""
         enabled_calls = []
 
         def mock_set_enabled(plugin_id, enabled, **kwargs):
+            """Provide mock set enabled test helper or fixture."""
             enabled_calls.append((plugin_id, enabled))
 
         monkeypatch.setattr(
@@ -550,6 +591,7 @@ class TestCLIPluginCommands:
 
 
 def test_plugin_subagents_adapter(tmp_path: Path):
+    """Verify plugin subagents adapter."""
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     agent_file = agents_dir / "cloud_architect.md"
@@ -578,6 +620,7 @@ def test_plugin_subagents_adapter(tmp_path: Path):
 
 
 def test_plugin_commands_adapter(tmp_path: Path):
+    """Verify plugin commands adapter."""
     commands_dir = tmp_path / "commands"
     commands_dir.mkdir()
     cmd_file = commands_dir / "dcf.md"
@@ -603,6 +646,7 @@ def test_plugin_commands_adapter(tmp_path: Path):
 
 def test_mcp_json_repair_logic():
     # Corrupt JSON with missing comma between object keys and missing closing brace
+    """Verify mcp json repair logic."""
     corrupt_content = """{
       "mcpServers": {
         "daloopa": {
@@ -621,6 +665,7 @@ def test_mcp_json_repair_logic():
 
 
 def test_discover_plugin_mcp_configs_with_repair(tmp_path: Path):
+    """Verify discover plugin mcp configs with repair."""
     mcp_file = tmp_path / ".mcp.json"
     mcp_file.write_text(
         """{
@@ -658,6 +703,7 @@ def test_discover_plugin_mcp_configs_with_repair(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_plugins_handler_cli_fallback():
+    """Verify plugins handler cli fallback."""
     from talkops.commands.core.plugins import PluginsHandler
 
     ctx = CommandContext(
@@ -670,3 +716,183 @@ async def test_plugins_handler_cli_fallback():
     assert res.success
     assert res.message is not None
     assert "Plugins" in res.message or "No plugins" in res.message
+
+
+def test_hierarchical_scope_override_and_workspace_exclude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify project/local scopes and plugins.json exclude override global user enablement per workspace."""
+    from talkops.config import paths
+    from talkops.plugins.store import load_all_disabled_plugin_ids
+
+    user_settings = tmp_path / "user" / "settings.json"
+    repo_a = tmp_path / "repo_a"
+    repo_b = tmp_path / "repo_b"
+    (repo_a / ".talkops").mkdir(parents=True)
+    (repo_a / ".agents").mkdir(parents=True)
+    (repo_b / ".talkops").mkdir(parents=True)
+
+    monkeypatch.setattr("talkops.plugins.store._user_settings_path", lambda: user_settings)
+    monkeypatch.setattr(
+        paths, "project_settings_path", lambda pr: pr / ".talkops" / "settings.json"
+    )
+    monkeypatch.setattr(
+        paths,
+        "project_local_settings_path",
+        lambda pr: pr / ".talkops" / "settings.local.json",
+    )
+    monkeypatch.setattr(
+        "talkops.plugins.store._ensure_local_settings_gitignored", lambda _: None
+    )
+
+    # Enable two plugins globally for user
+    set_plugin_enabled("global-one@mp", True)
+    set_plugin_enabled("global-two@mp", True)
+    set_plugin_enabled("global-disabled@mp", False)
+
+    # Disable global-one in repo_a via project settings, and enable global-disabled in repo_a
+    set_plugin_enabled_for_scope(
+        "global-one@mp", False, scope="project", project_root=repo_a
+    )
+    set_plugin_enabled_for_scope(
+        "global-disabled@mp", True, scope="local", project_root=repo_a
+    )
+
+    # Exclude global-two in repo_a via .agents/plugins.json
+    (repo_a / ".agents" / "plugins.json").write_text(
+        json.dumps({"exclude": ["global-two"]}),
+        encoding="utf-8",
+    )
+
+    enabled_a = load_all_enabled_plugin_ids(project_root=repo_a)
+    disabled_a = load_all_disabled_plugin_ids(project_root=repo_a)
+    assert "global-one@mp" not in enabled_a
+    assert "global-one@mp" in disabled_a
+    assert "global-two@mp" not in enabled_a
+    assert "global-two@mp" in disabled_a
+    assert "global-disabled@mp" in enabled_a
+    assert "global-disabled@mp" not in disabled_a
+
+    # In repo_b, global-one and global-two remain enabled and global-disabled remains disabled
+    enabled_b = load_all_enabled_plugin_ids(project_root=repo_b)
+    disabled_b = load_all_disabled_plugin_ids(project_root=repo_b)
+    assert "global-one@mp" in enabled_b
+    assert "global-two@mp" in enabled_b
+    assert "global-disabled@mp" not in enabled_b
+    assert "global-disabled@mp" in disabled_b
+
+
+def test_workspace_plugin_isolation_and_agents_manifest_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify .agents/plugins, .talkops/plugins, and plugins.json entries are isolated to their workspace."""
+    from talkops.config import paths
+    from talkops.plugins.discovery import discover_plugins
+
+    monkeypatch.setattr(
+        "talkops.plugins.store._user_settings_path", lambda: tmp_path / "user_settings.json"
+    )
+    monkeypatch.setattr(
+        paths, "project_settings_path", lambda pr: pr / ".talkops" / "settings.json"
+    )
+    monkeypatch.setattr(
+        paths,
+        "project_local_settings_path",
+        lambda pr: pr / ".talkops" / "settings.local.json",
+    )
+
+    repo_a = tmp_path / "repo_a"
+    repo_b = tmp_path / "repo_b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+
+    # 1. Create a plugin in repo_a/.agents/plugins/agy-style-plugin using .agents-plugin/plugin.json
+    agy_plugin = repo_a / ".agents" / "plugins" / "agy-style-plugin"
+    (agy_plugin / ".agents-plugin").mkdir(parents=True)
+    (agy_plugin / ".agents-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "agy-style-plugin", "version": "2.1.0"}),
+        encoding="utf-8",
+    )
+    (agy_plugin / "skills" / "agy-skill").mkdir(parents=True)
+    (agy_plugin / "skills" / "agy-skill" / "SKILL.md").write_text(
+        "---\nname: agy-skill\ndescription: Agy skill\n---\nInstructions",
+        encoding="utf-8",
+    )
+
+    # 2. Create a plugin referenced via repo_a/.talkops/plugins.json entries
+    ext_plugin = repo_a / "custom_ bundles" / "declared-plugin"
+    ext_plugin.mkdir(parents=True)
+    (ext_plugin / "plugin.json").write_text(
+        json.dumps({"name": "declared-plugin", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    (ext_plugin / "skills" / "declared-skill").mkdir(parents=True)
+    (ext_plugin / "skills" / "declared-skill" / "SKILL.md").write_text(
+        "---\nname: declared-skill\ndescription: Declared skill\n---\nInstructions",
+        encoding="utf-8",
+    )
+    (repo_a / ".talkops").mkdir(parents=True, exist_ok=True)
+    (repo_a / ".talkops" / "plugins.json").write_text(
+        json.dumps({"entries": ["../custom_ bundles/declared-plugin"]}),
+        encoding="utf-8",
+    )
+
+    res_a = discover_plugins(project_root=repo_a)
+    ids_a = {p.plugin_id for p in res_a.plugins}
+    assert "agy-style-plugin@project" in ids_a
+    assert "declared-plugin@project" in ids_a
+
+    # Verify Repo B cannot see Repo A's plugins
+    res_b = discover_plugins(project_root=repo_b)
+    assert len(res_b.plugins) == 0
+
+    # Verify disabling agy-style-plugin@project in repo_a suppresses it
+    set_plugin_enabled_for_scope(
+        "agy-style-plugin@project", False, scope="project", project_root=repo_a
+    )
+    res_a_after = discover_plugins(project_root=repo_a)
+    ids_a_after = {p.plugin_id for p in res_a_after.plugins}
+    assert "agy-style-plugin@project" not in ids_a_after
+    assert "declared-plugin@project" in ids_a_after
+
+
+def test_load_installed_plugins_excludes_foreign_projects_when_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify load_installed_plugins(include_foreign_projects=False) isolates project-scoped entries."""
+    state_dir = tmp_path / "isolated_state"
+    monkeypatch.setattr(
+        "talkops.plugins.store._installed_plugins_path",
+        lambda: state_dir / "installed_plugins.json",
+    )
+
+    repo_a = tmp_path / "repo_a"
+    repo_b = tmp_path / "repo_b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+
+    add_installed_plugin(
+        "repo-a-only@mp",
+        install_path="/cache/repo-a",
+        version="1.0.0",
+        scope="project",
+        project_root=repo_a,
+    )
+    add_installed_plugin(
+        "global-plugin@mp",
+        install_path="/cache/global",
+        version="1.0.0",
+        scope="user",
+    )
+
+    # In repo_a: both are visible
+    installed_a = load_installed_plugins(
+        project_root=repo_a, include_foreign_projects=False
+    )
+    assert set(installed_a) == {"repo-a-only@mp", "global-plugin@mp"}
+
+    # In repo_b with include_foreign_projects=False: repo-a-only@mp is hidden
+    installed_b = load_installed_plugins(
+        project_root=repo_b, include_foreign_projects=False
+    )
+    assert set(installed_b) == {"global-plugin@mp"}

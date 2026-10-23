@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Notification center panel for TalkOps TUI.
 
 Lists history of notifications, toasts, and warnings with dismiss and suppress options.
@@ -12,10 +26,10 @@ from rich.text import Text
 from textual import on
 from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
+from textual.notifications import SeverityLevel
 from textual.widget import Widget
 from textual.widgets import Button, Static
 
-from textual.notifications import SeverityLevel
 from talkops.ui.widgets.toast import ToastNotification
 
 
@@ -50,6 +64,7 @@ class NotificationCenter(Widget):
     ]
 
     def __init__(self, **kwargs) -> None:
+        """Initialize NotificationCenter."""
         super().__init__(**kwargs)
         self._notifications: list[ToastNotification] = []
         self._suppressed: set[SeverityLevel] = set()
@@ -57,6 +72,7 @@ class NotificationCenter(Widget):
     def add_notification(
         self, title: str, message: str, severity: SeverityLevel = "information"
     ) -> ToastNotification | None:
+        """Add notification."""
         if severity in self._suppressed:
             return None
         item = ToastNotification(
@@ -81,6 +97,7 @@ class NotificationCenter(Widget):
         self._suppressed.add(severity)
 
     def compose(self):
+        """Compose and yield child widgets for this component."""
         yield Static("Notifications & Alerts", classes="header")
         with VerticalScroll():
             if not self._notifications:
@@ -102,6 +119,7 @@ class NotificationCenter(Widget):
 
     @on(Button.Pressed, "#btn-close")
     def action_dismiss_panel(self) -> None:
+        """Execute the dismiss panel action."""
         self.remove()
 
 

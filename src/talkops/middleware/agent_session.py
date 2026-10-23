@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """``AgentSessionMiddleware`` — run an active plugin subagent on the session.
 
 When an agent persona is activated (e.g. via ``/agent:<name>`` or ``/agent <name>``),
@@ -92,11 +106,28 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
     @staticmethod
     def _finish(update: dict[str, Any]) -> dict[str, Any]:
         return {
+            "_agent_session_error": None,
             **update,
             "agent_session_request": None,
             "_agent_session_turn": True,
             "jump_to": "end",
         }
+
+    @staticmethod
+    def _emit_error_event(runtime: Any, error_msg: str, agent_name: str = "") -> None:
+        if runtime is None:
+            return
+        writer = getattr(runtime, "stream_writer", None)
+        if not callable(writer) and hasattr(runtime, "config"):
+            cfg = getattr(runtime, "config", None)
+            if isinstance(cfg, dict):
+                pregel_rt = cfg.get("configurable", {}).get("__pregel_runtime")
+                writer = getattr(pregel_rt, "stream_writer", None)
+        if callable(writer):
+            try:
+                writer({"type": "agent_session_error", "error": error_msg, "agent_name": agent_name})
+            except Exception:
+                pass
 
     # ── operations ───────────────────────────────────────
 
@@ -289,7 +320,14 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
             raise
         except Exception as exc:
             logger.exception("Agent session request failed: %s", exc)
-            return self._finish({"_agent_session_error": str(exc)})
+            agent_name = str(request.get("agent_name") or values.get("_active_agent_id") or "").strip()
+            plugin_id = request.get("plugin_id") or values.get("_active_agent_plugin_id")
+            self._emit_error_event(runtime, str(exc), agent_name)
+            return self._finish({
+                "_active_agent_id": agent_name or None,
+                "_active_agent_plugin_id": plugin_id,
+                "_agent_session_error": str(exc),
+            })
 
     @hook_config(can_jump_to=["end"])
     async def abefore_agent(self, state: AgentSessionChannels, runtime: Runtime[Any]) -> dict[str, Any] | None:
@@ -308,7 +346,14 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
             raise
         except Exception as exc:
             logger.exception("Agent session async request failed: %s", exc)
-            return self._finish({"_agent_session_error": str(exc)})
+            agent_name = str(request.get("agent_name") or values.get("_active_agent_id") or "").strip()
+            plugin_id = request.get("plugin_id") or values.get("_active_agent_plugin_id")
+            self._emit_error_event(runtime, str(exc), agent_name)
+            return self._finish({
+                "_active_agent_id": agent_name or None,
+                "_active_agent_plugin_id": plugin_id,
+                "_agent_session_error": str(exc),
+            })
 
 
 __all__ = [

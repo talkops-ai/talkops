@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for OpsModalScreen and modal foundation components.
 
 Tests the unified modal dialog container, PillTabs, ModalSearchInput,
@@ -8,14 +22,18 @@ from __future__ import annotations
 
 import importlib
 from typing import ClassVar
+from unittest.mock import MagicMock
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.events import Click
 from textual.widgets import Input, OptionList, Static
 
-# `talkops.config.settings` is shadowed by a Settings instance on the package.
-settings = importlib.import_module("talkops.config.settings")
-from talkops.ui.theme import get_css_variable_defaults, get_theme_colors, register_app_themes
+from talkops.ui.theme import (
+    get_css_variable_defaults,
+    get_theme_colors,
+    register_app_themes,
+)
 from talkops.ui.widgets.modal_base import (
     ModalDialog,
     ModalOptionRow,
@@ -27,23 +45,30 @@ from talkops.ui.widgets.modal_base import (
     format_modal_option_row,
 )
 
+# `talkops.config.settings` is shadowed by a Settings instance on the package.
+settings = importlib.import_module("talkops.config.settings")
+
 
 class _ThemedModalApp(App):
     """App carrying TalkOps theme variables for testing modal screens."""
 
     def __init__(self, screen_to_mount: OpsModalScreen | None = None) -> None:
+        """Initialize _ThemedModalApp."""
         super().__init__()
         register_app_themes(self)
         self.theme = "talkops-dark"
         self._screen_to_mount = screen_to_mount
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
+        """Provide get theme variable defaults test helper or fixture."""
         return get_css_variable_defaults(colors=get_theme_colors(self))
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield Static("Background content", id="bg")
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         if self._screen_to_mount is not None:
             await self.push_screen(self._screen_to_mount)
 
@@ -52,6 +77,7 @@ class _SampleModal(OpsModalScreen[str | None]):
     """Sample modal screen for testing foundation features."""
 
     def compose_modal(self) -> ComposeResult:
+        """Provide compose modal test helper or fixture."""
         yield PillTabs(
             [
                 ("discover", "Discover"),
@@ -118,6 +144,7 @@ async def test_escape_key_dismisses_modal():
         await pilot.pause()
 
         def on_dismiss(result):
+            """Provide on dismiss test helper or fixture."""
             nonlocal dismiss_result
             dismiss_result = result
 
@@ -143,7 +170,9 @@ async def test_pill_tabs_switching_and_counts():
     )
 
     class TabsApp(App):
+        """Test suite or helper class for tabs app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield tabs
 
     app = TabsApp()
@@ -413,8 +442,6 @@ async def test_pill_tab_click_event():
         assert tabs.active_tab == "discover"
 
         # Simulate click
-        from textual.events import Click
-        from unittest.mock import MagicMock
         click = MagicMock(spec=Click)
         installed_tab.on_click(click)
 
@@ -426,6 +453,7 @@ class _CompactModal(OpsModalScreen[None]):
     DIALOG_CLASSES: ClassVar[str] = "-compact"
 
     def compose_modal(self) -> ComposeResult:
+        """Provide compose modal test helper or fixture."""
         yield Static("Compact content")
 
 
@@ -433,6 +461,7 @@ class _WorkspaceModal(OpsModalScreen[None]):
     DIALOG_CLASSES: ClassVar[str] = "-workspace"
 
     def compose_modal(self) -> ComposeResult:
+        """Provide compose modal test helper or fixture."""
         yield Static("Workspace content")
 
 
@@ -534,12 +563,18 @@ def test_all_modal_subclasses_declare_dialog_classes():
     )
     from talkops.ui.widgets.model_selector import ModelSelectorScreen
     from talkops.ui.widgets.notification_settings import NotificationSettingsScreen
-    from talkops.ui.widgets.permissions_manager import PermissionsManagerScreen, _AddRuleScreen
+    from talkops.ui.widgets.permissions_manager import (
+        PermissionsManagerScreen,
+        _AddRuleScreen,
+    )
     from talkops.ui.widgets.plugin_manager import PluginManagerScreen
     from talkops.ui.widgets.pool_selector import PoolSelectorScreen
     from talkops.ui.widgets.skills_viewer import SkillDetailScreen, SkillsViewerScreen
     from talkops.ui.widgets.theme_selector import ThemeSelectorScreen
-    from talkops.ui.widgets.thread_selector import DeleteThreadConfirmScreen, ThreadSelectorScreen
+    from talkops.ui.widgets.thread_selector import (
+        DeleteThreadConfirmScreen,
+        ThreadSelectorScreen,
+    )
     from talkops.ui.widgets.welcome_popup import WelcomeDetailPopup
 
     expected_classes: dict[type[OpsModalScreen], str] = {

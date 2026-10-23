@@ -1,24 +1,43 @@
-"""Unit tests for CostTrackingMiddleware and genai-prices cost calculations."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for CostTrackingMiddleware and genai-prices cost calculations."""
+from typing import Any
 from unittest.mock import MagicMock
+from uuid import uuid4
+
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, LLMResult
 from langgraph.types import Overwrite
 
 from talkops.middleware.cost_tracking import (
+    SESSION_COST_EVENT_TYPE,
     CostTrackingMiddleware,
     estimate_cost,
     pricing_data_available,
     resolve_message_model,
-    SESSION_COST_EVENT_TYPE,
 )
 
 
 def test_pricing_data_available():
+    """Verify pricing data available."""
     assert isinstance(pricing_data_available(), bool)
 
 
 def test_estimate_cost_valid_tokens():
+    """Verify estimate cost valid tokens."""
     usage = {
         "input_tokens": 1500,
         "output_tokens": 300,
@@ -37,6 +56,7 @@ def test_estimate_cost_valid_tokens():
 
 
 def test_estimate_cost_provider_aliases():
+    """Verify estimate cost provider aliases."""
     usage = {"input_tokens": 1000, "output_tokens": 200}
     # Bedrock alias should be resolved to aws
     cost_bedrock = estimate_cost(usage, model_name="anthropic.claude-3-5-sonnet-20241022-v2:0", provider="bedrock")
@@ -48,6 +68,7 @@ def test_estimate_cost_provider_aliases():
 
 
 def test_estimate_cost_unpriceable_or_empty():
+    """Verify estimate cost unpriceable or empty."""
     assert estimate_cost(None, "gpt-4o") is None
     assert estimate_cost({}, "gpt-4o") is None
     assert estimate_cost({"input_tokens": 0, "output_tokens": 0}, "gpt-4o") is None
@@ -55,6 +76,7 @@ def test_estimate_cost_unpriceable_or_empty():
 
 
 def test_resolve_message_model():
+    """Verify resolve message model."""
     msg = AIMessage(
         content="Hello",
         response_metadata={
@@ -77,8 +99,7 @@ def test_resolve_message_model():
 
 
 def test_cost_tracking_middleware_nested_before_agent():
-    from typing import Any
-
+    """Verify cost tracking middleware nested before agent."""
     mw_main = CostTrackingMiddleware(nested=False)
     mw_nested = CostTrackingMiddleware(nested=True)
 
@@ -96,8 +117,7 @@ def test_cost_tracking_middleware_nested_before_agent():
 
 
 def test_cost_tracking_middleware_after_model_charges_message():
-    from typing import Any
-
+    """Verify cost tracking middleware after model charges message."""
     mw = CostTrackingMiddleware(nested=False)
 
     emitted_events = []
@@ -134,8 +154,7 @@ def test_cost_tracking_middleware_after_model_charges_message():
 
 
 def test_cost_tracking_middleware_subagent_cost_transfers():
-    from typing import Any
-
+    """Verify cost tracking middleware subagent cost transfers."""
     mw_subagent = CostTrackingMiddleware(nested=True)
 
     runtime_mock = MagicMock()
@@ -168,11 +187,10 @@ def test_cost_tracking_middleware_subagent_cost_transfers():
 
 
 def test_active_session_thread_id_fallback():
-    from uuid import uuid4
-    from langchain_core.outputs import LLMResult, ChatGeneration
+    """Verify active session thread id fallback."""
     from talkops.middleware.cost_tracking import (
-        ACTIVE_SESSION_THREAD_ID,
         _RECORDER,
+        ACTIVE_SESSION_THREAD_ID,
         _drain_recorded_costs,
         _thread_id,
     )
@@ -214,7 +232,7 @@ def test_active_session_thread_id_fallback():
 
 
 def test_cost_tracking_middleware_wrap_model_call():
-    from typing import Any
+    """Verify cost tracking middleware wrap model call."""
     from talkops.middleware.cost_tracking import (
         ACTIVE_SESSION_THREAD_ID,
         CostTrackingMiddleware,
@@ -230,6 +248,7 @@ def test_cost_tracking_middleware_wrap_model_call():
     seen_thread = None
 
     def dummy_handler(req: Any) -> Any:
+        """Provide dummy handler test helper or fixture."""
         nonlocal seen_thread
         seen_thread = ACTIVE_SESSION_THREAD_ID.get()
         return "response"
@@ -244,7 +263,7 @@ def test_cost_tracking_middleware_wrap_model_call():
 
 @pytest.mark.asyncio
 async def test_cost_tracking_middleware_awrap_model_call():
-    from typing import Any
+    """Verify cost tracking middleware awrap model call."""
     from talkops.middleware.cost_tracking import (
         ACTIVE_SESSION_THREAD_ID,
         CostTrackingMiddleware,
@@ -260,6 +279,7 @@ async def test_cost_tracking_middleware_awrap_model_call():
     seen_thread = None
 
     async def dummy_handler(req: Any) -> Any:
+        """Provide dummy handler test helper or fixture."""
         nonlocal seen_thread
         seen_thread = ACTIVE_SESSION_THREAD_ID.get()
         return "async_response"
@@ -273,7 +293,6 @@ async def test_cost_tracking_middleware_awrap_model_call():
 
 def test_cost_tracking_zero_cost_token_transfer_claim():
     """Verify that transfers with 0 cost but positive tokens are claimed."""
-    from typing import Any
     from talkops.middleware.cost_tracking import CostTrackingMiddleware
 
     root_mw = CostTrackingMiddleware(nested=False)

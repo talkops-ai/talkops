@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Built-in ClientGatewayAddon (`client-gateway`) for TalkOps Server Mode.
 
 Exposes the `/api/v1/*` remote TUI/CLI session, thread lifecycle, server info,
@@ -485,6 +499,7 @@ class ClientGatewayAddon(BaseServerAddon):
     enabled_by_default = True
 
     def get_routes(self) -> list[BaseRoute]:
+        """Retrieve routes."""
         return [
             Route("/api/v1/server/info", endpoint=server_info_endpoint, methods=["GET"]),
             Route("/api/v1/threads", endpoint=api_list_threads_endpoint, methods=["GET"]),
@@ -502,6 +517,7 @@ class ClientGatewayAddon(BaseServerAddon):
         ]
 
     async def health_check(self) -> AddonHealthStatus:
+        """Execute health check on ClientGatewayAddon."""
         storage_backend = "postgres" if get_postgres_session_uri() else "sqlite"
         return AddonHealthStatus(
             name=self.name,

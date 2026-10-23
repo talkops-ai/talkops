@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """LangGraph Custom Authentication & Multi-User Resource Isolation for TalkOps Server Mode.
 
 Implements the official LangGraph `langgraph_sdk.Auth` specification:
@@ -14,7 +28,6 @@ Implements the official LangGraph `langgraph_sdk.Auth` specification:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import hashlib
 import hmac
 import json
@@ -22,6 +35,7 @@ import os
 import re
 import secrets
 import time
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 import httpx
@@ -185,11 +199,17 @@ def verify_jwt_token(token: str) -> dict[str, Any]:
             if jwk_client is None:
                 jwk_client = PyJWKClient(jwks_url, cache_keys=True, lifespan=300)
                 _jwks_clients[jwks_url] = jwk_client
-            signing_key = jwk_client.get_signing_key_from_jwt(token).key
+            try:
+                signing_key = jwk_client.get_signing_key_from_jwt(token).key
+            except jwt.PyJWKClientError:
+                # RFC 7517 key-rollover best practice: force a single JWKS cache refresh on unknown `kid`
+                jwk_client = PyJWKClient(jwks_url, cache_keys=True, lifespan=300)
+                _jwks_clients[jwks_url] = jwk_client
+                signing_key = jwk_client.get_signing_key_from_jwt(token).key
             claims = jwt.decode(
                 token,
                 signing_key,
-                algorithms=[alg, "RS256", "ES256", "EdDSA"],
+                algorithms=["RS256", "ES256", "EdDSA"],
                 issuer=expected_issuer,
                 audience=expected_audience,
                 options=decode_options,
@@ -198,7 +218,7 @@ def verify_jwt_token(token: str) -> dict[str, Any]:
             claims = jwt.decode(
                 token,
                 public_key,
-                algorithms=[alg, "RS256", "ES256", "EdDSA"],
+                algorithms=["RS256", "ES256", "EdDSA"],
                 issuer=expected_issuer,
                 audience=expected_audience,
                 options=decode_options,
@@ -285,6 +305,10 @@ async def verify_token_with_control_plane(
         or os.environ.get("TALKOPS_CONTROL_PLANE_URL")
         or ""
     ).strip().rstrip("/")
+    if not cp_url:
+        jwks_env = os.environ.get("TALKOPS_CONTROL_PLANE_JWKS_URL", "").strip()
+        if jwks_env and "/.well-known/" in jwks_env:
+            cp_url = jwks_env.split("/.well-known/", 1)[0].strip().rstrip("/")
     if not cp_url:
         raise ValueError("TALKOPS_CONTROL_PLANE_URL is not configured")
 
@@ -514,6 +538,7 @@ class PlaceholderTokenAuthProvider:
         headers: Mapping[str, str],
         path: str | None = None,
     ) -> dict[str, Any]:
+        """Execute authenticate on PlaceholderTokenAuthProvider."""
         norm = _normalize_headers(headers)
         req_path = (path or "").strip()
 
@@ -567,16 +592,42 @@ class PlaceholderTokenAuthProvider:
 
         explicit_user = norm.get("x-talkops-user", "").strip()
 
+        cp_url = os.environ.get("TALKOPS_CONTROL_PLANE_URL", "").strip().rstrip("/")
+
         # 5. If token is a signed JWT (e.g. temporary token from Control Plane or /api/v1/auth/token),
-        #    verify its cryptographic signature and expiry in <1ms.
+        #    verify its cryptographic signature and expiry in <1ms, and when a Control Plane service key
+        #    is configured, also introspect via /api/v1/auth/verify (cached by TTL) for live revocation & audit.
         if raw_token and _looks_like_jwt(raw_token):
             jwt_user = verify_jwt_token(raw_token)
             if explicit_user and _SAFE_USER_RE.match(explicit_user) and jwt_user["identity"].startswith("user_"):
                 jwt_user["identity"] = explicit_user
+            service_key = os.environ.get("TALKOPS_CONTROL_PLANE_SERVICE_KEY", "").strip()
+            jwt_cp_url = cp_url
+            if not jwt_cp_url:
+                jwks_env = os.environ.get("TALKOPS_CONTROL_PLANE_JWKS_URL", "").strip()
+                if jwks_env and "/.well-known/" in jwks_env:
+                    jwt_cp_url = jwks_env.split("/.well-known/", 1)[0].strip().rstrip("/")
+            if jwt_cp_url and service_key:
+                try:
+                    unverified_hdr = jwt.get_unverified_header(raw_token)
+                    alg = str(unverified_hdr.get("alg") or "HS256")
+                except Exception:
+                    alg = "HS256"
+                if alg != "HS256":
+                    try:
+                        cp_verified = await verify_token_with_control_plane(
+                            raw_token,
+                            control_plane_url=jwt_cp_url,
+                        )
+                        if explicit_user and _SAFE_USER_RE.match(explicit_user) and cp_verified["identity"].startswith("user_"):
+                            cp_verified["identity"] = explicit_user
+                        return cp_verified
+                    except Auth.exceptions.HTTPException as cp_exc:
+                        if "Could not verify token with Control Plane" not in str(cp_exc.detail):
+                            raise
             return jwt_user
 
         # 6. If external Control Plane URL is configured, verify the API key / token with Control Plane
-        cp_url = os.environ.get("TALKOPS_CONTROL_PLANE_URL", "").strip()
         if cp_url:
             if not raw_token:
                 raise Auth.exceptions.HTTPException(
@@ -730,13 +781,15 @@ async def on_thread_create(
 ) -> dict[str, str] | None:
     """Stamp `owner` metadata on newly created threads."""
     user_id = ctx.user.identity if ctx.user else "default"
-    metadata = value.setdefault("metadata", {})
+    metadata = value.setdefault("metadata", {}) if isinstance(value, dict) else {}
     if isinstance(metadata, dict):
         if metadata.get("source") == "webhook":
             metadata.setdefault("owner", "webhook")
         else:
             metadata.setdefault("owner", user_id)
     if user_id in ("default", "local", "webhook"):
+        return None
+    if isinstance(value, dict) and value.get("if_exists") == "do_nothing":
         return None
     return {"owner": metadata.get("owner", user_id)}
 
@@ -750,6 +803,12 @@ async def on_thread_access(
 ) -> dict[str, str] | None:
     """Allow operators to access their own threads (and shared webhook threads)."""
     user_id = ctx.user.identity if ctx.user else "default"
+    if isinstance(value, dict) and isinstance(value.get("metadata"), dict):
+        meta = value["metadata"]
+        if meta.get("source") == "webhook":
+            meta.setdefault("owner", "webhook")
+        else:
+            meta.setdefault("owner", user_id)
     if user_id in ("default", "local", "webhook"):
         return None
     # Note: LangGraph thread metadata filter matches exact key-value pairs;

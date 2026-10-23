@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# OpsCloud — PyPI Release Pipeline
+# TalkOps — PyPI Release Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 # Trigger: Push a tag like `v0.3.0b5` or manual workflow_dispatch
 # Result:  Test ➔ Build ➔ Asset Verification ➔ Publish to PyPI
@@ -50,7 +50,7 @@ jobs:
           VERSION="${TAG#v}"
 
           PKG_NAME=$(grep '^name' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          [ -z "$PKG_NAME" ] && PKG_NAME="opscloud"
+          [ -z "$PKG_NAME" ] && PKG_NAME="talkops-ai"
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -129,21 +129,21 @@ jobs:
           WHEEL=$(ls dist/*.whl | head -1)
 
           # 1. Verify Entry Point Binary Script
-          if ! unzip -l "$WHEEL" | grep -q "opscloud/cli/main.py"; then
-            echo "❌ Critical Error: Missing opscloud/cli/main.py in wheel!"
+          if ! unzip -l "$WHEEL" | grep -q "talkops/cli/main.py"; then
+            echo "❌ Critical Error: Missing talkops/cli/main.py in wheel!"
             exit 1
           fi
 
           # 2. Verify Built-in Skills
           for skill in remember skill-creator; do
-            if ! unzip -l "$WHEEL" | grep -q "opscloud/built_in_skills/${skill}/SKILL.md"; then
+            if ! unzip -l "$WHEEL" | grep -q "talkops/built_in_skills/${skill}/SKILL.md"; then
               echo "❌ Critical Error: Missing skill '${skill}' in wheel!"
               exit 1
             fi
           done
 
           # 3. Verify Prompt Templates and TUI Stylesheet
-          for asset in "opscloud/prompts/templates/system_prompt.md" "opscloud/ui/app.tcss"; do
+          for asset in "talkops/prompts/templates/system_prompt.md" "talkops/ui/app.tcss"; do
             if ! unzip -l "$WHEEL" | grep -q "$asset"; then
               echo "❌ Critical Error: Missing asset '${asset}' in wheel!"
               exit 1
@@ -151,17 +151,21 @@ jobs:
           done
 
           # 4. Verify Entry Point in wheel metadata
-          if ! unzip -p "$WHEEL" "*.dist-info/entry_points.txt" | grep -q "opscloud = opscloud.cli.main:cli_main"; then
-            echo "❌ Critical Error: 'opscloud' console script entry point not registered in wheel metadata!"
+          if ! unzip -p "$WHEEL" "*.dist-info/entry_points.txt" | grep -q "talkops = talkops.cli.main:cli_main"; then
+            echo "❌ Critical Error: 'talkops' console script entry point not registered in wheel metadata!"
+            exit 1
+          fi
+          if ! unzip -p "$WHEEL" "*.dist-info/entry_points.txt" | grep -q "ops = talkops.cli.main:cli_main"; then
+            echo "❌ Critical Error: 'ops' console script alias not registered in wheel metadata!"
             exit 1
           fi
 
-          echo "✅ OpsCloud package integrity verified."
+          echo "✅ TalkOps package integrity verified."
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-opscloud
+          name: dist-talkops
           path: dist/
           retention-days: 7
 
@@ -177,7 +181,7 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: dist-opscloud
+          name: dist-talkops
           path: dist/
 
       - name: Publish to PyPI

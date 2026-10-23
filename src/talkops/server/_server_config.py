@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Typed configuration for app-to-server subprocess communication."""
 
 from __future__ import annotations
@@ -62,6 +76,7 @@ class ServerConfig:
     addons_config_path: str | None = None
 
     def to_env(self) -> dict[str, str]:
+        """Convert instance to env."""
         env: dict[str, str] = {
             f"{SERVER_ENV_PREFIX}ASSISTANT_ID": self.assistant_id,
             f"{SERVER_ENV_PREFIX}AUTO_APPROVE": str(self.auto_approve).lower(),
@@ -132,6 +147,7 @@ class ServerConfig:
 
     @classmethod
     def from_env(cls) -> ServerConfig:
+        """Construct instance from env."""
         raw_sal = _read_env_str("SHELL_ALLOW_LIST")
         shell_allow_list = tuple(s.strip() for s in raw_sal.split(",") if s.strip()) if raw_sal else None
         server_log_level = _read_env_str("LOG_LEVEL") or "WARNING"
@@ -233,6 +249,7 @@ class ServerConfig:
         addons_config: str | None = None,
         addons_config_path: str | None = None,
     ) -> ServerConfig:
+        """Construct instance from cli args."""
         from talkops.state.postgres_session import get_postgres_session_uri
 
         resolved_cwd = (

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# OpsCloud — Continuous Integration (CI) Pipeline
+# TalkOps — Continuous Integration (CI) Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 # Runs on: Pull Requests & pushes to main
 # Validates: Unit tests, Python 3.12/3.13 matrix, build integrity & wheel assets
@@ -125,15 +125,15 @@ jobs:
           echo "Inspecting wheel: $WHEEL"
 
           # 1. Verify Entry Point Binary Script
-          if ! unzip -l "$WHEEL" | grep -q "opscloud/cli/main.py"; then
-            echo "❌ Critical Error: Missing opscloud/cli/main.py in wheel!"
+          if ! unzip -l "$WHEEL" | grep -q "talkops/cli/main.py"; then
+            echo "❌ Critical Error: Missing talkops/cli/main.py in wheel!"
             exit 1
           fi
           echo "✅ CLI entry point verified in wheel."
 
           # 2. Verify Root Global Skills
           for skill in remember skill-creator; do
-            if ! unzip -l "$WHEEL" | grep -q "opscloud/built_in_skills/${skill}/SKILL.md"; then
+            if ! unzip -l "$WHEEL" | grep -q "talkops/built_in_skills/${skill}/SKILL.md"; then
               echo "❌ Critical Error: Missing root skill '${skill}' in wheel!"
               exit 1
             fi
@@ -141,7 +141,7 @@ jobs:
           echo "✅ Built-in skills verified in wheel."
 
           # 3. Verify Prompt Templates and TUI Stylesheet
-          for asset in "opscloud/prompts/templates/system_prompt.md" "opscloud/ui/app.tcss"; do
+          for asset in "talkops/prompts/templates/system_prompt.md" "talkops/ui/app.tcss"; do
             if ! unzip -l "$WHEEL" | grep -q "$asset"; then
               echo "❌ Critical Error: Missing core asset '${asset}' in wheel!"
               exit 1
@@ -150,8 +150,12 @@ jobs:
           echo "✅ Core prompt templates and TUI stylesheet verified in wheel."
 
           # 4. Verify Entry Point Registration in wheel metadata
-          if ! unzip -p "$WHEEL" "*.dist-info/entry_points.txt" | grep -q "opscloud = opscloud.cli.main:cli_main"; then
-            echo "❌ Critical Error: 'opscloud' console script entry point not registered in wheel metadata!"
+          if ! unzip -p "$WHEEL" "*.dist-info/entry_points.txt" | grep -q "talkops = talkops.cli.main:cli_main"; then
+            echo "❌ Critical Error: 'talkops' console script entry point not registered in wheel metadata!"
             exit 1
           fi
-          echo "✅ 'opscloud' console script registration verified in entry_points.txt."
+          if ! unzip -p "$WHEEL" "*.dist-info/entry_points.txt" | grep -q "ops = talkops.cli.main:cli_main"; then
+            echo "❌ Critical Error: 'ops' console script alias not registered in wheel metadata!"
+            exit 1
+          fi
+          echo "✅ 'talkops' and 'ops' console script registrations verified in entry_points.txt."

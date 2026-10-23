@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for smooth scrolling and layout-thrash prevention."""
 
 from __future__ import annotations
@@ -24,6 +38,7 @@ class _ThemedTestApp(App[None]):
     """Minimal test App providing TalkOps custom CSS variables."""
 
     def get_css_variables(self) -> dict[str, str]:
+        """Provide get css variables test helper or fixture."""
         return {**super().get_css_variables(), **get_css_variable_defaults()}
 
 
@@ -78,7 +93,9 @@ async def test_scroll_coalescer_and_direction_reversal() -> None:
     """Verify 16ms frame-budget scroll coalescing and direction reversal reset."""
 
     class ScrollHostApp(_ThemedTestApp):
+        """Test suite or helper class for scroll host app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield MessageList(id="messages")
 
     app = ScrollHostApp()
@@ -122,7 +139,9 @@ async def test_user_scroll_up_locks_out_streaming_yank_and_relocks_at_bottom() -
     """Verify scrolling up prevents streaming updates from yanking viewport to bottom."""
 
     class ScrollHostApp(_ThemedTestApp):
+        """Test suite or helper class for scroll host app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield MessageList(id="messages")
 
     app = ScrollHostApp()
@@ -182,7 +201,9 @@ async def test_spinners_do_not_trigger_full_tree_layout_reflow() -> None:
     """Verify 10Hz spinners on ToolCallMessage, StatusBar, and SubagentPanel use layout=False."""
 
     class SpinnerHostApp(_ThemedTestApp):
+        """Test suite or helper class for spinner host app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield MessageList(id="messages")
             yield SubagentPanel(id="subagent-panel")
             yield StatusBar(id="status-bar")
@@ -231,7 +252,9 @@ async def test_hover_recalculation_suppressed_during_active_scroll() -> None:
     """Verify App._update_mouse_over is suppressed while MessageList is actively scrolling."""
 
     class HoverScrollApp(_ThemedTestApp):
+        """Test suite or helper class for hover scroll app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             yield MessageList(id="messages")
 
     app = HoverScrollApp()
@@ -270,7 +293,9 @@ async def test_scroll_reflows_welcome_banner_and_markdown_children_in_compositor
     from talkops.ui.widgets.welcome import WelcomeBanner, _InfoPanel, _LeftPanel
 
     class WelcomeScrollApp(_ThemedTestApp):
+        """Test suite or helper class for welcome scroll app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             with MessageList(id="messages"):
                 yield WelcomeBanner(id="welcome")
 
@@ -319,7 +344,9 @@ async def test_streaming_assistant_response_keeps_auto_scrolling_to_bottom() -> 
     from talkops.ui.widgets.welcome import WelcomeBanner
 
     class StreamingScrollApp(_ThemedTestApp):
+        """Test suite or helper class for streaming scroll app."""
         def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
             with MessageList(id="messages"):
                 yield WelcomeBanner(id="welcome")
 

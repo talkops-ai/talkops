@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tool renderers for approval widgets - registry pattern."""
 
 from __future__ import annotations
@@ -36,6 +50,7 @@ class ToolRendererResult:
         file_path: str | None = None,
         content_preview: str | None = None,
     ) -> None:
+        """Initialize ToolRendererResult."""
         self.title = title
         self.details = details or []
         self.diff_lines = diff_lines
@@ -69,6 +84,7 @@ class WriteFileRenderer(ToolRenderer):
         tool_args: dict[str, Any],
         assistant_id: str | None = None,
     ) -> tuple[type[ToolApprovalWidget], dict[str, Any]]:
+        """Retrieve approval widget."""
         file_path = str(
             tool_args.get("file_path")
             or tool_args.get("path")
@@ -121,6 +137,7 @@ class TaskRenderer(ToolRenderer):
         tool_args: dict[str, Any],
         assistant_id: str | None = None,
     ) -> tuple[type[ToolApprovalWidget], dict[str, Any]]:
+        """Retrieve approval widget."""
         return TaskApprovalWidget, tool_args
 
 
@@ -132,6 +149,7 @@ class DeleteFileRenderer(ToolRenderer):
         tool_args: dict[str, Any],
         assistant_id: str | None = None,
     ) -> tuple[type[ToolApprovalWidget], dict[str, Any]]:
+        """Retrieve approval widget."""
         path = str(tool_args.get("file_path") or tool_args.get("path") or tool_args.get("TargetFile") or "")
         preview = build_approval_preview(
             "delete", {"file_path": path}, assistant_id=assistant_id
@@ -164,6 +182,7 @@ class EditFileRenderer(ToolRenderer):
         tool_args: dict[str, Any],
         assistant_id: str | None = None,
     ) -> tuple[type[ToolApprovalWidget], dict[str, Any]]:
+        """Retrieve approval widget."""
         file_path = str(
             tool_args.get("file_path")
             or tool_args.get("path")

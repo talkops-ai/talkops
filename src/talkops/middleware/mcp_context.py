@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """MCPContextMiddleware — inject MCP server inventory into the system prompt.
 
 When included in a subagent's middleware list, it appends an ``**MCP Servers**``
@@ -9,7 +23,7 @@ Uses preloaded ``MCPServerInfo`` metadata — no live session connections needed
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
 from deepagents.middleware._utils import append_to_system_message
@@ -73,16 +87,25 @@ def _build_mcp_context_from_infos(
             continue
 
         has_active_tools = True
-        tool_names = [getattr(t, "name", str(t)) for t in tools]
-        lines.append(f"- **{name}** ({transport}): {', '.join(tool_names)}")
+        is_scoped_server = name.startswith(("subagent__", "plugin__"))
+        tool_names: list[str] = []
+        for t in tools:
+            orig = getattr(t, "original_name", "") or ""
+            raw = getattr(t, "name", str(t))
+            tool_names.append(orig if (is_scoped_server and orig) else raw)
+        shown = tool_names[:_TOOL_NAME_DISPLAY_LIMIT]
+        extra_count = len(tool_names) - len(shown)
+        suffix = f", ... (+{extra_count} more in schema dir)" if extra_count > 0 else ""
+        lines.append(f"- **{name}** ({transport}): {', '.join(shown)}{suffix}")
 
     if has_active_tools:
         state_dir = get_mcp_server_state_dir()
         lines.append(
             f"\nEach MCP server has a directory `{state_dir}/<serverName>` containing tool schemas "
             "(`<toolName>.json`). Eagerly loaded tools are registered directly (`<serverName>:<toolName>`). "
-            "For lazy-loaded tools, read the corresponding schema file to understand its arguments and usage, "
-            "then call the tool using `call_mcp_tool(server_name=<serverName>, tool_name=<toolName>, arguments={...})`."
+            f"For lazy-loaded tools, call `read_file` directly on `{state_dir}/<serverName>/<toolName>.json` "
+            f"(skip `ls` unless the tool name is hidden behind `+N more in schema dir`), "
+            "then call `call_mcp_tool(server_name=<serverName>, tool_name=<toolName>, arguments={...})`."
         )
 
     return "\n".join(lines)
@@ -145,7 +168,6 @@ class MCPContextMiddleware(AgentMiddleware):
             getattr(s, "name", str(s)): s for s in self._server_info
         }
         if isinstance(raw_servers, dict) and raw_servers:
-            from collections.abc import Mapping
             from talkops.mcp.preload import (
                 get_cached_mcp_server_infos,
                 is_mcp_server_info_cached,
