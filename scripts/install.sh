@@ -415,19 +415,25 @@ prompt_yn() {
     return 0
   fi
 
-  if [ ! -t 0 ]; then
-    # Unattended / non-interactive session
-    return 0
-  fi
-
-  local choice
-  if [ "$default_ans" = "y" ]; then
-    printf "%s [Y/n]: " "$prompt_text"
+  local choice=""
+  if [ -t 0 ]; then
+    if [ "$default_ans" = "y" ]; then
+      printf "%s [Y/n]: " "$prompt_text"
+    else
+      printf "%s [y/N]: " "$prompt_text"
+    fi
+    read -r choice || choice="$default_ans"
+  elif [ -t 1 ] && [ -r /dev/tty ]; then
+    if [ "$default_ans" = "y" ]; then
+      printf "%s [Y/n]: " "$prompt_text"
+    else
+      printf "%s [y/N]: " "$prompt_text"
+    fi
+    read -r choice < /dev/tty || choice="$default_ans"
   else
-    printf "%s [y/N]: " "$prompt_text"
+    choice="$default_ans"
   fi
 
-  read -r choice || return 1
   choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
 
   if [ -z "$choice" ]; then
