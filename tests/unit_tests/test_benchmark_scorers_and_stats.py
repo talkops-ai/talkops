@@ -18,6 +18,10 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
+pytest.importorskip("talkops.benchmarks")
+
 from talkops.benchmarks.scorers import (
     CANONICAL_28_FAULT_TAXONOMY,
     SREGYM_LCS_PASS_THRESHOLD,

@@ -88,15 +88,27 @@ def setup_serve_parser(subparsers: Any) -> None:
 
 
 def setup_benchmark_parser(subparsers: Any) -> None:
-    """Execute setup benchmark parser."""
-    from talkops.cli.commands.benchmark import setup_benchmark_parser as _setup
+    """Execute setup benchmark parser if benchmark module is installed."""
+    try:
+        from talkops.cli.commands.benchmark import (
+            setup_benchmark_parser as _setup,
+        )
+    except ImportError:
+        return
 
     _setup(subparsers)
 
 
 def run_benchmark_command(*args: Any, **kwargs: Any) -> int:
-    """Execute benchmark command."""
-    from talkops.cli.commands.benchmark import run_benchmark_command as _run
+    """Execute benchmark command if benchmark module is installed."""
+    try:
+        from talkops.cli.commands.benchmark import run_benchmark_command as _run
+    except ImportError:
+        print(
+            "Error: Benchmark suite ('talkops.benchmarks') is not installed in this build.",
+            file=sys.stderr,
+        )
+        return 1
 
     return _run(*args, **kwargs)
 

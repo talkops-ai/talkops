@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+pytest.importorskip("talkops.benchmarks")
+
 from talkops.benchmarks.harbor_adapter import (
     DEFAULT_MAX_TURNS,
     HARBOR_VERSION_PIN,

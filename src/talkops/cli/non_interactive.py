@@ -209,13 +209,30 @@ async def _run_headless(
     full_response: list[str] = []
     rubric_status: str | None = None
 
-    from talkops.benchmarks.trajectory import TrajectoryRecorder
+    try:
+        from talkops.benchmarks.trajectory import TrajectoryRecorder
 
-    recorder = TrajectoryRecorder(
-        effective_thread,
-        trajectory_file=trajectory_file,
-        start_monotonic=start_time,
-    )
+        recorder: Any = TrajectoryRecorder(
+            effective_thread,
+            trajectory_file=trajectory_file,
+            start_monotonic=start_time,
+        )
+    except ImportError:
+
+        class _NoOpRecorder:
+            def record_event(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def record_tool_activity(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def record_custom_chunk(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def finalize(self, **kwargs: Any) -> dict[str, Any]:
+                return {}
+
+        recorder = _NoOpRecorder()
     recorder.record_event(
         "run_start",
         {

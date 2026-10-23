@@ -27,14 +27,33 @@ from typing import Any
 import httpx
 import pytest
 from starlette.testclient import TestClient
-from talkops_channels import (  # type: ignore[import-not-found]
-    ChannelExposure,
-    ChannelHub,
-    ChannelsAddon,
-    ExposureMode,
-    PairingStore,
-    SlackChannelConfig,
-    SlackWebhookChannel,
+
+try:
+    from talkops_channels import (  # type: ignore[import-not-found]
+        ChannelExposure,
+        ChannelHub,
+        ChannelsAddon,
+        ExposureMode,
+        PairingStore,
+        SlackChannelConfig,
+        SlackWebhookChannel,
+    )
+
+    _HAS_TALKOPS_CHANNELS = True
+except ImportError:
+    ChannelExposure = Any  # type: ignore[misc,assignment]
+    ChannelHub = Any  # type: ignore[misc,assignment]
+    ChannelsAddon = Any  # type: ignore[misc,assignment]
+    ExposureMode = Any  # type: ignore[misc,assignment]
+    PairingStore = Any  # type: ignore[misc,assignment]
+    SlackChannelConfig = Any  # type: ignore[misc,assignment]
+    SlackWebhookChannel = Any  # type: ignore[misc,assignment]
+    _HAS_TALKOPS_CHANNELS = False
+
+_LIBS_CHANNELS_DIR = Path(__file__).resolve().parents[3] / "libs" / "channels"
+_SKIP_EXTERNAL_CHANNELS = pytest.mark.skipif(
+    not _HAS_TALKOPS_CHANNELS or not _LIBS_CHANNELS_DIR.exists(),
+    reason="Requires external talkops_channels package and libs/channels directory",
 )
 
 from talkops.addons import (
@@ -69,6 +88,7 @@ from talkops.webhooks.models import (
 from talkops.webhooks.sinks import WebhookRunResult
 
 
+@_SKIP_EXTERNAL_CHANNELS
 def test_addon_manifest_and_marketplace_in_libs_directory() -> None:
     """Verify `.talkops/addon.json` and `.talkops/marketplace.json` in `libs/`."""
     repo_root = Path(__file__).resolve().parents[3]
@@ -133,6 +153,7 @@ def test_organization_marketplace_env_override(monkeypatch: pytest.MonkeyPatch) 
     )
 
 
+@_SKIP_EXTERNAL_CHANNELS
 def test_addon_marketplace_lifecycle_and_cli(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -198,6 +219,7 @@ def test_addon_marketplace_lifecycle_and_cli(
     assert "Uninstalled addon 'channels@talkops-addons'" in out_uninstall
 
 
+@_SKIP_EXTERNAL_CHANNELS
 @pytest.mark.asyncio
 async def test_webhook_to_channel_outbound_notification_and_thread_binding(
     tmp_path: Path,
