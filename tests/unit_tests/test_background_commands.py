@@ -339,7 +339,12 @@ async def test_webhooks_app_task_routes_and_tasks_command(
 
     starlette_app = create_webhooks_app()
     transport = httpx.ASGITransport(app=starlette_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    monkeypatch.delenv("TALKOPS_CONTROL_PLANE_URL", raising=False)
+    monkeypatch.delenv("TALKOPS_SERVER_API_KEYS", raising=False)
+    auth_headers = {"Authorization": "Bearer test-token"}
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=auth_headers
+    ) as client:
         list_resp = await client.get("/api/v1/threads/thread-http/tasks")
         assert list_resp.status_code == 200
         payload = list_resp.json()
