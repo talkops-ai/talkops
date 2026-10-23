@@ -47,6 +47,9 @@
 #   --local, --editable Force editable installation from local repository
 #   --python <version>  Python version to provision via uv (default: 3.12)
 #   --extras <extras>   Comma-separated pip extras (e.g. "dev", "sandboxes")
+#   --force, -f         Force clean reinstall (uninstall existing version first)
+#   --upgrade, -U       Upgrade existing TalkOps installation to latest version
+#   --reinstall         Reinstall package and refresh all dependencies
 #   --uninstall         Uninstall talkops and clean up binaries
 #
 # Environment variables:
@@ -155,6 +158,9 @@ ${BOLD}Options:${NC}
   --local, --editable Force editable installation from local directory
   --python <ver>      Python version to provision via uv (default: ${DEFAULT_PYTHON})
   --extras <extras>   Comma-separated pip extras (e.g. "dev", "sandboxes")
+  --force, -f         Force clean reinstall (uninstall existing version first)
+  --upgrade, -U       Upgrade existing TalkOps installation to latest version
+  --reinstall         Reinstall package and refresh all dependencies
   --uninstall         Uninstall talkops and remove binaries
 
 ${BOLD}Environment Variables:${NC}
@@ -187,6 +193,7 @@ REQUESTED_PRERELEASE="${TALKOPS_PRERELEASE:-allow}"
 ACTION="install"
 ASSUME_YES="${TALKOPS_YES:-0}"
 VERBOSE="${TALKOPS_VERBOSE:-0}"
+FORCE_REINSTALL=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -203,6 +210,9 @@ while [ $# -gt 0 ]; do
       ;;
     --verbose)
       VERBOSE=1
+      ;;
+    --force|-f|--upgrade|-U|--reinstall|--refresh)
+      FORCE_REINSTALL=1
       ;;
     --source)
       shift
@@ -602,6 +612,10 @@ done
 
 if [ -n "$CURRENT_VERSION" ]; then
   log_info "Existing TalkOps ${CURRENT_VERSION} detected."
+  if [ "$FORCE_REINSTALL" = "1" ]; then
+    log_info "Removing previous TalkOps (${CURRENT_VERSION}) before clean upgrade..."
+    "$UV_BIN" tool uninstall "$PACKAGE_NAME" >/dev/null 2>&1 || true
+  fi
 fi
 
 # ── Determine Source Strategy (PyPI / Git / Local) ───────────
@@ -753,6 +767,10 @@ install_talkops_tool() {
     "--upgrade"
     "--refresh"
   )
+
+  if [ "$FORCE_REINSTALL" = "1" ]; then
+    install_args+=("--reinstall")
+  fi
 
   if [ -n "$REQUESTED_PRERELEASE" ]; then
     install_args+=("--prerelease=${REQUESTED_PRERELEASE}")
