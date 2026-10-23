@@ -82,21 +82,24 @@ Whether triaging a 3 AM PagerDuty or Prometheus alert storm, diagnosing Kubernet
 ### 1. Install TalkOps
 
 ```bash
-curl -LsSf https://talkops.sh/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
 ```
 
 <details>
-<summary><b>Alternative installation methods (<code>uv</code>, <code>pipx</code>, <code>pip</code>)</b></summary>
+<summary><b>Alternative installation methods (<code>uv</code>, <code>pipx</code>, <code>pip</code>, or pinned version)</b></summary>
 
 ```bash
-# Using uv (recommended for Python environments)
-uv tool install talkops-ai
+# Using uv (recommended for Python 3.12+ environments)
+uv tool install --prerelease=allow talkops-ai
 
 # Using pipx
-pipx install talkops-ai
+pipx install --pip-args="--pre" talkops-ai
 
 # Using pip
-pip install talkops-ai
+pip install --pre -U talkops-ai
+
+# Install a specific version via install.sh
+curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- 0.3.0b12
 ```
 
 </details>

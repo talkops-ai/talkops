@@ -21,8 +21,8 @@
 #   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- VERSION
 #
 # Install an exact version:
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | TALKOPS_VERSION="0.1.0" bash
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- 0.1.0
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | TALKOPS_VERSION="0.3.0b12" bash
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- 0.3.0b12
 #
 # Install directly from the GitHub repository:
 #   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | TALKOPS_SOURCE="git" bash
@@ -42,7 +42,7 @@
 #   --version, -v       Print installer version and exit
 #   --yes, -y           Accept all prompts (assume yes, non-interactive)
 #   --verbose           Show detailed command outputs and debug logs
-#   --source <src>      Install source: "pypi", "git", or "local" (default: auto)
+#   --source <src>      Install source: "pypi", "git", or "local" (default: pypi)
 #   --git               Force installation from GitHub git repository
 #   --local, --editable Force editable installation from local repository
 #   --python <version>  Python version to provision via uv (default: 3.12)
@@ -52,8 +52,8 @@
 # Environment variables:
 #   TALKOPS_PACKAGE_NAME     — Package name on PyPI (default: "talkops-ai")
 #   TALKOPS_REPO_URL         — GitHub repo URL (default: "https://github.com/talkops-ai/talkops")
-#   TALKOPS_SOURCE           — "pypi", "git", or "local" (default: auto-detected)
-#   TALKOPS_VERSION          — Exact version to install (e.g. "0.1.0")
+#   TALKOPS_SOURCE           — "pypi", "git", or "local" (default: "pypi")
+#   TALKOPS_VERSION          — Exact version to install (e.g. "0.3.0b12")
 #   TALKOPS_EXTRAS           — Comma-separated pip extras (e.g. "dev", "sandboxes")
 #   TALKOPS_PRERELEASE       — uv pre-release strategy: allow, disallow, if-necessary (default: allow)
 #   TALKOPS_PYTHON           — Python version to use (default: 3.12)
@@ -116,10 +116,14 @@ resolve_latest_pypi_version() {
     local pypi_json
     pypi_json="$(curl -sS --max-time 4 "https://pypi.org/pypi/${PACKAGE_NAME}/json" 2>/dev/null || true)"
     if [ -n "$pypi_json" ]; then
+      local py_cmd=""
       if command -v python3 >/dev/null 2>&1; then
-        latest="$(printf '%s' "$pypi_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('info',{}).get('version',''))" 2>/dev/null || true)"
+        py_cmd="python3"
       elif command -v python >/dev/null 2>&1; then
-        latest="$(printf '%s' "$pypi_json" | python -c "import sys,json; print(json.load(sys.stdin).get('info',{}).get('version',''))" 2>/dev/null || true)"
+        py_cmd="python"
+      fi
+      if [ -n "$py_cmd" ]; then
+        latest="$(printf '%s' "$pypi_json" | "$py_cmd" -c "import sys,json; d=json.load(sys.stdin); rels=[k for k,v in d.get('releases',{}).items() if v]; print(d.get('info',{}).get('version') or (rels[-1] if rels else ''))" 2>/dev/null || true)"
       fi
       if [ -z "$latest" ]; then
         latest="$(printf '%s' "$pypi_json" | grep -o '"version":"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)"
@@ -127,7 +131,7 @@ resolve_latest_pypi_version() {
     fi
   fi
   if [ -z "$latest" ]; then
-    latest="0.1.0"
+    latest="0.3.0b12"
   fi
   printf '%s' "$latest"
 }
@@ -146,7 +150,7 @@ ${BOLD}Options:${NC}
   --version, -v       Print installer version and exit
   --yes, -y           Accept all prompts (assume yes, non-interactive)
   --verbose           Enable verbose output and trace logs
-  --source <src>      Install source: "pypi", "git", or "local" (default: auto)
+  --source <src>      Install source: "pypi", "git", or "local" (default: pypi)
   --git               Force installation from GitHub repository
   --local, --editable Force editable installation from local directory
   --python <ver>      Python version to provision via uv (default: ${DEFAULT_PYTHON})
@@ -154,8 +158,8 @@ ${BOLD}Options:${NC}
   --uninstall         Uninstall talkops and remove binaries
 
 ${BOLD}Environment Variables:${NC}
-  TALKOPS_VERSION          Exact version to install (e.g. "0.1.0")
-  TALKOPS_SOURCE           "pypi", "git", or "local" (default: auto)
+  TALKOPS_VERSION          Exact version to install (e.g. "0.3.0b12")
+  TALKOPS_SOURCE           "pypi", "git", or "local" (default: pypi)
   TALKOPS_EXTRAS           Comma-separated pip extras
   TALKOPS_PRERELEASE       uv pre-release strategy (default: allow)
   TALKOPS_PYTHON           Python version to use (default: ${DEFAULT_PYTHON})
@@ -545,8 +549,15 @@ if [ "$ACTION" = "uninstall" ]; then
     log_info "No active uv tool installation found for $PACKAGE_NAME."
   fi
 
+  # Clean up legacy package names if present
+  for legacy_pkg in "talkops-opscode" "talkops-opscloud"; do
+    if "$UV_BIN" tool uninstall "$legacy_pkg" >/dev/null 2>&1; then
+      log_info "Removed legacy $legacy_pkg uv tool environment."
+    fi
+  done
+
   # Remove installed binaries
-  for b in "${TOOL_BIN_DIR}/${PRIMARY_BIN}" "${TOOL_BIN_DIR}/${PRIMARY_BIN}.exe" "${TOOL_BIN_DIR}/${ALIAS_BIN}" "${TOOL_BIN_DIR}/${ALIAS_BIN}.exe"; do
+  for b in "${TOOL_BIN_DIR}/${PRIMARY_BIN}" "${TOOL_BIN_DIR}/${PRIMARY_BIN}.exe" "${TOOL_BIN_DIR}/${ALIAS_BIN}" "${TOOL_BIN_DIR}/${ALIAS_BIN}.exe" "${TOOL_BIN_DIR}/opscode" "${TOOL_BIN_DIR}/opscode.exe" "${TOOL_BIN_DIR}/opscloud" "${TOOL_BIN_DIR}/opscloud.exe"; do
     if [ -e "$b" ] || [ -L "$b" ]; then
       rm -f "$b" 2>/dev/null || true
       log_info "Removed $b"
@@ -565,7 +576,13 @@ if [ "$ACTION" = "uninstall" ]; then
   exit 0
 fi
 
-# ── Check Existing Installation ──────────────────────────────
+# ── Check Existing Installation & Clean Legacy Packages ──────
+
+for legacy_pkg in "talkops-opscode" "talkops-opscloud"; do
+  if "$UV_BIN" tool uninstall "$legacy_pkg" >/dev/null 2>&1; then
+    log_info "Migrating: removed legacy ${legacy_pkg} tool environment."
+  fi
+done
 
 CURRENT_VERSION=""
 for bin_candidate in "$PRIMARY_BIN" "${PRIMARY_BIN}.exe"; do
@@ -581,7 +598,7 @@ if [ -n "$CURRENT_VERSION" ]; then
   log_info "Existing TalkOps ${CURRENT_VERSION} detected."
 fi
 
-# ── Determine Source Strategy (Local / Git / PyPI) ───────────
+# ── Determine Source Strategy (PyPI / Git / Local) ───────────
 
 RESOLVED_SOURCE=""
 
@@ -592,13 +609,7 @@ elif [ "$REQUESTED_SOURCE" = "git" ]; then
 elif [ "$REQUESTED_SOURCE" = "pypi" ]; then
   RESOLVED_SOURCE="pypi"
 else
-  # Auto-detection
-  if [ -f "pyproject.toml" ] && [ -d "src/talkops" ] && [ -z "$VERSION" ]; then
-    log_info "Detected local TalkOps repository in current directory."
-    RESOLVED_SOURCE="local"
-  else
-    RESOLVED_SOURCE="pypi"
-  fi
+  RESOLVED_SOURCE="pypi"
 fi
 
 # ── Ripgrep Provisioning (Fast Search Acceleration) ──────────
@@ -767,9 +778,14 @@ install_talkops_tool() {
       spec="${spec}[${REQUESTED_EXTRAS}]"
     fi
     if [ -n "$VERSION" ]; then
-      spec="${spec}==${VERSION}"
+      local pypi_ver="${VERSION#v}"
+      spec="${spec}==${pypi_ver}"
+      display_target="${spec} from PyPI"
+    else
+      local latest_pypi
+      latest_pypi="$(resolve_latest_pypi_version)"
+      display_target="${spec} (${latest_pypi}) from PyPI"
     fi
-    display_target="${spec} from PyPI"
     install_args+=("$spec")
   fi
 
@@ -900,7 +916,7 @@ done
 
 FINAL_VERSION=""
 if [ -n "$INSTALLED_PRIMARY" ]; then
-  FINAL_VERSION="$("$INSTALLED_PRIMARY" --version 2>/dev/null | awk '{print $NF}' || echo "0.1.0")"
+  FINAL_VERSION="$("$INSTALLED_PRIMARY" --version 2>/dev/null | awk '{print $NF}' || echo "0.3.0b12")"
 fi
 
 # ── Welcome Banner & Quick Start ─────────────────────────────
@@ -933,7 +949,8 @@ case ":${PATH}:" in
 esac
 
 printf "\n${BOLD}Quick Commands:${NC}\n"
-printf "  ${CYAN}talkops doctor${NC}         Verify AWS STS credentials & DevOps toolchain\n"
-printf "  ${CYAN}talkops /auth${NC}          Configure LLM API keys (Anthropic, Bedrock, OpenAI...)\n"
+printf "  ${CYAN}talkops auth${NC}           Configure LLM, TypeSafe Jev & Cloud API keys\n"
+printf "  ${CYAN}talkops doctor${NC}         Verify AWS/K8s/Terraform toolchain & credentials\n"
 printf "  ${CYAN}talkops -p \"<prompt>\"${NC}  Run non-interactive / headless operational task\n"
+printf "  ${CYAN}talkops serve${NC}          Start the centralized multi-client & webhook server\n"
 printf "  ${CYAN}ops --help${NC}             Show full CLI documentation and subcommands\n\n"

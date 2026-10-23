@@ -10,24 +10,27 @@ Get TalkOps installed, verified, and executing autonomous DevOps operations—lo
 
 ## 1. Install TalkOps
 
-Run the standalone installer script on macOS or Linux:
+Run the standalone installer script on macOS, Linux, or WSL:
 
 ```bash
-curl -LsSf https://talkops.sh/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
 ```
 
 <details>
-<summary>Alternative installation methods (<code>uv</code>, <code>pipx</code>, <code>pip</code>)</summary>
+<summary>Alternative installation methods (<code>uv</code>, <code>pipx</code>, <code>pip</code>, or pinned version)</summary>
 
 ```bash
 # Using uv (recommended for Python 3.12+ environments)
-uv tool install talkops-ai
+uv tool install --prerelease=allow talkops-ai
 
 # Using pipx
-pipx install talkops-ai
+pipx install --pip-args="--pre" talkops-ai
 
 # Using pip
-pip install talkops-ai
+pip install --pre -U talkops-ai
+
+# Install a specific version via install.sh
+curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- 0.3.0b12
 ```
 
 </details>
