@@ -359,6 +359,15 @@ async def exchange_api_key_for_temporary_token(
                 json={"api_key": clean_key, **({"user_id": eff_user} if eff_user else {})},
                 headers=req_headers,
             )
+            if resp.status_code == 401 and "X-Control-Plane-Key" in req_headers:
+                fallback_headers = {
+                    k: v for k, v in req_headers.items() if k.lower() != "x-control-plane-key"
+                }
+                resp = await client.post(
+                    target_endpoint,
+                    json={"api_key": clean_key, **({"user_id": eff_user} if eff_user else {})},
+                    headers=fallback_headers,
+                )
             if resp.status_code == 200:
                 data = resp.json()
                 access_token = str(data.get("access_token") or data.get("token") or "").strip()
