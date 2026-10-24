@@ -21,15 +21,6 @@ import webbrowser
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
-from talkops.config.langsmith import (
-    LangSmithApiError,
-    LangSmithImportError,
-    LangSmithLookupTimeoutError,
-    LangSmithProjectNotFoundError,
-    _assemble_langsmith_thread_url,
-    fetch_langsmith_project_url_or_raise,
-    get_langsmith_project_name,
-)
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -61,6 +52,16 @@ class TraceHandler(BaseCommandHandler):
     async def execute(self, ctx: CommandContext) -> CommandResult:
         # Resolve active thread ID
         """Execute the command handler with the provided command context."""
+        from talkops.config.langsmith import (
+            LangSmithApiError,
+            LangSmithImportError,
+            LangSmithLookupTimeoutError,
+            LangSmithProjectNotFoundError,
+            _assemble_langsmith_thread_url,
+            fetch_langsmith_project_url_or_raise,
+            get_langsmith_project_name,
+        )
+
         thread_id = None
         if ctx.app is not None:
             thread_id = getattr(ctx.app, "_agent_thread_id", None) or getattr(

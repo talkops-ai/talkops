@@ -283,6 +283,33 @@ def format_tool_parts(
         return ToolDisplayParts(name, scope, detail, kind)
 
     # 1. Dedicated formatters for core agent tools
+    if base_name == "call_mcp_tool":
+        srv_arg = str(args.get("server_name") or args.get("ServerName") or args.get("server") or "").strip()
+        t_arg = str(args.get("tool_name") or args.get("ToolName") or args.get("tool") or "").strip()
+        if ":" in t_arg and not srv_arg:
+            srv_arg, t_arg = t_arg.split(":", 1)
+        if t_arg:
+            name = _base_display_name(t_arg)
+        if srv_arg:
+            scope = extract_server_scope(srv_arg) or srv_arg
+        raw_inner = args.get("arguments")
+        if raw_inner is None:
+            raw_inner = args.get("Arguments")
+        if raw_inner is None:
+            raw_inner = args.get("args")
+        if isinstance(raw_inner, str):
+            stripped = raw_inner.strip()
+            if stripped:
+                try:
+                    loaded = json.loads(stripped)
+                    if isinstance(loaded, dict):
+                        raw_inner = loaded
+                except Exception:
+                    raw_inner = {}
+            else:
+                raw_inner = {}
+        args = dict(raw_inner) if isinstance(raw_inner, dict) else {}
+
     if base_name in {"task"}:
         sub_name = args.get("subagent_type") or args.get("agent_name") or args.get("subagent") or "subagent"
         return parts(str(sub_name), "task")

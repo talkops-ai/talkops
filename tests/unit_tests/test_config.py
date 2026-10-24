@@ -663,22 +663,27 @@ def test_load_dotenv_denied_keys_filtered(tmp_path: Path, monkeypatch):
 
 
 def test_apply_stored_credentials_vertex_ai(monkeypatch):
-    """apply_stored_credentials sets GOOGLE_GENAI_USE_VERTEXAI for vertex providers."""
+    """apply_stored_credentials keeps google_vertexai and google_genai strictly separated."""
+    from talkops.config.settings import get_settings
     from talkops.model.config import apply_stored_credentials
 
-    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    s = get_settings()
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-gcp-project")
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(s, "google_api_key", None, raising=False)
+    monkeypatch.setattr("talkops.state.remote_session._can_use_disk_auth_session", lambda: False)
 
     applied = apply_stored_credentials("google_genai")
-    assert applied is True
-    assert os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
-    assert os.environ.get("GOOGLE_CLOUD_PROJECT") == "test-gcp-project"
+    assert applied is False
+    assert os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") != "true"
 
-    # Also test google_vertexai provider
+    # google_vertexai applies GOOGLE_CLOUD_PROJECT without polluting GOOGLE_GENAI_USE_VERTEXAI
     applied_vtx = apply_stored_credentials("google_vertexai")
     assert applied_vtx is True
-    assert os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
+    assert os.environ.get("GOOGLE_CLOUD_PROJECT") == "test-gcp-project"
+    assert os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") != "true"
 
 
 def test_load_dotenv_project_denied_security_keys(tmp_path: Path, monkeypatch):

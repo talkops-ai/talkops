@@ -976,11 +976,21 @@ def _tool_call_data_from_call(
     raw_args = tool_call.get("args")
     args: dict[str, Any]
     args = {str(key): value for key, value in raw_args.items()} if isinstance(raw_args, dict) else {}
+    name = str(tool_call.get("name") or "")
+    resolved_mcp_server = mcp_server
+    if not resolved_mcp_server and name == "call_mcp_tool":
+        srv_arg = str(args.get("server_name") or args.get("ServerName") or args.get("server") or "").strip()
+        if not srv_arg:
+            t_arg = str(args.get("tool_name") or args.get("ToolName") or args.get("tool") or "").strip()
+            if ":" in t_arg:
+                srv_arg = t_arg.split(":", 1)[0].strip()
+        if srv_arg:
+            resolved_mcp_server = srv_arg
     return ToolCallData(
         id=str(tool_call.get("id") or ""),
-        name=str(tool_call.get("name") or ""),
+        name=name,
         args=cast(JsonObject, args),
-        mcp_server=mcp_server,
+        mcp_server=resolved_mcp_server,
     )
 
 

@@ -275,7 +275,7 @@ class DynamicModelPoolManager:
         elif not specs:
             specs = ["google_genai:gemini-3.7-flash"]
 
-        pro_tokens = {"pro", "opus", "o3", "astra", "sol", "reasoner", "r1"}
+        pro_tokens = {"pro", "opus", "o3", "astra", "sol", "reasoner", "r1", "argon"}
         fast_tokens = {"flash", "mini", "haiku", "lite", "micro", "scout", "small"}
 
         def _spec_tokens(s: str) -> set[str]:
@@ -447,9 +447,10 @@ class DynamicModelPoolManager:
 
         fallback_criteria = SUBAGENT_ROUTE_CRITERIA if is_subagent else ORCHESTRATOR_ROUTE_CRITERIA
 
-        m0, spec0, eff0, _ = self.get_model_for_tier(0, provider=provider, base_spec=base_spec)
-        m1, spec1, eff1, _ = self.get_model_for_tier(1, provider=provider, base_spec=base_spec)
-        m2, spec2, eff2, _ = self.get_model_for_tier(2, provider=provider, base_spec=base_spec)
+        tiers = self.discover_tiers(provider=provider, base_spec=base_spec)
+        spec0, eff0 = tiers.get(0, (base_spec or "google_genai:gemini-3.6-flash", "off"))
+        spec1, eff1 = tiers.get(1, (base_spec or "google_genai:gemini-3.7-flash", "medium"))
+        spec2, eff2 = tiers.get(2, (base_spec or "google_genai:gemini-3.1-pro-preview", "high"))
 
         def _format_criteria(spec: str, eff: str, base_desc: str) -> str:
             if base_desc.startswith("Model:"):
@@ -458,15 +459,15 @@ class DynamicModelPoolManager:
 
         return {
             "fast": ModelChoice(
-                model=m0,
+                model=spec0,
                 criteria=_format_criteria(spec0, eff0, criteria_map.get("fast", fallback_criteria["fast"])),
             ),
             "standard": ModelChoice(
-                model=m1,
+                model=spec1,
                 criteria=_format_criteria(spec1, eff1, criteria_map.get("standard", fallback_criteria["standard"])),
             ),
             "powerful": ModelChoice(
-                model=m2,
+                model=spec2,
                 criteria=_format_criteria(spec2, eff2, criteria_map.get("powerful", fallback_criteria["powerful"])),
             ),
         }

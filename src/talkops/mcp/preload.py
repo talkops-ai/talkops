@@ -488,7 +488,10 @@ def read_mcp_tool_schema(
     state_dir: Path | None = None,
 ) -> dict[str, Any] | None:
     """Read a materialized MCP tool schema from disk if available."""
-    safe_tool = re.sub(r"[/\\]+", "_", str(tool_name).strip()) or "unnamed"
+    raw_tool = str(tool_name).strip()
+    if ":" in raw_tool:
+        raw_tool = raw_tool.split(":", 1)[1]
+    safe_tool = re.sub(r"[/\\]+", "_", raw_tool) or "unnamed"
     candidates = [server_name]
     if "__" in server_name:
         base_srv = server_name.rsplit("__", 1)[-1]
@@ -501,14 +504,22 @@ def read_mcp_tool_schema(
             if state_dir is not None
             else get_mcp_server_state_dir(srv)
         )
-        schema_file = srv_dir / f"{safe_tool}.json"
-        if schema_file.is_file():
-            try:
-                data = json.loads(schema_file.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    return data
-            except (OSError, ValueError, TypeError):
-                continue
+        tool_candidates = [safe_tool]
+        base_srv = srv.rsplit("__", 1)[-1] if "__" in srv else srv
+        for prefix in (f"{srv}_", f"{base_srv}_"):
+            if prefix and safe_tool.startswith(prefix) and len(safe_tool) > len(prefix):
+                stripped = safe_tool[len(prefix) :]
+                if stripped not in tool_candidates:
+                    tool_candidates.append(stripped)
+        for t_cand in tool_candidates:
+            schema_file = srv_dir / f"{t_cand}.json"
+            if schema_file.is_file():
+                try:
+                    data = json.loads(schema_file.read_text(encoding="utf-8"))
+                    if isinstance(data, dict):
+                        return data
+                except (OSError, ValueError, TypeError):
+                    continue
     return None
 
 

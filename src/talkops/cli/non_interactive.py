@@ -107,6 +107,7 @@ async def _run_headless(
     trajectory_file: str | None = None,
     no_subagents: bool = False,
     tnr: bool = False,
+    agent: str | None = None,
 ) -> int:
     """Execute a single headless run against the server session."""
     # 1. Startup command
@@ -298,6 +299,22 @@ async def _run_headless(
             run_config["recursion_limit"] = recursion_limit
 
         input_data: dict[str, Any] = {"messages": [{"role": "user", "content": final_prompt}]}
+        if agent:
+            from talkops.commands.power.agents import resolve_plugin_agent
+            from talkops.subagents.loader import list_subagents
+
+            proj_root = project_context.project_root or project_context.user_cwd
+            discovered_specs = list_subagents(project_root=proj_root, include_plugins=True)
+            matched_spec = resolve_plugin_agent(agent, discovered_specs)
+            resolved_agent_name = str(matched_spec.get("name") or agent) if matched_spec else agent
+            resolved_plugin_id = str(matched_spec.get("plugin_id") or "") if matched_spec else ""
+            input_data["agent_session_request"] = {
+                "kind": "start",
+                "request_id": str(uuid.uuid4()),
+                "agent_name": resolved_agent_name,
+                "plugin_id": resolved_plugin_id or None,
+                "prompt": final_prompt,
+            }
         if rubric:
             input_data["rubric"] = rubric
 
@@ -556,6 +573,7 @@ def run_non_interactive(
     trajectory_file: str | None = None,
     no_subagents: bool = False,
     tnr: bool = False,
+    agent: str | None = None,
 ) -> int:
     """Synchronous entrypoint for running TalkOps non-interactively with timeout and signals."""
     headless_kwargs: dict[str, Any] = {
@@ -594,6 +612,8 @@ def run_non_interactive(
         headless_kwargs["no_subagents"] = True
     if tnr:
         headless_kwargs["tnr"] = True
+    if agent:
+        headless_kwargs["agent"] = agent
     coro = _run_headless(prompt, **headless_kwargs)
     if timeout is not None:
         coro = asyncio.wait_for(coro, timeout=timeout)

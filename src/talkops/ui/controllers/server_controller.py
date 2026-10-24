@@ -301,7 +301,8 @@ class ServerLifecycleController:
             status_bar.set_status("No model configured")
             await app._mount_message(
                 SystemMessage(
-                    "No model is configured yet. Run `/model` to choose one.\n\n"
+                    "No model is configured yet. Run `/auth` to configure your LLM provider credentials first, "
+                    "or `/model` to choose a model.\n\n"
                     "TalkOps will ask for credentials for the selected provider."
                 )
             )
@@ -604,6 +605,11 @@ class ServerLifecycleController:
         if app._startup_cmd:
             await app._mount_message(SystemMessage(f"Running startup command: `{app._startup_cmd}`"))
             await app._submit_input(app._startup_cmd, "shell")
+
+        if getattr(app, "_initial_agent", None):
+            from talkops.commands.power.agents import handle_agent
+
+            await handle_agent(app, [str(app._initial_agent)])
 
         if app._initial_skill:
             await app._submit_input(f"/skill {app._initial_skill}", "normal")

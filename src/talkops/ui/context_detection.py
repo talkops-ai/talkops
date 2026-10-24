@@ -79,23 +79,32 @@ def _kubeconfig_path() -> Path:
     return Path(first).expanduser() if first else Path.home() / ".kube" / "config"
 
 
+_KUBECONFIG_CACHE: tuple[str, int, int, str] | None = None
+
+
 def current_k8s_context() -> str:
     """Read ``current-context`` from the kubeconfig without spawning ``kubectl``.
 
     Honours ``$KUBECONFIG_CONTEXT`` first (as the infra panel always has).
     Returns ``""`` when there is no kubeconfig or no current context.
     """
+    global _KUBECONFIG_CACHE
     override = os.environ.get("KUBECONFIG_CONTEXT", "")
     if override:
         return override
     try:
-        text = _kubeconfig_path().read_text(encoding="utf-8", errors="replace")
+        path = _kubeconfig_path()
+        st = path.stat()
+        cache = _KUBECONFIG_CACHE
+        if cache is not None and cache[0] == str(path) and cache[1] == st.st_mtime_ns and cache[2] == st.st_size:
+            return cache[3]
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
     match = _CURRENT_CONTEXT_RE.search(text)
-    if not match:
-        return ""
-    return match.group(1).strip("\"'")
+    result = match.group(1).strip("\"'") if match else ""
+    _KUBECONFIG_CACHE = (str(path), st.st_mtime_ns, st.st_size, result)
+    return result
 
 
 __all__ = [

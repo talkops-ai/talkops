@@ -707,3 +707,61 @@ def test_serve_conflicting_flags_rejected():
     assert main(["serve", "--no-mcp", "--mcp-config", "foo.json"]) == 2
 
 
+def test_agents_subcommand_text_and_json(capsys, tmp_path, monkeypatch):
+    """Verify `talkops agents` and `talkops agent list --json` output discovered agents."""
+    dot_agents = tmp_path / ".agents"
+    dot_agents.mkdir()
+    (dot_agents / "net-debugger.md").write_text(
+        "---\nname: net-debugger\ndescription: VPC and DNS troubleshooting specialist\n---\nDebug networks.",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "talkops.plugins.adapters.agents.discover_plugin_subagents",
+        lambda project_root=None: [],
+    )
+    monkeypatch.setattr(
+        "talkops.config.paths.user_agents_dir",
+        lambda *a, **kw: tmp_path / "no_user_agents",
+    )
+    monkeypatch.setattr("talkops.config.paths.AGENTS_SHARED_DIR", tmp_path / "no_shared_agents")
+
+    # 1. Text output via `talkops agents`
+    rc_text = main(["agents", "--cwd", str(tmp_path)])
+    assert rc_text == 0
+    out_text = capsys.readouterr().out
+    assert "Available Agents (1):" in out_text
+    assert "net-debugger" in out_text
+    assert "VPC and DNS troubleshooting specialist" in out_text
+
+    # 2. JSON output via `talkops agent list --json`
+    rc_json = main(["agent", "list", "--cwd", str(tmp_path), "--json"])
+    assert rc_json == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "agents"
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["agents"][0]["name"] == "net-debugger"
+    assert payload["data"]["agents"][0]["source"] == "project"
+
+
+def test_cli_agent_flag_headless_and_interactive(monkeypatch):
+    """Verify `-a / --agent` forwards agent name to headless and interactive runners."""
+    mock_non_interactive = MagicMock(return_value=0)
+    mock_interactive = MagicMock(return_value=0)
+    monkeypatch.setattr("talkops.cli.main.run_non_interactive", mock_non_interactive)
+    monkeypatch.setattr("talkops.cli.main.run_interactive", mock_interactive)
+    monkeypatch.setattr("talkops.cli.main._ensure_cli_authenticated", lambda *a, **kw: 0)
+
+    # Headless with -a
+    rc1 = main(["-a", "aws-compute", "-p", "Check EC2 instances"])
+    assert rc1 == 0
+    assert mock_non_interactive.called
+    assert mock_non_interactive.call_args[1]["agent"] == "aws-compute"
+
+    # Interactive with --agent
+    rc2 = main(["--agent", "k8s-operator"])
+    assert rc2 == 0
+    assert mock_interactive.called
+    assert mock_interactive.call_args[1]["agent"] == "k8s-operator"
+
+
+

@@ -332,17 +332,9 @@ def _load_dotenv(*, start_path: Path | None = None, refresh_loaded: bool = False
     # Apply to os.environ:
     # Outer shell exports take ultimate precedence.
     for k, v in loaded_vals.items():
-        if v is not None:
-            if refresh_loaded:
-                # On refresh, update unless key was originally in initial shell exports
-                if k not in _INITIAL_SHELL_ENV:
-                    os.environ[k] = v
-                    _dotenv_loaded_values[k] = v
-            else:
-                # On initial load, only set if not already in os.environ
-                if k not in os.environ:
-                    os.environ[k] = v
-                    _dotenv_loaded_values[k] = v
+        if v is not None and k not in os.environ:
+            os.environ[k] = v
+            _dotenv_loaded_values[k] = v
 
 
 def parse_shell_allow_list(val: str | list[str] | None) -> list[str] | None:

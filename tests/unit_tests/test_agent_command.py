@@ -613,3 +613,121 @@ async def test_close_subagent_mcp_sessions_on_clear_and_agent_switch() -> None:
     assert root_srv in mgr._sessions
 
 
+def test_build_agent_commands_includes_project_and_user_agents() -> None:
+    """Verify project and user agents from .talkops/agents appear in /agent autocomplete."""
+    agents = [
+        {
+            "name": "reverse-engineer",
+            "description": "Principal Reverse Engineer and Binary Analysis Specialist.",
+            "source": "project",
+        },
+        *_sample_plugin_agents(),
+    ]
+    entries = build_agent_commands(agents)
+    assert len(entries) == 3
+    proj_entry = entries[0]
+    assert proj_entry.name == "/agent:reverse-engineer"
+    assert proj_entry.display_name == "/agent:reverse-engineer"
+    assert "(agent · project)" in proj_entry.description
+    assert "Principal Reverse Engineer" in proj_entry.description
+
+
+def test_agent_session_middleware_clear_handoff_summary_merge() -> None:
+    """Verify exiting a specialist agent session merges a concise handoff summary into coordinator messages."""
+    from langchain_core.messages import ToolMessage
+
+    mw = AgentSessionMiddleware({"sec-auditor": FakeSubAgent({})})
+    session_messages = [
+        HumanMessage(content="Audit IAM roles in infra/iam.tf"),
+        AIMessage(
+            content="",
+            tool_calls=[{"id": "tc_1", "name": "read_file", "args": {"file_path": "infra/iam.tf"}}],
+        ),
+        ToolMessage(content="resource aws_iam_role ...", tool_call_id="tc_1", name="read_file"),
+        AIMessage(content="Found overly permissive AdministratorAccess policy on role app-runner."),
+    ]
+    state = {
+        "messages": [HumanMessage(content="Prior coordinator turn")],
+        "_active_agent_id": "sec-auditor",
+        "_agent_session_messages": session_messages,
+        "agent_session_request": {"kind": "clear"},
+    }
+    update = mw.before_agent(cast(Any, state), _runtime())
+    assert update is not None
+    assert update["_active_agent_id"] is None
+    assert update["_agent_session_messages"]["reset"] is True
+    assert "messages" in update
+    assert len(update["messages"]) == 1
+    handoff_msg = update["messages"][0]
+    assert isinstance(handoff_msg, AIMessage)
+    assert handoff_msg.additional_kwargs.get("agent_handoff") is True
+    assert handoff_msg.additional_kwargs.get("agent_name") == "sec-auditor"
+    assert handoff_msg.additional_kwargs.get("lc_source") == "summarization"
+    assert '<AGENT_HANDOFF_SUMMARY agent="sec-auditor">' in handoff_msg.content
+    assert "Audit IAM roles in infra/iam.tf" in handoff_msg.content
+    assert "read_file" in handoff_msg.content
+    assert "infra/iam.tf" in handoff_msg.content
+    assert "Found overly permissive AdministratorAccess" in handoff_msg.content
+    # Raw tool output must not clutter the coordinator handoff summary
+    assert "resource aws_iam_role" not in handoff_msg.content
+
+
+@pytest.mark.asyncio
+async def test_agent_session_middleware_clear_llm_handoff_summary_and_fallback() -> None:
+    """Verify LLM-backed handoff summarization on exit and deterministic fallback on failure."""
+    mock_model = MagicMock()
+    mock_model.ainvoke = AsyncMock(
+        return_value=AIMessage(
+            content="- **Requests Handled**: Checked EKS pods\n- **Outcome & Findings**: All pods running."
+        )
+    )
+    mw = AgentSessionMiddleware({"k8s-agent": FakeSubAgent({})}, model=mock_model)
+    state = {
+        "_active_agent_id": "k8s-agent",
+        "_agent_session_messages": [
+            HumanMessage(content="Check EKS pods"),
+            AIMessage(content="All 5 pods in kube-system are Running."),
+        ],
+        "agent_session_request": {"kind": "clear"},
+    }
+    update = await mw.abefore_agent(cast(Any, state), _runtime())
+    assert update is not None
+    assert "messages" in update
+    handoff_msg = update["messages"][0]
+    assert "All pods running." in handoff_msg.content
+    mock_model.ainvoke.assert_awaited_once()
+
+    # Fallback when model raises an error
+    failing_model = MagicMock()
+    failing_model.ainvoke = AsyncMock(side_effect=RuntimeError("API unreachable"))
+    mw_fallback = AgentSessionMiddleware({"k8s-agent": FakeSubAgent({})}, model=failing_model)
+    update_fb = await mw_fallback.abefore_agent(cast(Any, state), _runtime())
+    assert update_fb is not None
+    assert "messages" in update_fb
+    assert "All 5 pods in kube-system are Running." in update_fb["messages"][0].content
+
+
+def test_agent_session_middleware_handoff_summary_on_agent_switch() -> None:
+    """Verify switching directly from agent-a to agent-b commits agent-a's handoff summary."""
+    subagent_b = FakeSubAgent({"messages": [HumanMessage(content="deploy fix"), AIMessage(content="deployed")]})
+    mw = AgentSessionMiddleware({"agent-a": FakeSubAgent({}), "agent-b": subagent_b})
+    state = {
+        "_active_agent_id": "agent-a",
+        "_agent_session_messages": [
+            HumanMessage(content="diagnose latency"),
+            AIMessage(content="Root cause is missing index on orders table."),
+        ],
+        "agent_session_request": {"kind": "continue", "agent_name": "agent-b", "message": "deploy fix"},
+    }
+    update = mw.before_agent(cast(Any, state), _runtime())
+    assert update is not None
+    assert update["_active_agent_id"] == "agent-b"
+    assert "messages" in update
+    assert len(update["messages"]) == 1
+    handoff = update["messages"][0]
+    assert '<AGENT_HANDOFF_SUMMARY agent="agent-a">' in handoff.content
+    assert "Root cause is missing index on orders table." in handoff.content
+
+
+
+

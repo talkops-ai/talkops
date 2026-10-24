@@ -131,13 +131,15 @@ class JevSecurityClassifier:
             return "subagent_dispatch"
 
         if (
-            normalized.startswith("mcp__")
+            normalized == "call_mcp_tool"
+            or normalized.startswith("mcp__")
             or ":" in normalized
             or (
                 tool is not None
                 and hasattr(tool, "metadata")
                 and bool(
                     (tool.metadata or {}).get("_mcp_server")
+                    or (tool.metadata or {}).get("_talkops_mcp")
                     or (tool.metadata or {}).get("is_mcp")
                     or (tool.metadata or {}).get("server_name")
                 )
@@ -217,11 +219,27 @@ class JevSecurityClassifier:
         self,
         tool_name: str,
         tool: BaseTool | None = None,
+        tool_args: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Extract MCP server ownership, description, and spec annotations."""
         server_name = ""
         clean_action = tool_name
-        if tool_name.startswith("mcp__"):
+        if tool_name == "call_mcp_tool" and isinstance(tool_args, Mapping):
+            server_name = str(
+                tool_args.get("server_name")
+                or tool_args.get("ServerName")
+                or tool_args.get("server")
+                or ""
+            ).strip()
+            clean_action = str(
+                tool_args.get("tool_name")
+                or tool_args.get("ToolName")
+                or tool_args.get("tool")
+                or tool_name
+            ).strip()
+            if ":" in clean_action and not server_name:
+                server_name, clean_action = clean_action.split(":", 1)
+        elif tool_name.startswith("mcp__"):
             parts = tool_name.split("__")
             if len(parts) >= 2:
                 server_name = parts[1]
@@ -237,13 +255,32 @@ class JevSecurityClassifier:
         if not server_name and "server_name" in tool_meta:
             server_name = str(tool_meta["server_name"])
 
+        read_only_hint = bool(tool_meta.get("readOnlyHint", False))
+        destructive_hint = bool(tool_meta.get("destructiveHint", False))
+        idempotent_hint = bool(tool_meta.get("idempotentHint", False))
+        open_world_hint = bool(tool_meta.get("openWorldHint", False))
+
+        if tool_name == "call_mcp_tool" and clean_action:
+            try:
+                from talkops.mcp.semantic_profiler import MCPSemanticProfiler
+
+                profiler = MCPSemanticProfiler.get_instance()
+                profile = profiler.get_profile(server_name, clean_action) or profiler.heuristic_profile(
+                    clean_action,
+                    server_name=server_name,
+                )
+                read_only_hint = bool(profile.read_only_hint)
+                destructive_hint = bool(profile.destructive_hint)
+            except Exception:
+                pass
+
         return {
             "server_name": server_name or "external_mcp",
             "mcp_action": clean_action,
-            "read_only_hint": bool(tool_meta.get("readOnlyHint", False)),
-            "destructive_hint": bool(tool_meta.get("destructiveHint", False)),
-            "idempotent_hint": bool(tool_meta.get("idempotentHint", False)),
-            "open_world_hint": bool(tool_meta.get("openWorldHint", False)),
+            "read_only_hint": read_only_hint,
+            "destructive_hint": destructive_hint,
+            "idempotent_hint": idempotent_hint,
+            "open_world_hint": open_world_hint,
         }
 
     def _extract_subagent_details(self, tool_args: dict[str, Any]) -> dict[str, Any]:
@@ -336,7 +373,7 @@ class JevSecurityClassifier:
 
         mcp_details: dict[str, Any] | None = None
         if action_type == "mcp_tool":
-            mcp_details = self._extract_mcp_details(tool_name, tool=tool)
+            mcp_details = self._extract_mcp_details(tool_name, tool=tool, tool_args=tool_args)
 
         subagent_details: dict[str, Any] | None = None
         if action_type == "subagent_dispatch":

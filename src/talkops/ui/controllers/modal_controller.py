@@ -805,16 +805,22 @@ class ModalController:
         from talkops.ui.widgets.auth import AuthPromptScreen, AuthResult
 
         app = self._app
-        try:
-            resolved_prov, _ = resolve_model_spec(spec)
-            provider = resolved_prov or (canonicalize_provider(spec.split(":", 1)[0]) if ":" in spec else "openai")
-        except Exception:
-            provider = canonicalize_provider(spec.split(":", 1)[0]) if ":" in spec else "openai"
+        if spec in ("auto", "dynamic"):
+            provider = "typesafe"
+        else:
+            try:
+                resolved_prov, _ = resolve_model_spec(spec)
+                provider = resolved_prov or (canonicalize_provider(spec.split(":", 1)[0]) if ":" in spec else "openai")
+            except Exception:
+                provider = canonicalize_provider(spec.split(":", 1)[0]) if ":" in spec else "openai"
+        if provider in ("dynamic", "auto"):
+            provider = "typesafe"
         status = get_provider_auth_status(provider)
         if status.as_legacy_bool():
             return True
 
         env_var = status.env_var or get_credential_env_var(provider) or f"{provider.upper()}_API_KEY"
+        reason_label = "TypeSafe Jev (System 1)" if spec in ("auto", "dynamic") else spec
 
         loop = asyncio.get_running_loop()
         auth_future: asyncio.Future[AuthResult | None] = loop.create_future()
@@ -827,7 +833,7 @@ class ModalController:
             AuthPromptScreen(
                 provider,
                 env_var,
-                reason=f"Required to use {spec}",
+                reason=f"Required to use {reason_label}",
             ),
             _on_auth_done,
         )
@@ -838,7 +844,9 @@ class ModalController:
     async def switch_model(self, spec: str, effort: str | None = None) -> None:
         """Switch the active model, checking auth if needed."""
         app = self._app
-        if ":" in spec:
+        if spec in ("auto", "dynamic"):
+            _provider = "typesafe"
+        elif ":" in spec:
             _provider = spec.split(":", 1)[0]
         else:
             from talkops.model.factory import detect_provider
@@ -861,6 +869,7 @@ class ModalController:
 
         app = self._app
         if spec in ("auto", "dynamic"):
+            apply_stored_credentials("typesafe")
             os.environ["TALKOPS_SERVER_MODEL"] = spec
             os.environ["TALKOPS_MODEL_NAME"] = spec
             app._model = spec
@@ -868,10 +877,12 @@ class ModalController:
             if settings_obj:
                 settings_obj.model = spec
                 settings_obj.model_name = spec
+            if getattr(app, "_approval_mode", ApprovalMode.MANUAL) is not ApprovalMode.SMART:
+                await app._set_approval_mode(ApprovalMode.SMART)
             try:
-                status_bar = app.query_one("#status-bar", StatusBar)
+                status_bar = getattr(app, "_status_bar", None) or app.query_one("#status-bar", StatusBar)
                 status_bar.set_model(provider="typesafe", model="jev-router", effort="auto")
-            except NoMatches:
+            except Exception:
                 pass
             app._sync_banner_model("typesafe:jev-router", "auto")
             await app._mount_message(
@@ -886,9 +897,13 @@ class ModalController:
         os.environ["TALKOPS_SERVER_MODEL"] = spec
         os.environ["TALKOPS_MODEL_NAME"] = spec
         app._model = spec
-        if getattr(app, "_approval_mode", ApprovalMode.MANUAL) is not ApprovalMode.SMART:
-            app._manual_model = spec
+        app._manual_model = spec
         app._smart_routed_active = False
+        if getattr(app, "_approval_mode", ApprovalMode.MANUAL) is ApprovalMode.SMART:
+            app._approval_mode = ApprovalMode.MANUAL
+            app._auto_approve = False
+            app._update_auto_mode_status_bar(ApprovalMode.MANUAL.value)
+            await app._write_live_approval_mode(ApprovalMode.MANUAL)
         settings_obj = getattr(app, "settings", None)
         if settings_obj:
             settings_obj.model = spec
@@ -908,7 +923,7 @@ class ModalController:
         eff_display: str = str(eff_val) if eff_val else ""
 
         try:
-            status_bar = app.query_one("#status-bar", StatusBar)
+            status_bar = getattr(app, "_status_bar", None) or app.query_one("#status-bar", StatusBar)
             _prov, _mdl = _split_model_spec(spec)
             status_bar.set_model(provider=_prov, model=_mdl, effort=eff_display)
             app._sync_banner_model(spec, eff_display)
@@ -918,10 +933,19 @@ class ModalController:
                 settings_obj = getattr(app, "settings", None)
                 if settings_obj:
                     settings_obj.model_context_limit = _ctx_limit
-        except NoMatches:
+        except Exception:
             pass
 
         save_recent_model(spec)
+        logger.info(
+            "Switched active model to '%s'",
+            spec,
+            extra={
+                "model": spec,
+                "provider": provider or "default",
+                "reasoning_effort": eff_display or None,
+            },
+        )
 
         msg = f"Switched model to `{spec}`"
         if eff_display:
@@ -1080,6 +1104,12 @@ class ModalController:
         except Exception:
             pass
         app._sync_banner_model(model_spec, effort)
+        logger.info(
+            "Updated reasoning effort override for '%s' to '%s'",
+            model_spec,
+            effort,
+            extra={"model": model_spec, "reasoning_effort": effort},
+        )
 
         await app._mount_message(SystemMessage(f"Reasoning effort for `{model_spec}` set to `{effort}`."))
 

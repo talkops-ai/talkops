@@ -39,14 +39,6 @@ from langchain_core.messages import RemoveMessage, SystemMessage
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
 from talkops.commands._types import BypassTier, CommandCategory, SafetyLevel
-from talkops.middleware.compaction import (
-    agenerate_llm_continuation_summary,
-    build_context_summary_envelope,
-    ensure_not_starting_with_tool_call,
-    parse_compact_request,
-    remove_unpaired_tool_calls_and_results,
-    sync_messages_to_transcript,
-)
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -93,6 +85,8 @@ class CompactHandler(BaseCommandHandler):
         if ctx.args and ctx.args.strip():
             return ctx.args.strip()
         if ctx.raw_command and ctx.raw_command.strip():
+            from talkops.middleware.compaction import parse_compact_request
+
             _, instructions = parse_compact_request(ctx.raw_command)
             if instructions:
                 return instructions
@@ -148,6 +142,14 @@ class CompactHandler(BaseCommandHandler):
 
         effective_thread_id = thread_id or "default"
         custom_instructions = self._resolve_custom_instructions(ctx)
+
+        from talkops.middleware.compaction import (
+            agenerate_llm_continuation_summary,
+            build_context_summary_envelope,
+            ensure_not_starting_with_tool_call,
+            remove_unpaired_tool_calls_and_results,
+            sync_messages_to_transcript,
+        )
 
         # 1. Persist 100% of current messages to dual line-aligned JSONL transcripts
         #    (transcript.jsonl + transcript_full.jsonl) before removing any messages.

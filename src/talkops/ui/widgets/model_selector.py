@@ -515,15 +515,21 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
         pkg_installed_statuses: dict[str, bool] = {
             p: is_provider_package_installed(p) for p in all_provs
         }
+        recent_matches = [
+            item
+            for item in recent_matches
+            if (auth := auth_statuses.get(item[2])) is not None
+            and auth.as_legacy_bool() is True
+        ]
 
         # Sort provider groups
         def _provider_sort_key(prov: str) -> tuple[int, int, str]:
             if prov == "dynamic":
                 return (0, 0, prov)
-            if self._current_provider and prov == self._current_provider:
-                return (1, 0, prov)
             auth = auth_statuses.get(prov)
             is_authed = auth.as_legacy_bool() is True if auth else False
+            if self._current_provider and prov == self._current_provider and is_authed:
+                return (1, 0, prov)
             tier = 2 if is_authed else 3
             p_idx = (
                 DEFAULT_PROVIDER_PRIORITY.index(prov)
@@ -599,7 +605,11 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
         for prov in sorted_provs:
             items = groups[prov]
             if prov == "dynamic":
-                header_text = "[bold]TypeSafe Jev (System 1)[/bold]"
+                auth = auth_statuses.get(prov)
+                if not auth or not auth.as_legacy_bool():
+                    header_text = "[bold]TypeSafe Jev (System 1)[/bold] [dim](missing credentials)[/dim]"
+                else:
+                    header_text = "[bold]TypeSafe Jev (System 1)[/bold]"
             else:
                 header_name = get_provider_display_name(prov)
                 auth = auth_statuses.get(prov)
@@ -950,6 +960,8 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
                 if ":" in typed:
                     p, m = typed.split(":", 1)
                     self._select_with_auth_check(typed, p)
+                elif typed.lower() in ("auto", "dynamic"):
+                    self._select_with_auth_check(typed, "typesafe")
                 else:
                     self._select_with_auth_check(typed, "openai")
             return
@@ -968,17 +980,28 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
             provider_install_extra,
         )
 
-        extra = provider_install_extra(provider)
-        if extra is not None and not is_provider_package_installed(provider):
-            self._prompt_install_provider(model_spec, provider, extra, effort)
+        auth_provider = (
+            "typesafe"
+            if provider in ("dynamic", "auto") or model_spec in ("auto", "dynamic")
+            else provider
+        )
+        reason_label = (
+            "TypeSafe Jev (System 1)"
+            if model_spec in ("auto", "dynamic")
+            else model_spec
+        )
+
+        extra = provider_install_extra(auth_provider)
+        if extra is not None and not is_provider_package_installed(auth_provider):
+            self._prompt_install_provider(model_spec, auth_provider, extra, effort)
             return
 
-        status = get_provider_auth_status(provider)
+        status = get_provider_auth_status(auth_provider)
         if status.as_legacy_bool():
             self.dismiss((model_spec, provider, effort))
             return
 
-        env_var = status.env_var or get_credential_env_var(provider)
+        env_var = status.env_var or get_credential_env_var(auth_provider)
 
         from talkops.ui.widgets.auth import AuthPromptScreen, AuthResult
 
@@ -990,9 +1013,9 @@ class ModelSelectorScreen(OpsModalScreen[tuple[str, str, str | None] | tuple[str
 
         self.app.push_screen(
             AuthPromptScreen(
-                provider,
+                auth_provider,
                 env_var,
-                reason=f"Required to use {model_spec}",
+                reason=f"Required to use {reason_label}",
             ),
             _on_auth_done,
         )

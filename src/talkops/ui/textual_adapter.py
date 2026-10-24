@@ -793,6 +793,19 @@ class TextualAdapter:
         if "workspace" not in enriched_context or not isinstance(enriched_context["workspace"], dict):
             enriched_context["workspace"] = {"cwd": target_cwd}
 
+        active_model_spec = enriched_context.get("model") or (getattr(self._app, "_model", None) if self._app else None)
+        if eff and active_model_spec and active_model_spec not in ("auto", "dynamic"):
+            from talkops.model.reasoning import with_effort_model_params
+
+            existing_params = enriched_context.get("model_params")
+            effort_params = with_effort_model_params(
+                str(active_model_spec),
+                existing_params if isinstance(existing_params, dict) else None,
+                str(eff),
+            )
+            if effort_params:
+                enriched_context["model_params"] = effort_params
+
         logger.debug("TUI: stream_turn start, thread_id: %s, context: %s", thread_id, enriched_context)
         return config, enriched_context
 

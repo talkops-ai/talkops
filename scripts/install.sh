@@ -21,8 +21,8 @@
 #   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- VERSION
 #
 # Install an exact version:
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | TALKOPS_VERSION="0.3.0b13" bash
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- 0.3.0b13
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | TALKOPS_VERSION="0.3.0b14" bash
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- 0.3.0b14
 #
 # Install directly from the GitHub repository:
 #   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | TALKOPS_SOURCE="git" bash
@@ -56,7 +56,7 @@
 #   TALKOPS_PACKAGE_NAME     — Package name on PyPI (default: "talkops-ai")
 #   TALKOPS_REPO_URL         — GitHub repo URL (default: "https://github.com/talkops-ai/talkops")
 #   TALKOPS_SOURCE           — "pypi", "git", or "local" (default: "pypi")
-#   TALKOPS_VERSION          — Exact version to install (e.g. "0.3.0b13")
+#   TALKOPS_VERSION          — Exact version to install (e.g. "0.3.0b14")
 #   TALKOPS_EXTRAS           — Comma-separated pip extras (e.g. "dev", "sandboxes")
 #   TALKOPS_PRERELEASE       — uv pre-release strategy: allow, disallow, if-necessary (default: allow)
 #   TALKOPS_PYTHON           — Python version to use (default: 3.12)
@@ -134,7 +134,7 @@ resolve_latest_pypi_version() {
     fi
   fi
   if [ -z "$latest" ]; then
-    latest="0.3.0b13"
+    latest="0.3.0b14"
   fi
   printf '%s' "$latest"
 }
@@ -164,7 +164,7 @@ ${BOLD}Options:${NC}
   --uninstall         Uninstall talkops and remove binaries
 
 ${BOLD}Environment Variables:${NC}
-  TALKOPS_VERSION          Exact version to install (e.g. "0.3.0b13")
+  TALKOPS_VERSION          Exact version to install (e.g. "0.3.0b14")
   TALKOPS_SOURCE           "pypi", "git", or "local" (default: pypi)
   TALKOPS_EXTRAS           Comma-separated pip extras
   TALKOPS_PRERELEASE       uv pre-release strategy (default: allow)
@@ -565,15 +565,8 @@ if [ "$ACTION" = "uninstall" ]; then
     log_info "No active uv tool installation found for $PACKAGE_NAME."
   fi
 
-  # Clean up legacy package names if present
-  for legacy_pkg in "talkops-opscode" "talkops-opscloud"; do
-    if "$UV_BIN" tool uninstall "$legacy_pkg" >/dev/null 2>&1; then
-      log_info "Removed legacy $legacy_pkg uv tool environment."
-    fi
-  done
-
   # Remove installed binaries
-  for b in "${TOOL_BIN_DIR}/${PRIMARY_BIN}" "${TOOL_BIN_DIR}/${PRIMARY_BIN}.exe" "${TOOL_BIN_DIR}/${ALIAS_BIN}" "${TOOL_BIN_DIR}/${ALIAS_BIN}.exe" "${TOOL_BIN_DIR}/opscode" "${TOOL_BIN_DIR}/opscode.exe" "${TOOL_BIN_DIR}/opscloud" "${TOOL_BIN_DIR}/opscloud.exe"; do
+  for b in "${TOOL_BIN_DIR}/${PRIMARY_BIN}" "${TOOL_BIN_DIR}/${PRIMARY_BIN}.exe" "${TOOL_BIN_DIR}/${ALIAS_BIN}" "${TOOL_BIN_DIR}/${ALIAS_BIN}.exe"; do
     if [ -e "$b" ] || [ -L "$b" ]; then
       rm -f "$b" 2>/dev/null || true
       log_info "Removed $b"
@@ -592,13 +585,7 @@ if [ "$ACTION" = "uninstall" ]; then
   exit 0
 fi
 
-# ── Check Existing Installation & Clean Legacy Packages ──────
-
-for legacy_pkg in "talkops-opscode" "talkops-opscloud"; do
-  if "$UV_BIN" tool uninstall "$legacy_pkg" >/dev/null 2>&1; then
-    log_info "Migrating: removed legacy ${legacy_pkg} tool environment."
-  fi
-done
+# ── Check Existing Installation ──────────────────────────────
 
 CURRENT_VERSION=""
 for bin_candidate in "$PRIMARY_BIN" "${PRIMARY_BIN}.exe"; do
@@ -940,7 +927,7 @@ done
 
 FINAL_VERSION=""
 if [ -n "$INSTALLED_PRIMARY" ]; then
-  FINAL_VERSION="$("$INSTALLED_PRIMARY" --version 2>/dev/null | awk '{print $NF}' || echo "0.3.0b13")"
+  FINAL_VERSION="$("$INSTALLED_PRIMARY" --version 2>/dev/null | awk '{print $NF}' || echo "0.3.0b14")"
 fi
 
 # ── Welcome Banner & Quick Start ─────────────────────────────

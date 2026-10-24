@@ -40,6 +40,7 @@ def run_interactive(
     goal: str | None = None,
     initial_prompt: str | None = None,
     initial_skill: str | None = None,
+    agent: str | None = None,
     startup_cmd: str | None = None,
     read_only: bool = False,
     aws_profile: str | None = None,
@@ -158,6 +159,9 @@ def run_interactive(
             defer_server_start=defer_server_start,
             server_kwargs=server_kwargs,
             goal=goal,
+            initial_skill=initial_skill,
+            initial_agent=agent,
+            startup_cmd=startup_cmd,
             cwd=resolved_cwd,
             mcp_preload_kwargs=mcp_preload_kwargs,
         )

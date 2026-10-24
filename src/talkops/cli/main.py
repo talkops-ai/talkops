@@ -501,6 +501,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Invoke a skill when interactive or headless session starts.",
     )
     parser.add_argument(
+        "-a",
+        "--agent",
+        dest="agent",
+        type=str,
+        default=None,
+        help="Start session with or run prompt using a named specialist agent.",
+    )
+    parser.add_argument(
         "--startup-cmd",
         dest="startup_cmd",
         type=str,
@@ -868,6 +876,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     setup_skills_parser(subparsers)
 
+    from talkops.cli.commands.agents import setup_agents_parser
+
+    setup_agents_parser(subparsers, add_output_args=add_json_output_arg)
+
     help_parser = subparsers.add_parser("help", help="Show help information.")
     help_parser.add_argument(
         "help_topic",
@@ -985,6 +997,8 @@ def main(argv: list[str] | None = None) -> int:
         "addons",
         "skill",
         "skills",
+        "agent",
+        "agents",
         "help",
     }
 
@@ -1199,6 +1213,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except SystemExit as exc:
             return exc.code if isinstance(exc.code, int) else 1
+    elif args.subcommand in {"agent", "agents"}:
+        from talkops.cli.commands.agents import run_agents_command
+
+        return run_agents_command(args, output_format=output_format)
 
     # 4. Handle default model configuration
     if getattr(args, "clear_default_model", False):
@@ -1339,6 +1357,8 @@ def main(argv: list[str] | None = None) -> int:
             non_interactive_kwargs["no_subagents"] = True
         if getattr(args, "tnr", False):
             non_interactive_kwargs["tnr"] = True
+        if getattr(args, "agent", None):
+            non_interactive_kwargs["agent"] = args.agent
         return run_non_interactive(args.prompt, **non_interactive_kwargs)
 
     # 10. Interactive TUI mode
@@ -1373,6 +1393,8 @@ def main(argv: list[str] | None = None) -> int:
         interactive_kwargs["api_key"] = args.api_key
     if getattr(args, "user_id", None):
         interactive_kwargs["user_id"] = args.user_id
+    if getattr(args, "agent", None):
+        interactive_kwargs["agent"] = args.agent
     return run_interactive(**interactive_kwargs)
 
 

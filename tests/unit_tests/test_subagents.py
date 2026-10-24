@@ -905,6 +905,41 @@ def test_subagent_mode_fork_and_harness_profile(tmp_path):
     assert get_talkops_harness_profile("openai:test-ops-model") is registered
 
 
+def test_list_subagents_project_overrides_plugin(tmp_path, monkeypatch):
+    """Verify project subagents in .agents/ and .talkops/agents/ override plugin subagents of the same name."""
+    from talkops.subagents.loader import list_subagents
+
+    dot_agents_dir = tmp_path / ".agents"
+    dot_agents_dir.mkdir()
+    (dot_agents_dir / "sec-scanner.md").write_text(
+        "---\nname: sec-scanner\ndescription: Workspace custom security scanner\n---\nWorkspace prompt.",
+        encoding="utf-8",
+    )
+
+    mock_plugin_agent = {
+        "name": "sec-scanner",
+        "description": "Plugin security scanner",
+        "system_prompt": "Plugin prompt.",
+        "source": "plugin:sec-suite",
+        "path": "/fake/plugin/sec-scanner.md",
+    }
+    monkeypatch.setattr(
+        "talkops.plugins.adapters.agents.discover_plugin_subagents",
+        lambda project_root=None: [mock_plugin_agent],
+    )
+
+    results = list_subagents(
+        user_agents_dir=tmp_path / "empty_user",
+        project_root=tmp_path,
+        include_plugins=True,
+    )
+    by_name = {r["name"]: r for r in results}
+    assert "sec-scanner" in by_name
+    assert by_name["sec-scanner"]["source"] == "project"
+    assert by_name["sec-scanner"]["description"] == "Workspace custom security scanner"
+
+
+
 
 
 

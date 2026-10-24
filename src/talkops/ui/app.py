@@ -308,6 +308,7 @@ class TalkOpsApp(App):
         goal: str | None = None,
         initial_prompt: str | None = None,
         initial_skill: str | None = None,
+        initial_agent: str | None = None,
         startup_cmd: str | None = None,
         cwd: str | Path | None = None,
         check_workspace_trust: bool | None = None,
@@ -391,6 +392,7 @@ class TalkOpsApp(App):
         self._goal = goal
         self._initial_prompt = initial_prompt
         self._initial_skill = initial_skill
+        self._initial_agent = initial_agent or extra_kwargs.get("agent")
         self._startup_cmd = startup_cmd
         self._agent_thread_id: str | None = None
         self._previous_thread_id: str | None = None
@@ -1345,16 +1347,29 @@ class TalkOpsApp(App):
 
             active_aws_prof = get_active_aws_profile()
             active_aws_reg = get_active_aws_region()
+            mode_val = self._approval_mode.value if hasattr(self._approval_mode, "value") else str(self._approval_mode)
+            is_smart = mode_val.lower() == "smart"
+            base_context_model = (
+                (self._manual_model or self._model)
+                if (is_smart and getattr(self, "_smart_routed_active", False))
+                else self._model
+            )
             context: dict[str, Any] = {}
-            if self._model:
-                context["model"] = self._model
+            if base_context_model:
+                context["model"] = base_context_model
+            eff = self._reasoning_effort or getattr(self.settings, "reasoning_effort", None)
+            if eff and base_context_model and base_context_model not in ("auto", "dynamic"):
+                from talkops.model.reasoning import with_effort_model_params
+
+                effort_params = with_effort_model_params(base_context_model, None, str(eff))
+                if effort_params:
+                    context["model_params"] = effort_params
             if active_aws_prof:
                 context["aws_profile"] = active_aws_prof
             if active_aws_reg:
                 context["aws_region"] = active_aws_reg
-            mode_val = self._approval_mode.value if hasattr(self._approval_mode, "value") else str(self._approval_mode)
             context["approval_mode"] = mode_val
-            context["smart"] = (mode_val.lower() == "smart")
+            context["smart"] = is_smart
             panel = self._get_subagent_panel()
             if panel is not None:
                 spec = self._model or ""
@@ -2216,9 +2231,10 @@ class TalkOpsApp(App):
         return [dict(s) for s in skills]
 
     def get_discovered_plugin_agents(self) -> list[dict[str, Any]]:
-        """Get list of discovered plugin subagents."""
+        """Get list of discovered user, project, and plugin subagents."""
+        from talkops.config import paths
         from talkops.config.settings import settings
-        from talkops.plugins.adapters.agents import discover_plugin_subagents
+        from talkops.subagents.loader import list_subagents
 
         ws_trusted = getattr(self, "_workspace_trusted", True)
         project_root = (
@@ -2230,7 +2246,23 @@ class TalkOpsApp(App):
             if ws_trusted
             else None
         )
-        agents = discover_plugin_subagents(project_root=project_root)
+        root_path = Path(project_root) if project_root else None
+        user_agents_dir = paths.user_agents_dir("talkops")
+        project_agents_dir = paths.project_agents_dir(root_path) if root_path else None
+        if (
+            project_agents_dir is not None
+            and not project_agents_dir.is_dir()
+            and root_path is not None
+            and (root_path / "agents").is_dir()
+        ):
+            project_agents_dir = root_path / "agents"
+
+        agents = list_subagents(
+            user_agents_dir=user_agents_dir if user_agents_dir.is_dir() else None,
+            project_agents_dir=project_agents_dir if project_agents_dir and project_agents_dir.is_dir() else None,
+            project_root=root_path,
+            include_plugins=True,
+        )
         return [dict(a) for a in agents]
 
     async def _discover_startup_skills(self) -> None:

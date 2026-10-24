@@ -109,7 +109,7 @@ def sync_agent_session_status_label(app: object, state: AgentSessionState) -> No
 
 
 def _discover_plugin_agents(app: object | None = None) -> list[SubagentMetadata]:
-    """Discover subagents originating strictly from enabled plugins."""
+    """Discover subagents originating from user, project (.talkops/agents), and enabled plugins."""
     getter: Any = getattr(app, "get_discovered_plugin_agents", None) if app is not None else None
     if callable(getter):
         try:
@@ -119,7 +119,8 @@ def _discover_plugin_agents(app: object | None = None) -> list[SubagentMetadata]
         except Exception:
             pass
 
-    from talkops.plugins.adapters.agents import discover_plugin_subagents
+    from talkops.config import paths
+    from talkops.subagents.loader import list_subagents
 
     project_root = getattr(getattr(app, "_settings", None), "project_root", None) if app is not None else None
     if project_root is None:
@@ -128,7 +129,17 @@ def _discover_plugin_agents(app: object | None = None) -> list[SubagentMetadata]
         project_root = settings.project_root
 
     root_path = Path(project_root) if project_root else Path.cwd()
-    return discover_plugin_subagents(project_root=root_path)
+    user_agents_dir = paths.user_agents_dir("talkops")
+    project_agents_dir = paths.project_agents_dir(root_path)
+    if not project_agents_dir.is_dir() and (root_path / "agents").is_dir():
+        project_agents_dir = root_path / "agents"
+
+    return list_subagents(
+        user_agents_dir=user_agents_dir if user_agents_dir.is_dir() else None,
+        project_agents_dir=project_agents_dir if project_agents_dir.is_dir() else None,
+        project_root=root_path,
+        include_plugins=True,
+    )
 
 
 def resolve_plugin_agent(

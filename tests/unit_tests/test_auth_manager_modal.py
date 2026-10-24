@@ -110,3 +110,93 @@ async def test_auth_prompt_screen_mount_and_cancel() -> None:
         screen.action_cancel()
         await pilot.pause()
         assert len(app._screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_auth_manager_does_not_show_unconfigured_cloud_providers_as_stored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify AuthManagerScreen marks Gemini, Bedrock, and Vertex AI as MISSING when not configured."""
+    from talkops.config.settings import get_settings
+
+    s = get_settings()
+    for k in (
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCP_PROJECT_ID",
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_API_KEY",
+        "GOOGLE_VERTEXAI_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "TALKOPS_AWS_ACCESS_KEY_ID",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "BEDROCK_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    # Simulate ambient shell AWS CLI keys present at startup
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA_AMBIENT")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "SECRET_AMBIENT")
+    monkeypatch.setattr(
+        "talkops.model.config._INITIAL_SHELL_AWS_CREDS",
+        {"AWS_ACCESS_KEY_ID": "AKIA_AMBIENT", "AWS_SECRET_ACCESS_KEY": "SECRET_AMBIENT"},
+    )
+    monkeypatch.setattr("talkops.config.toml_config.load_default_model", lambda: None)
+    monkeypatch.setattr("talkops.config.toml_config.load_recent_model", lambda: None)
+
+    monkeypatch.setattr(s, "google_api_key", None, raising=False)
+    monkeypatch.setattr(s, "google_cloud_project", None, raising=False)
+    monkeypatch.setattr(s, "google_genai_use_vertexai", False, raising=False)
+    monkeypatch.setattr(s, "model_name", None, raising=False)
+    monkeypatch.setattr(s, "model", None, raising=False)
+
+    screen = AuthManagerScreen()
+    options = {opt.id: str(opt.prompt) for opt in screen._build_options(width=70)}
+
+    for prov in ("google_genai", "bedrock", "google_vertexai", "google_anthropic_vertex"):
+        assert "MISSING" in options[prov], f"Expected {prov} to be MISSING, got: {options[prov]}"
+        assert "Not set" in options[prov], f"Expected {prov} to be Not set, got: {options[prov]}"
+
+
+@pytest.mark.asyncio
+async def test_selecting_auto_jev_in_model_selector_prompts_typesafe_auth_not_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify selecting Autonomous Tier Routing (TypeSafe Jev System 1) prompts for TypeSafe AI (Jev) key, not OpenAI."""
+    from talkops.config.settings import get_settings
+    from talkops.model.config import resolve_model_spec
+    from talkops.ui.app import TalkOpsApp
+    from talkops.ui.widgets.auth import AuthPromptScreen
+    from talkops.ui.widgets.model_selector import ModelSelectorScreen
+
+    s = get_settings()
+    for k in ("TYPESAFE_API_KEY", "JEV_API_KEY", "TALKOPS_TYPESAFE_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(s, "typesafe_api_key", None, raising=False)
+
+    assert resolve_model_spec("auto") == ("typesafe", "auto")
+    assert resolve_model_spec("dynamic") == ("typesafe", "dynamic")
+
+    app = TalkOpsApp()
+    async with app.run_test(headless=True) as pilot:
+        s = get_settings()
+        for k in ("TYPESAFE_API_KEY", "JEV_API_KEY", "TALKOPS_TYPESAFE_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setattr(s, "typesafe_api_key", None, raising=False)
+
+        screen = ModelSelectorScreen()
+        app.push_screen(screen)
+        await pilot.pause()
+
+        screen._select_with_auth_check("auto", "dynamic", None)
+        await pilot.pause()
+
+        top_screen = app.screen
+        assert isinstance(top_screen, AuthPromptScreen)
+        assert top_screen._provider == "typesafe"
+        assert top_screen._env_var == "TYPESAFE_API_KEY"
+        assert "TypeSafe AI (Jev)" in str(top_screen.dialog.border_title)
+        assert "OpenAI" not in str(top_screen.dialog.border_title)
+
+

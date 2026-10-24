@@ -1178,4 +1178,336 @@ def test_mcp_context_and_auto_lazy_for_large_subagent_catalog(
     assert [t.name for t in built] == ["call_mcp_tool"]
 
 
+def test_mcp_context_eager_lazy_formatting() -> None:
+    """Verify _build_mcp_context_from_infos renders Eager vs Lazy partitioning when configured."""
+    info = MCPServerInfo(
+        name="k8s-server",
+        transport="stdio",
+        status="ok",
+        tools=(
+            MCPToolInfo(
+                name="k8s-server:get_pods",
+                original_name="get_pods",
+                description="List pods",
+                input_schema={"type": "object"},
+            ),
+            MCPToolInfo(
+                name="k8s-server:delete_pod",
+                original_name="delete_pod",
+                description="Delete pod",
+                input_schema={"type": "object"},
+            ),
+        ),
+    )
+    mixed_cfg = {"k8s-server": {"transport": "stdio", "command": "fake", "eager_tools": ["get_pods"]}}
+    ctx_mixed = _build_mcp_context_from_infos([info], configs=mixed_cfg)
+    assert "Eager: k8s-server:get_pods" in ctx_mixed
+    assert "Lazy (via `call_mcp_tool`): k8s-server:delete_pod" in ctx_mixed
+
+    all_lazy_cfg = {"k8s-server": {"transport": "stdio", "command": "fake", "lazy_load": True}}
+    ctx_lazy = _build_mcp_context_from_infos([info], configs=all_lazy_cfg)
+    assert "[lazy]: k8s-server:get_pods, k8s-server:delete_pod" in ctx_lazy
+
+
+def test_tool_filter_middleware_call_mcp_tool_validation() -> None:
+    """Verify ToolFilterMiddleware validates call_mcp_tool across server_name/ServerName/server aliases."""
+    from langgraph.prebuilt.tool_node import ToolCallRequest
+
+    from talkops.middleware.tool_filter import ToolFilterMiddleware
+
+    scoped_srv = "subagent__aws-finops-agent_talkops-devops-plugins_a5270392__billing"
+    mw = ToolFilterMiddleware(
+        allowed_patterns=["mcp__plugin_aws-finops-agent_billing__*", "read_file"],
+        subagent_name="aws-finops-agent@talkops-devops-plugins",
+        known_mcp_servers={scoped_srv},
+    )
+
+    none_runtime: object = None
+    # 1. Allowed via base server name and ServerName/ToolName aliases
+    req_ok = ToolCallRequest(
+        tool=MagicMock(),
+        tool_call={
+            "name": "call_mcp_tool",
+            "args": {"ServerName": "billing", "ToolName": "get_cost_and_usage", "Arguments": {}},
+            "id": "tc_ok_1",
+        },
+        state={},
+        runtime=none_runtime,  # type: ignore[arg-type]
+    )
+    assert mw._validate_tool_call(req_ok) is None
+
+    # 2. Allowed via server/tool shorthand aliases
+    req_ok_short = ToolCallRequest(
+        tool=MagicMock(),
+        tool_call={
+            "name": "call_mcp_tool",
+            "args": {"server": scoped_srv, "tool": "get_cost_forecast", "args": {}},
+            "id": "tc_ok_2",
+        },
+        state={},
+        runtime=none_runtime,  # type: ignore[arg-type]
+    )
+    assert mw._validate_tool_call(req_ok_short) is None
+
+    # 3. Rejected for unauthorized server/tool
+    req_blocked = ToolCallRequest(
+        tool=MagicMock(),
+        tool_call={
+            "name": "call_mcp_tool",
+            "args": {"server_name": "iam-admin", "tool_name": "delete_user", "arguments": {}},
+            "id": "tc_block_1",
+        },
+        state={},
+        runtime=none_runtime,  # type: ignore[arg-type]
+    )
+    err = mw._validate_tool_call(req_blocked)
+    assert isinstance(err, ToolMessage)
+    assert err.status == "error"
+    assert "iam-admin:delete_user" in str(err.content)
+
+
+def test_main_coordinator_call_mcp_tool_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify lazy MCP tools & call_mcp_tool across main coordinator HITL, HeadlessGuard, AutoMode, Jev, and ServerHooks."""
+    from pathlib import Path as _Path
+    from langgraph.prebuilt.tool_node import ToolCallRequest
+
+    import talkops.mcp.preload as mcp_preload
+    from talkops.agent.factory import _format_description, _should_interrupt_tool_call
+    from talkops.mcp.session_manager import build_mcp_tools_from_server_infos
+    from talkops.middleware.auto_mode_hitl import _deterministic_allow
+    from talkops.middleware.headless_mcp_guard import (
+        HeadlessMCPGuardMiddleware,
+        gated_mcp_tool_names,
+    )
+    from talkops.middleware.server_hooks import _tool_call_data_from_call
+    from talkops.security.jev_classifier import JevSecurityClassifier
+
+    monkeypatch.setenv("TALKOPS_MCP_SCHEMA_DIR", str(tmp_path))
+
+    info = MCPServerInfo(
+        name="k8s",
+        transport="stdio",
+        status="ok",
+        tools=(
+            MCPToolInfo(
+                name="k8s:list_pods",
+                original_name="list_pods",
+                description="List pods in namespace",
+                input_schema={"type": "object"},
+            ),
+            MCPToolInfo(
+                name="k8s:delete_pod",
+                original_name="delete_pod",
+                description="Delete pod in namespace",
+                input_schema={"type": "object"},
+            ),
+        ),
+    )
+    monkeypatch.setattr(mcp_preload, "get_cached_mcp_server_infos", lambda: [info])
+
+    cfg = {"k8s": {"transport": "stdio", "command": "fake", "lazy_load": True}}
+    manager = MCPSessionManager(cfg)
+    built_tools = build_mcp_tools_from_server_infos([info], manager, configs=cfg)
+    assert [t.name for t in built_tools] == ["call_mcp_tool"]
+
+    # 1. _format_description formats call_mcp_tool like eager MCP tools
+    desc = _format_description(
+        {
+            "name": "call_mcp_tool",
+            "args": {
+                "server_name": "k8s",
+                "tool_name": "delete_pod",
+                "arguments": {"name": "nginx", "namespace": "default"},
+            },
+        }
+    )
+    assert desc == "Execute k8s action 'delete_pod' (name=nginx, namespace=default)"
+
+    # 2. _should_interrupt_tool_call in manual mode allows read-only lazy MCP tool and interrupts mutating one
+    ro_call = {
+        "id": "tc_ro",
+        "name": "call_mcp_tool",
+        "args": {"server_name": "k8s", "tool_name": "list_pods", "arguments": {}},
+    }
+    mut_call = {
+        "id": "tc_mut",
+        "name": "call_mcp_tool",
+        "args": {"server_name": "k8s", "tool_name": "delete_pod", "arguments": {"name": "nginx"}},
+    }
+    assert _should_interrupt_tool_call({"state": {"approval_mode": "manual"}, "tool_call": ro_call}) is False
+    assert _should_interrupt_tool_call({"state": {"approval_mode": "manual"}, "tool_call": mut_call}) is True
+
+    # 3. _deterministic_allow in Auto/Smart mode fast-allows read-only call_mcp_tool and reviews mutating one
+    dispatcher_tool = built_tools[0]
+    assert _deterministic_allow(_Path("."), ro_call, dispatcher_tool) is True  # type: ignore[arg-type]
+    assert _deterministic_allow(_Path("."), mut_call, dispatcher_tool) is False  # type: ignore[arg-type]
+
+    # 4. HeadlessMCPGuardMiddleware allows read-only call_mcp_tool even when "call_mcp_tool" is in gated_mcp
+    gated = gated_mcp_tool_names(built_tools)
+    assert "call_mcp_tool" in gated
+    guard = HeadlessMCPGuardMiddleware(gated)
+    none_runtime: object = None
+    ro_req = ToolCallRequest(
+        tool=dispatcher_tool,
+        tool_call=ro_call,  # type: ignore[arg-type]
+        state={},
+        runtime=none_runtime,  # type: ignore[arg-type]
+    )
+    mut_req = ToolCallRequest(
+        tool=dispatcher_tool,
+        tool_call=mut_call,  # type: ignore[arg-type]
+        state={},
+        runtime=none_runtime,  # type: ignore[arg-type]
+    )
+    assert guard._rejection(ro_req) is None
+    blocked_msg = guard._rejection(mut_req)
+    assert isinstance(blocked_msg, ToolMessage)
+    assert blocked_msg.status == "error"
+
+    # 5. JevSecurityClassifier recognizes call_mcp_tool as mcp_tool and extracts server & action
+    jev = JevSecurityClassifier(api_key="")
+    assert jev._detect_action_type("call_mcp_tool", mut_call["args"], tool=dispatcher_tool) == "mcp_tool"  # type: ignore[arg-type]
+    details = jev._extract_mcp_details("call_mcp_tool", tool=dispatcher_tool, tool_args=mut_call["args"])  # type: ignore[arg-type]
+    assert details["server_name"] == "k8s"
+    assert details["mcp_action"] == "delete_pod"
+
+    # 6. ServerHooksMiddleware extracts mcp_server from call_mcp_tool args
+    hook_call = _tool_call_data_from_call(mut_call, mcp_server=None)
+    assert hook_call.mcp_server == "k8s"
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_json_string_arguments_and_schema_hints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify call_mcp_tool accepts JSON string arguments (Gemini/google_genai), Mapping, and emits schema hints."""
+    from types import MappingProxyType
+
+    import talkops.mcp.preload as mcp_preload
+    from talkops.mcp.session_manager import build_call_mcp_tool
+    from talkops.ui.widgets.tool_display import format_tool_parts
+
+    monkeypatch.setenv("TALKOPS_MCP_SCHEMA_DIR", str(tmp_path))
+
+    info = MCPServerInfo(
+        name="subagent__reverse-engineer__rea",
+        transport="stdio",
+        status="ok",
+        tools=(
+            MCPToolInfo(
+                name="subagent__reverse-engineer__rea_open_binary",
+                original_name="open_binary",
+                description="Open a local executable or archive",
+                input_schema={
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            ),
+            MCPToolInfo(
+                name="subagent__reverse-engineer__rea_binary_session",
+                original_name="binary_session",
+                description="Inspect current binary session",
+                input_schema={"type": "object", "properties": {}},
+            ),
+            MCPToolInfo(
+                name="subagent__reverse-engineer__rea_search_strings",
+                original_name="search_strings",
+                description="Search strings in binary",
+                input_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            ),
+        ),
+    )
+    monkeypatch.setattr(mcp_preload, "get_cached_mcp_server_infos", lambda: [info])
+
+    from mcp.types import TextContent
+
+    mock_session = AsyncMock()
+    mock_res = MagicMock()
+    mock_res.isError = False
+    mock_res.content = [TextContent(type="text", text='{"status": "ok"}')]
+    mock_session.call_tool = AsyncMock(return_value=mock_res)
+
+    manager = MCPSessionManager({"subagent__reverse-engineer__rea": {"transport": "stdio", "command": "fake"}})
+    monkeypatch.setattr(manager, "get_session", AsyncMock(return_value=mock_session))
+
+    dispatcher = build_call_mcp_tool(manager, server_infos=[info])
+
+    # 1. JSON string arguments (as produced by langchain_google_genai for Gemini)
+    res1 = await dispatcher.ainvoke(
+        {
+            "server_name": "subagent__reverse-engineer__rea",
+            "tool_name": "open_binary",
+            "arguments": '{"path": "/Users/structbinary/.local/bin/agy"}',
+        }
+    )
+    assert "ok" in str(res1)
+    mock_session.call_tool.assert_awaited_with("open_binary", {"path": "/Users/structbinary/.local/bin/agy"})
+
+    # 2. Empty JSON string "{}" for binary_session and prefixed tool_name ("rea_binary_session")
+    res2 = await dispatcher.ainvoke(
+        {
+            "server_name": "rea",
+            "tool_name": "rea_binary_session",
+            "arguments": "{}",
+        }
+    )
+    assert "ok" in str(res2)
+    mock_session.call_tool.assert_awaited_with("binary_session", {})
+
+    # 3. Non-dict Mapping (e.g., protobuf MapComposite)
+    res3 = await dispatcher.ainvoke(
+        {
+            "server_name": "rea",
+            "tool_name": "open_binary",
+            "arguments": MappingProxyType({"path": "/tmp/bin"}),
+        }
+    )
+    assert "ok" in str(res3)
+    mock_session.call_tool.assert_awaited_with("open_binary", {"path": "/tmp/bin"})
+
+    # 4. Missing required field returns actionable schema hint
+    err_missing = await dispatcher.ainvoke(
+        {
+            "server_name": "rea",
+            "tool_name": "open_binary",
+            "arguments": "{}",
+        }
+    )
+    assert "Missing required argument(s) ['path']" in str(err_missing)
+    assert '"path": "string"' in str(err_missing)
+
+    # 5. Unknown tool name suggests closest valid tool names on that server
+    err_unknown = await dispatcher.ainvoke(
+        {
+            "server_name": "rea",
+            "tool_name": "find_strings",
+            "arguments": '{"query": "mcp"}',
+        }
+    )
+    assert "does not exist on server" in str(err_unknown)
+    assert "search_strings" in str(err_unknown)
+
+    # 6. TUI format_tool_parts unwraps call_mcp_tool with JSON string arguments
+    parts = format_tool_parts(
+        "call_mcp_tool",
+        {
+            "server_name": "subagent__reverse-engineer__rea",
+            "tool_name": "open_binary",
+            "arguments": '{"path": "/Users/structbinary/.local/bin/agy"}',
+        },
+    )
+    assert parts.name == "OpenBinary"
+    assert parts.scope == "reverse-engineer"
+    assert "agy" in parts.detail
+
+
+
+
+
 

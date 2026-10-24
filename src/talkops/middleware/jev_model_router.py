@@ -543,6 +543,34 @@ def _resolve_chat_model(model_or_spec: str | Any) -> Any:
         return create_model(model_or_spec).model
 
 
+class _LazyPoolModelsDict(Mapping[str, Any]):
+    """Lazy mapping of route names ('fast', 'standard', 'powerful') to tier ChatModel instances.
+
+    Avoids eagerly instantiating all 3 tier ChatModels when constructing ModelRouterMiddleware;
+    only the selected route's tier model is instantiated on demand.
+    """
+
+    def __init__(self, pool: DynamicModelPoolManager, *, base_spec: str | None = None) -> None:
+        self._pool = pool
+        self._base_spec = base_spec
+
+    def __getitem__(self, key: str) -> Any:
+        if key not in ROUTE_TO_TIER_MAP:
+            raise KeyError(key)
+        tier = ROUTE_TO_TIER_MAP[key]
+        model, _, _, _ = self._pool.get_model_for_tier(tier, base_spec=self._base_spec)
+        return model
+
+    def __iter__(self) -> Any:
+        return iter(ROUTE_TO_TIER_MAP)
+
+    def __len__(self) -> int:
+        return len(ROUTE_TO_TIER_MAP)
+
+    def __contains__(self, key: object) -> bool:
+        return key in ROUTE_TO_TIER_MAP
+
+
 @register_middleware(name="jev_model_router")
 class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
     """Dynamic model and reasoning effort router powered by TypeSafe AI Jev.
@@ -635,12 +663,30 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
                 # that compatibility workaround off the startup path.
                 os.environ["TYPESAFE_API_KEY"] = "placeholder"
 
-            router = ModelRouterMiddleware(
-                choices=choices,
-                instructions=self._instructions,
-            )
-            if resolved_key and resolved_key != "placeholder":
-                router.classifier = TypeSafeClassifier(api_key=resolved_key)
+            if self._explicit_choices is not None:
+                router = ModelRouterMiddleware(
+                    choices=choices,
+                    instructions=self._instructions,
+                )
+                if resolved_key and resolved_key != "placeholder":
+                    router.classifier = TypeSafeClassifier(api_key=resolved_key)
+            else:
+                from langchain_typesafe.experimental.middleware.model_router import (
+                    _ModelRouterConfig,
+                )
+
+                router = object.__new__(ModelRouterMiddleware)
+                AgentMiddleware.__init__(router)
+                router.config = _ModelRouterConfig(
+                    choices=dict(choices),
+                    instructions=self._instructions,
+                )
+                router.models = cast(Any, _LazyPoolModelsDict(self.pool, base_spec=base_spec))
+                router.classifier = (
+                    TypeSafeClassifier(api_key=resolved_key)
+                    if (resolved_key and resolved_key != "placeholder")
+                    else TypeSafeClassifier()
+                )
 
             self._router = router
             self._router_key = key
@@ -861,10 +907,12 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
 
             target_tier = ROUTE_TO_TIER_MAP.get(selected_route, 1)
 
-            # Retrieve model spec & reasoning effort details for TUI & settings
-            chat_model, selected_spec, final_effort, _ = self.pool.get_model_for_tier(
+            # Resolve model spec & reasoning effort details without eagerly instantiating ChatModel;
+            # the single routed tier model will be instantiated on demand in awrap_model_call.
+            tiers = self.pool.discover_tiers(base_spec=base_spec)
+            selected_spec, final_effort = tiers.get(
                 target_tier,
-                base_spec=base_spec,
+                tiers.get(1, (base_spec or "google_genai:gemini-3.7-flash", "off")),
             )
             provider, model_name = _split_spec(selected_spec)
 
@@ -891,15 +939,6 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
                 "subagent_id": self._subagent_name or ctx.get("subagent_name"),
             }
             _emit_model_routed_event(runtime, event_payload)
-
-            if not is_subagent:
-                settings = get_settings()
-                if settings is not None:
-                    settings.model = model_name
-                    settings.model_name = model_name
-                    settings.model_provider = provider
-                    if final_effort:
-                        settings.reasoning_effort = final_effort
 
             try:
                 await adispatch_custom_event(
@@ -1004,12 +1043,12 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
         if not selected_route or selected_route not in models:
             selected_route = "standard" if "standard" in models else next(iter(models))
 
-        selected_model = models[selected_route]
         tier = ROUTE_TO_TIER_MAP.get(selected_route, 1)
         chat_model, selected_spec, final_effort, native_settings = self.pool.get_model_for_tier(
             tier,
             base_spec=base_spec,
         )
+        selected_model = models[selected_route] if self._explicit_choices is not None else chat_model
 
         logger.info(
             "Jev Dynamic Router: dispatching model call -> %s (route=%s, effort=%s, tier=%d)",
@@ -1033,15 +1072,6 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
         }
         if runtime:
             _emit_model_routed_event(runtime, event_payload)
-
-        if not is_subagent:
-            settings = get_settings()
-            if settings is not None:
-                settings.model = model_name
-                settings.model_name = model_name
-                settings.model_provider = provider
-                if final_effort:
-                    settings.reasoning_effort = final_effort
 
         if final_effort in ("off", "none", "clear", "0", "reset") or not supported_efforts_for_model(selected_spec):
             merged_settings = without_effort_model_params(selected_spec, request.model_settings or {}) or {}
@@ -1104,12 +1134,12 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
         if not selected_route or selected_route not in models:
             selected_route = "standard" if "standard" in models else next(iter(models))
 
-        selected_model = models[selected_route]
         tier = ROUTE_TO_TIER_MAP.get(selected_route, 1)
         chat_model, selected_spec, final_effort, native_settings = self.pool.get_model_for_tier(
             tier,
             base_spec=base_spec,
         )
+        selected_model = models[selected_route] if self._explicit_choices is not None else chat_model
 
         logger.info(
             "Jev Dynamic Router: dispatching model call -> %s (route=%s, effort=%s, tier=%d)",
@@ -1133,15 +1163,6 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
         }
         if runtime:
             _emit_model_routed_event(runtime, event_payload)
-
-        if not is_subagent:
-            settings = get_settings()
-            if settings is not None:
-                settings.model = model_name
-                settings.model_name = model_name
-                settings.model_provider = provider
-                if final_effort:
-                    settings.reasoning_effort = final_effort
 
         if final_effort in ("off", "none", "clear", "0", "reset") or not supported_efforts_for_model(selected_spec):
             merged_settings = without_effort_model_params(selected_spec, request.model_settings or {}) or {}

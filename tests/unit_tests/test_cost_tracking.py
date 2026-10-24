@@ -323,3 +323,42 @@ def test_cost_tracking_zero_cost_token_transfer_claim():
     assert "subagent:1" not in remaining
 
 
+def test_cost_tracking_no_double_token_count_for_unpriced_model():
+    """Verify unpriced models (e.g. gemini-4-argon) do not double-count tokens when drained + price_latest_message."""
+    from talkops.middleware.cost_tracking import _RECORDER, CostTrackingMiddleware
+
+    mw = CostTrackingMiddleware(nested=False)
+    thread_id = f"thread-argon-{uuid4().hex[:8]}"
+    run_id = uuid4()
+
+    _RECORDER.on_chat_model_start(
+        {},
+        [[]],
+        run_id=run_id,
+        metadata={"thread_id": thread_id, "talkops_configured_provider": "google_vertexai"},
+    )
+    ai_msg = AIMessage(
+        id="msg_argon_1",
+        content="Response from gemini-4-argon",
+        usage_metadata={"input_tokens": 14154, "output_tokens": 177, "total_tokens": 14331},
+        response_metadata={"model_name": "gemini-4-argon", "model_provider": "google_genai"},
+    )
+    _RECORDER.on_llm_end(LLMResult(generations=[[ChatGeneration(message=ai_msg)]]), run_id=run_id)
+
+    runtime_mock = MagicMock()
+    runtime_mock.execution_info.thread_id = thread_id
+    runtime_mock.execution_info.checkpoint_ns = ""
+    runtime_mock.stream_writer = lambda _: None
+
+    state: Any = {
+        "messages": [ai_msg],
+        "_session_cost_usd": 0.0,
+        "_session_total_tokens": 0,
+    }
+    update = mw.after_model(state, runtime_mock)
+    assert update is not None
+    assert update.get("_session_total_tokens") == 14331
+    assert update.get("_session_input_tokens") == 14154
+
+
+

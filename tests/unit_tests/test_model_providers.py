@@ -982,5 +982,205 @@ def test_ollama_available_models_list_only_shows_installed(monkeypatch):
     assert all("(installed)" in m[1] for m in ollama_entries)
 
 
+def test_gemini_4_argon_model_catalog_and_profiles():
+    """Verify Gemini 4 Argon is registered across Gemini providers with reasoning support."""
+    from talkops.model.config import AVAILABLE_MODELS, get_model_profile
+    from talkops.model.pool import supported_efforts_for_model
+
+    genai_ids = [m[0] for m in AVAILABLE_MODELS["google_genai"]]
+    vertex_ids = [m[0] for m in AVAILABLE_MODELS["google_vertexai"]]
+    openrouter_ids = [m[0] for m in AVAILABLE_MODELS["openrouter"]]
+    litellm_ids = [m[0] for m in AVAILABLE_MODELS["litellm"]]
+
+    assert "gemini-4-argon" in genai_ids
+    assert "gemini-4-argon" in vertex_ids
+    assert "google/gemini-4-argon" in openrouter_ids
+    assert "gemini/gemini-4-argon" in litellm_ids
+
+    for spec in (
+        "google_genai:gemini-4-argon",
+        "google_vertexai:gemini-4-argon",
+        "openrouter:google/gemini-4-argon",
+        "litellm:gemini/gemini-4-argon",
+    ):
+        prof = get_model_profile(spec)
+        assert prof is not None
+        assert prof["profile"]["max_input_tokens"] == 1048576
+        assert prof["profile"]["max_output_tokens"] == 65536
+        assert supported_efforts_for_model(spec) == ("low", "medium", "high")
+
+
+def test_vertex_and_ambient_bedrock_not_falsely_activated(monkeypatch):
+    """Verify Vertex AI, Anthropic Vertex, and ambient AWS CLI credentials do not falsely activate providers."""
+    import os
+    from talkops.config.settings import get_settings
+    from talkops.model.config import (
+        ProviderAuthState,
+        apply_stored_credentials,
+        get_provider_auth_status,
+    )
+
+    s = get_settings()
+    for k in (
+        "GOOGLE_CLOUD_PROJECT",
+        "GCP_PROJECT_ID",
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_API_KEY",
+        "GOOGLE_VERTEXAI_API_KEY",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "TALKOPS_AWS_ACCESS_KEY_ID",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "BEDROCK_API_KEY",
+        "AWS_ENDPOINT_URL_BEDROCK_RUNTIME",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    monkeypatch.setattr(s, "google_cloud_project", None, raising=False)
+    monkeypatch.setattr(s, "google_api_key", None, raising=False)
+    monkeypatch.setattr(s, "google_genai_use_vertexai", False, raising=False)
+    monkeypatch.setattr(s, "model_name", None, raising=False)
+    monkeypatch.setattr(s, "model", None, raising=False)
+
+    # 1. Vertex providers must be MISSING when unconfigured (not IMPLICIT)
+    vtx_status = get_provider_auth_status("google_vertexai")
+    anth_vtx_status = get_provider_auth_status("google_anthropic_vertex")
+    assert vtx_status.state == ProviderAuthState.MISSING
+    assert anth_vtx_status.state == ProviderAuthState.MISSING
+    assert vtx_status.as_legacy_bool() is False
+    assert anth_vtx_status.as_legacy_bool() is False
+
+    # 2. Unconfigured apply_stored_credentials("google_vertexai") must not pollute google_genai
+    apply_stored_credentials("google_vertexai")
+    assert os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") != "true"
+    assert get_provider_auth_status("google_genai").state == ProviderAuthState.MISSING
+
+    # 3. Setting GOOGLE_API_KEY (AI Studio) activates google_genai, NOT google_vertexai / google_anthropic_vertex
+    monkeypatch.setenv("GOOGLE_API_KEY", "AIza-test-studio-key")
+    assert get_provider_auth_status("google_genai").state == ProviderAuthState.CONFIGURED
+    assert get_provider_auth_status("google_vertexai").state == ProviderAuthState.MISSING
+    assert get_provider_auth_status("google_anthropic_vertex").state == ProviderAuthState.MISSING
+
+    # 4. Ambient shell AWS credentials matching _INITIAL_SHELL_AWS_CREDS do not activate bedrock
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA_AMBIENT_SHELL")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "SECRET_AMBIENT_SHELL")
+    monkeypatch.setattr(
+        "talkops.model.config._INITIAL_SHELL_AWS_CREDS",
+        {"AWS_ACCESS_KEY_ID": "AKIA_AMBIENT_SHELL", "AWS_SECRET_ACCESS_KEY": "SECRET_AMBIENT_SHELL"},
+    )
+    monkeypatch.setattr("talkops.config.toml_config.load_default_model", lambda: None)
+    monkeypatch.setattr("talkops.config.toml_config.load_recent_model", lambda: None)
+    assert get_provider_auth_status("bedrock").state == ProviderAuthState.MISSING
+
+
+def test_vertex_ai_api_key_does_not_activate_google_genai_or_pass_key_as_gcp_project(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Configuring Google Vertex AI with an AQ.* API key does not mark Google Gemini as configured or set project=AQ.*."""
+    import os
+    from talkops.auth.storage import CompositeCredentialStorage
+    from talkops.config.settings import get_settings
+    from talkops.model.config import (
+        ProviderAuthState,
+        apply_stored_credentials,
+        get_provider_auth_status,
+    )
+    from talkops.model.factory import _get_provider_kwargs, clear_model_cache, create_model
+
+    storage = CompositeCredentialStorage(
+        auth_file_path=tmp_path / "auth.json",
+        env_file_path=tmp_path / ".env",
+    )
+    monkeypatch.setattr("talkops.auth.storage.get_credential_storage", lambda: storage)
+    monkeypatch.setattr("talkops.state.remote_session._can_use_disk_auth_session", lambda: True)
+
+    s = get_settings()
+    for k in (
+        "GOOGLE_CLOUD_PROJECT",
+        "GCP_PROJECT_ID",
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_API_KEY",
+        "GOOGLE_VERTEXAI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(s, "google_cloud_project", None, raising=False)
+    monkeypatch.setattr(s, "google_api_key", None, raising=False)
+    monkeypatch.setattr(s, "google_genai_use_vertexai", False, raising=False)
+
+    vertex_key = "AQ.test-dummy-vertex-express-key"
+    storage.set_provider_key("google_vertexai", vertex_key, env_var="GOOGLE_CLOUD_PROJECT")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", vertex_key)
+
+    # 1. google_vertexai is CONFIGURED, while google_genai remains MISSING
+    assert get_provider_auth_status("google_vertexai").state == ProviderAuthState.CONFIGURED
+    assert get_provider_auth_status("google_genai").state == ProviderAuthState.MISSING
+
+    # 2. apply_stored_credentials("google_vertexai") moves AQ.* key out of GOOGLE_CLOUD_PROJECT into VERTEXAI_API_KEY
+    apply_stored_credentials("google_vertexai")
+    assert os.environ.get("VERTEXAI_API_KEY") == vertex_key
+    assert os.environ.get("GOOGLE_CLOUD_PROJECT") is None
+    assert os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") != "true"
+    assert get_provider_auth_status("google_genai").state == ProviderAuthState.MISSING
+
+    # 3. _get_provider_kwargs("google_vertexai") sets vertexai=True and google_api_key=AQ.*, never project=AQ.*
+    vtx_kwargs = _get_provider_kwargs("google_vertexai", model_name="gemini-4-argon")
+    assert vtx_kwargs.get("vertexai") is True
+    assert vtx_kwargs.get("google_api_key") == vertex_key
+    assert "project" not in vtx_kwargs
+    assert "location" not in vtx_kwargs
+
+    # 4. create_model("google_vertexai:gemini-4-argon") builds a ChatGoogleGenerativeAI client in Vertex Express Mode
+    clear_model_cache()
+    res = create_model("google_vertexai:gemini-4-argon")
+    assert res.provider == "google_vertexai"
+    assert res.model_name == "gemini-4-argon"
+    assert getattr(res.model, "vertexai", None) is True
+    assert getattr(res.model, "project", None) is None
+    assert res.model.client._api_client.api_key == vertex_key
+    assert res.model.client._api_client.project is None
+    clear_model_cache()
+
+
+def test_vertex_express_mode_global_project_routing_and_404_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify Vertex AI Express Mode sets project/location=global when resolved and rewrites bare 404 URLs."""
+    from talkops.model.factory import (
+        _VERTEX_EXPRESS_PROJECT_CACHE,
+        clear_model_cache,
+        create_model,
+    )
+
+    vertex_key = "AQ.test-dummy-vertex-express-key"
+    monkeypatch.setenv("VERTEXAI_API_KEY", vertex_key)
+    monkeypatch.setenv("TALKOPS_VERTEX_EXPRESS_PROJECT", "492468289179")
+    _VERTEX_EXPRESS_PROJECT_CACHE.clear()
+    clear_model_cache()
+
+    res = create_model("google_vertexai:gemini-4-argon")
+    api_client = res.model.client._api_client
+    assert api_client.api_key == vertex_key
+    assert api_client.project == "492468289179"
+    assert api_client.location == "global"
+
+    req = api_client._build_request(
+        "post",
+        "publishers/google/models/gemini-4-argon:streamGenerateContent",
+        {"contents": []},
+    )
+    assert "projects/492468289179/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent" in req.url
+    assert req.headers.get("x-goog-api-key") == vertex_key
+
+    _VERTEX_EXPRESS_PROJECT_CACHE.clear()
+    clear_model_cache()
+
+
+
+
+
+
 
 

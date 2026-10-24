@@ -1036,12 +1036,12 @@ class CostTrackingMiddleware(AgentMiddleware[CostState, ContextT]):
                 delta_tokens += inp + out
                 delta_cache_read_tokens += cr
                 delta_cache_write_tokens += sum(cw_tuple)
-                if cost_usd is None:
-                    continue
-                delta_usd += cost_usd
-                charged_count += 1
-                if record.message_id is not None:
-                    charged_message_ids.add(record.message_id)
+                if cost_usd is not None:
+                    delta_usd += cost_usd
+                if cost_usd is not None or inp > 0 or out > 0:
+                    charged_count += 1
+                    if record.message_id is not None:
+                        charged_message_ids.add(record.message_id)
             if price_latest_message:
                 already_charged = (
                     message.id in charged_message_ids

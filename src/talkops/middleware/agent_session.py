@@ -31,12 +31,22 @@ keeping it invisible to the main coordinator agent.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import AgentMiddleware, hook_config
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.errors import GraphBubbleUp
 
+from talkops.middleware.compaction import (
+    _extract_message_text,
+    _extract_message_tool_calls,
+    build_tool_call_summary,
+    compute_trajectory_file_interactions,
+    ensure_not_starting_with_tool_call,
+    middle_truncate_bytes,
+    remove_unpaired_tool_calls_and_results,
+)
 from talkops.middleware.registry import register_middleware
 from talkops.state.agent_session_channels import AgentSessionChannels
 from talkops.utils.logger import get_logger
@@ -48,6 +58,169 @@ logger = get_logger(__name__)
 
 AGENT_SESSION_NODE_PREFIX = "AgentSessionMiddleware."
 """Stream namespace prefix for nested agent session events (used by TextualAgentAdapter)."""
+
+AGENT_HANDOFF_SYSTEM_PROMPT = (
+    "You are an expert technical assistant summarizing a completed specialist agent session "
+    "for the main coordinator agent. Be concise, factual, and grounded strictly in the session history. "
+    "Do NOT call any tools."
+)
+
+AGENT_HANDOFF_USER_PROMPT = (
+    "Summarize what the specialist agent `{agent_name}` accomplished in this session so the main "
+    "coordinator agent has full context without clutter. Provide a concise markdown bullet list covering:\n"
+    "- **Requests Handled**: What the user asked the specialist agent to do.\n"
+    "- **Actions & Files**: Key tools executed or files inspected/modified (if any).\n"
+    "- **Outcome & Findings**: Key conclusions, changes made, or remaining follow-ups.\n"
+    "Keep the summary brief (under 200 words) and do NOT call any tools."
+)
+
+
+def generate_agent_handoff_fallback_summary(
+    agent_name: str,
+    messages: Sequence[Any],
+    *,
+    max_response_bytes: int = 1500,
+) -> str:
+    """Build a deterministic, concise handoff summary from specialist session messages."""
+    user_requests: list[str] = []
+    tool_actions: list[str] = []
+    assistant_texts: list[str] = []
+
+    for msg in messages:
+        role = (
+            str(msg.get("role", msg.get("type", ""))).lower()
+            if isinstance(msg, dict)
+            else getattr(msg, "type", type(msg).__name__).lower()
+        )
+        text = _extract_message_text(msg).strip()
+        if role in ("human", "user", "humanmessage"):
+            if text:
+                req_short, _, _, _ = middle_truncate_bytes(
+                    text.replace("\n", " "),
+                    300,
+                    marker_format=" ... ",
+                )
+                user_requests.append(req_short)
+        elif role in ("ai", "assistant", "aimessage"):
+            for tc in _extract_message_tool_calls(msg):
+                tc_entry, _ = build_tool_call_summary(tc, max_arg_bytes=120, truncate=True)
+                tool_actions.append(f"`{tc_entry['name']}({tc_entry['arguments_json']})`")
+            if text:
+                assistant_texts.append(text)
+
+    file_interactions = compute_trajectory_file_interactions(messages, max_items=10)
+
+    bullets: list[str] = []
+    if user_requests:
+        reqs_joined = "; ".join(user_requests[-5:])
+        bullets.append(f"- **Requests Handled**: {reqs_joined}")
+    if tool_actions:
+        bullets.append(f"- **Tools Executed**: {', '.join(tool_actions[-10:])}")
+    if file_interactions:
+        files_inline = ", ".join(item.lstrip("- ").strip() for item in file_interactions[:10])
+        bullets.append(f"- **Files Interacted**: {files_inline}")
+    if assistant_texts:
+        last_reply, _, _, _ = middle_truncate_bytes(
+            assistant_texts[-1],
+            max_response_bytes,
+            marker_format=" ... [truncated] ... ",
+        )
+        bullets.append(f"- **Outcome & Findings**: {last_reply}")
+    elif not bullets:
+        bullets.append(f"- Specialist agent `{agent_name}` session exited with {len(messages)} message(s).")
+
+    return "\n".join(bullets)
+
+
+def generate_agent_handoff_summary(
+    model: Any | None,
+    agent_name: str,
+    messages: Sequence[Any],
+) -> str:
+    """Synchronously generate a concise specialist agent handoff summary (LLM with deterministic fallback)."""
+    fallback = generate_agent_handoff_fallback_summary(agent_name, messages)
+    if model is None or not messages or not hasattr(model, "invoke"):
+        return fallback
+
+    try:
+        cleaned = ensure_not_starting_with_tool_call(remove_unpaired_tool_calls_and_results(messages))
+        req_messages: list[BaseMessage] = [
+            SystemMessage(content=AGENT_HANDOFF_SYSTEM_PROMPT),
+            *[
+                m if isinstance(m, BaseMessage) else HumanMessage(content=_extract_message_text(m))
+                for m in cleaned
+            ],
+            HumanMessage(content=AGENT_HANDOFF_USER_PROMPT.format(agent_name=agent_name)),
+        ]
+        try:
+            response = model.invoke(
+                req_messages,
+                config={"metadata": {"lc_source": "summarization"}},
+            )
+        except TypeError:
+            response = model.invoke(req_messages)
+        if _extract_message_tool_calls(response):
+            return fallback
+        summary_text = _extract_message_text(response).strip()
+        return summary_text if summary_text else fallback
+    except Exception as exc:
+        logger.debug("LLM agent handoff summary failed, using deterministic fallback: %s", exc)
+        return fallback
+
+
+async def agenerate_agent_handoff_summary(
+    model: Any | None,
+    agent_name: str,
+    messages: Sequence[Any],
+) -> str:
+    """Asynchronously generate a concise specialist agent handoff summary (LLM with deterministic fallback)."""
+    fallback = generate_agent_handoff_fallback_summary(agent_name, messages)
+    if model is None or not messages or not hasattr(model, "ainvoke"):
+        return fallback
+
+    try:
+        cleaned = ensure_not_starting_with_tool_call(remove_unpaired_tool_calls_and_results(messages))
+        req_messages: list[BaseMessage] = [
+            SystemMessage(content=AGENT_HANDOFF_SYSTEM_PROMPT),
+            *[
+                m if isinstance(m, BaseMessage) else HumanMessage(content=_extract_message_text(m))
+                for m in cleaned
+            ],
+            HumanMessage(content=AGENT_HANDOFF_USER_PROMPT.format(agent_name=agent_name)),
+        ]
+        try:
+            response = await model.ainvoke(
+                req_messages,
+                config={"metadata": {"lc_source": "summarization"}},
+            )
+        except TypeError:
+            response = await model.ainvoke(req_messages)
+        if _extract_message_tool_calls(response):
+            return fallback
+        summary_text = _extract_message_text(response).strip()
+        return summary_text if summary_text else fallback
+    except Exception as exc:
+        logger.debug("Async LLM agent handoff summary failed, using deterministic fallback: %s", exc)
+        return fallback
+
+
+def build_agent_handoff_message(agent_name: str, summary_body: str) -> AIMessage:
+    """Wrap a specialist agent handoff summary in a single coordinator AIMessage."""
+    clean_agent = (agent_name or "specialist-agent").strip()
+    content = (
+        f'<AGENT_HANDOFF_SUMMARY agent="{clean_agent}">\n'
+        f"Specialist agent `{clean_agent}` completed its session and returned control to the coordinator.\n\n"
+        f"{summary_body.strip()}\n"
+        "</AGENT_HANDOFF_SUMMARY>"
+    )
+    return AIMessage(
+        content=content,
+        additional_kwargs={
+            "lc_source": "summarization",
+            "agent_handoff": True,
+            "agent_name": clean_agent,
+        },
+    )
 
 
 def _cleared_agent_session() -> dict[str, Any]:
@@ -65,14 +238,47 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
 
     state_schema = AgentSessionChannels
 
-    def __init__(self, agent_runnables: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        agent_runnables: dict[str, Any] | None = None,
+        *,
+        model: Any | None = None,
+    ) -> None:
         """Initialize with mapping of agent names to their compiled subagent graphs.
 
         Args:
             agent_runnables: Mapping of agent names/short names to compiled runnables.
+            model: Optional chat model used to generate concise handoff summaries on exit.
         """
         super().__init__()
         self._agents: dict[str, Any] = dict(agent_runnables or {})
+        self._model: Any | None = model
+
+    def _build_handoff_message_if_needed(
+        self,
+        prev_agent: str | None,
+        prev_messages: Sequence[Any] | None,
+    ) -> AIMessage | None:
+        """Synchronously build a coordinator handoff message if the prior session had messages."""
+        msgs = list(prev_messages or [])
+        if not msgs:
+            return None
+        agent_label = (prev_agent or "specialist-agent").strip()
+        summary = generate_agent_handoff_summary(self._model, agent_label, msgs)
+        return build_agent_handoff_message(agent_label, summary)
+
+    async def _abuild_handoff_message_if_needed(
+        self,
+        prev_agent: str | None,
+        prev_messages: Sequence[Any] | None,
+    ) -> AIMessage | None:
+        """Asynchronously build a coordinator handoff message if the prior session had messages."""
+        msgs = list(prev_messages or [])
+        if not msgs:
+            return None
+        agent_label = (prev_agent or "specialist-agent").strip()
+        summary = await agenerate_agent_handoff_summary(self._model, agent_label, msgs)
+        return build_agent_handoff_message(agent_label, summary)
 
     def register_agent(self, name: str, runnable: Any) -> None:
         """Register or override a compiled subagent runnable."""
@@ -139,10 +345,19 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
         is_async: bool = False,
     ) -> Any:
         kind = request.get("kind")
-        if kind == "clear":
-            return self._finish(_cleared_agent_session())
+        prev_active = values.get("_active_agent_id")
+        prev_messages = list(values.get("_agent_session_messages") or [])
 
-        agent_name = str(request.get("agent_name") or values.get("_active_agent_id") or "").strip()
+        if kind == "clear":
+            if is_async:
+                return self._async_clear_session(prev_active, prev_messages)
+            cleared = _cleared_agent_session()
+            handoff_msg = self._build_handoff_message_if_needed(prev_active, prev_messages)
+            if handoff_msg is not None:
+                cleared["messages"] = [handoff_msg]
+            return self._finish(cleared)
+
+        agent_name = str(request.get("agent_name") or prev_active or "").strip()
         plugin_id = request.get("plugin_id") or values.get("_active_agent_plugin_id")
         agent_runnable = self._resolve_agent(agent_name)
 
@@ -186,10 +401,16 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
             }
             if not prompt:
                 # Activation only, no LLM call yet
-                return self._finish({
+                if is_async and prev_messages:
+                    return self._async_activate_only_with_handoff(base, prev_active, prev_messages)
+                update_activate: dict[str, Any] = {
                     **base,
                     "_agent_session_messages": {"reset": True},
-                })
+                }
+                handoff_msg = self._build_handoff_message_if_needed(prev_active, prev_messages)
+                if handoff_msg is not None:
+                    update_activate["messages"] = [handoff_msg]
+                return self._finish(update_activate)
 
             if agent_runnable is None:
                 logger.warning("Plugin agent runnable for '%s' not found", agent_name)
@@ -199,13 +420,24 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
             context = getattr(runtime, "context", None)
             if is_async:
                 # Caller will await
-                return self._async_call_subagent(agent_runnable, input_data, context, base, reset=True)
+                return self._async_call_subagent(
+                    agent_runnable,
+                    input_data,
+                    context,
+                    base,
+                    reset=True,
+                    prev_active=prev_active,
+                    prev_messages=prev_messages,
+                )
+            handoff_msg = self._build_handoff_message_if_needed(prev_active, prev_messages)
             result = agent_runnable.invoke(input_data, context=context)
             messages = result.get("messages", [HumanMessage(content=str(prompt))])
             update = {
                 **base,
                 "_agent_session_messages": {"reset": True, "messages": list(messages)},
             }
+            if handoff_msg is not None:
+                update["messages"] = [handoff_msg]
             transfers = result.get("_session_cost_transfers")
             if isinstance(transfers, dict) and transfers:
                 update["_session_cost_transfers"] = transfers
@@ -221,18 +453,28 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
                 logger.warning("Plugin agent runnable for '%s' not found", agent_name)
                 return self._finish(base)
 
-            prev_active = values.get("_active_agent_id")
             force_reset = bool(request.get("reset")) or (
                 bool(agent_name) and prev_active != agent_name
             )
-            history = [] if force_reset else list(values.get("_agent_session_messages") or [])
+            history = [] if force_reset else list(prev_messages)
             new_msg = HumanMessage(content=message)
             input_data = {**inherited_state, "messages": [*history, new_msg]}
             context = getattr(runtime, "context", None)
             if is_async:
                 return self._async_call_subagent(
-                    agent_runnable, input_data, context, base, reset=force_reset
+                    agent_runnable,
+                    input_data,
+                    context,
+                    base,
+                    reset=force_reset,
+                    prev_active=prev_active if force_reset else None,
+                    prev_messages=prev_messages if force_reset else None,
                 )
+            handoff_msg = (
+                self._build_handoff_message_if_needed(prev_active, prev_messages)
+                if force_reset
+                else None
+            )
             result = agent_runnable.invoke(input_data, context=context)
             messages = list(result.get("messages", [*history, new_msg]))
             update = {
@@ -241,6 +483,8 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
                     {"reset": True, "messages": messages} if force_reset else messages
                 ),
             }
+            if handoff_msg is not None:
+                update["messages"] = [handoff_msg]
             transfers = result.get("_session_cost_transfers")
             if isinstance(transfers, dict) and transfers:
                 update["_session_cost_transfers"] = transfers
@@ -249,6 +493,32 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
         logger.warning("Unknown agent_session_request kind: %r", kind)
         return self._finish({})
 
+    async def _async_clear_session(
+        self,
+        prev_active: str | None,
+        prev_messages: Sequence[Any] | None,
+    ) -> dict[str, Any]:
+        cleared = _cleared_agent_session()
+        handoff_msg = await self._abuild_handoff_message_if_needed(prev_active, prev_messages)
+        if handoff_msg is not None:
+            cleared["messages"] = [handoff_msg]
+        return self._finish(cleared)
+
+    async def _async_activate_only_with_handoff(
+        self,
+        base: dict[str, Any],
+        prev_active: str | None,
+        prev_messages: Sequence[Any] | None,
+    ) -> dict[str, Any]:
+        update_activate: dict[str, Any] = {
+            **base,
+            "_agent_session_messages": {"reset": True},
+        }
+        handoff_msg = await self._abuild_handoff_message_if_needed(prev_active, prev_messages)
+        if handoff_msg is not None:
+            update_activate["messages"] = [handoff_msg]
+        return self._finish(update_activate)
+
     async def _async_call_subagent(
         self,
         agent_runnable: Any,
@@ -256,7 +526,14 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
         context: Any,
         base: dict[str, Any],
         reset: bool,
+        prev_active: str | None = None,
+        prev_messages: Sequence[Any] | None = None,
     ) -> dict[str, Any]:
+        handoff_msg = (
+            await self._abuild_handoff_message_if_needed(prev_active, prev_messages)
+            if reset and prev_messages
+            else None
+        )
         result = await agent_runnable.ainvoke(input_data, context=context)
         raw_msgs = result.get("messages")
         messages = list(raw_msgs) if isinstance(raw_msgs, list) else list(input_data["messages"])
@@ -264,6 +541,8 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
             **base,
             "_agent_session_messages": {"reset": True, "messages": messages} if reset else messages,
         }
+        if handoff_msg is not None:
+            update["messages"] = [handoff_msg]
         transfers = result.get("_session_cost_transfers")
         if isinstance(transfers, dict) and transfers:
             update["_session_cost_transfers"] = transfers
@@ -357,6 +636,12 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
 
 
 __all__ = [
+    "AGENT_HANDOFF_SYSTEM_PROMPT",
+    "AGENT_HANDOFF_USER_PROMPT",
     "AGENT_SESSION_NODE_PREFIX",
     "AgentSessionMiddleware",
+    "agenerate_agent_handoff_summary",
+    "build_agent_handoff_message",
+    "generate_agent_handoff_fallback_summary",
+    "generate_agent_handoff_summary",
 ]

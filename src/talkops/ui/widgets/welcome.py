@@ -35,6 +35,7 @@ The banner stays in the scrollback and never collapses.
 
 from __future__ import annotations
 
+import functools
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -451,47 +452,19 @@ def _status_label_and_color(status: str, colors: ThemeColors) -> tuple[str, str]
     }.get(status, ("connecting", colors.warning))
 
 
-def _build_logo_text(
-    beam_x: int = -10,
-    status: str = "connected",
-    *,
-    user_display: str | None = None,
-    panel_bg: str = "#07090E",
-    status_label: str | None = None,
-    status_color: str | None = None,
-    show_icon: bool = True,
+@functools.lru_cache(maxsize=128)
+def _build_logo_text_cached(
+    beam_x: int,
+    status: str,
+    resolved_user: str,
+    panel_bg: str,
+    status_label: str,
+    status_color: str,
+    show_icon: bool,
+    ascii_mode: bool,
+    ver: str,
 ) -> Text:
-    """Return the TalkOps logo + brand lockup + session stack with light beam.
-
-    Left: the 40x16 sub-pixel icon rendered as a 20x8 grid of 2x2 Unicode
-    quadrant blocks (``#1F7ACB`` speech bubble + blue/``#7AC143`` infinity).
-    Right, top to bottom (8 rows, aligned with the icon):
-
-      rows 0-2  ``TalkOps.ai`` as 3-row block letters (bold wordmark colour)
-      row  3    ``D E V O P S   O N   D E M A N D`` letter-spaced tagline,
-                centred under the wordmark (muted ``#94A3B8``)
-      row  4    thin rule separating the brand lockup from session info
-      row  5    authenticated Control Plane user & tier (``#CBD5E1``)
-      row  6    ``vX.Y.Z  ·  ● ready`` version + live health
-
-    The light beam sweeps across the icon and then the wordmark. With
-    ``show_icon=False`` only the right-hand stack is returned; the banner uses
-    this when a graphics-protocol widget displays the real PNG icon.
-    """
-    ascii_mode = _is_ascii()
-    ver = _version()
-    if user_display is None:
-        uid, utier = _collect_auth_user()
-        resolved_user = _format_user_display(uid, utier)
-    else:
-        resolved_user = _format_user_display(user_display)
-
-    if status_label is None or status_color is None:
-        colors = get_theme_colors(None)
-        default_label, default_color = _status_label_and_color(status, colors)
-        status_label = status_label or default_label
-        status_color = status_color or default_color
-
+    """Cached implementation of the TalkOps logo + brand lockup + session stack."""
     ver_clean = ver.lstrip("v") if ver else ""
     ver_str = f"v{ver_clean}" if ver_clean else ""
     dot = _dot()
@@ -583,6 +556,62 @@ def _build_logo_text(
         if row_idx < _ICON_ROWS - 1:
             t.append("\n")
     return t
+
+
+def _build_logo_text(
+    beam_x: int = -10,
+    status: str = "connected",
+    *,
+    user_display: str | None = None,
+    panel_bg: str = "#07090E",
+    status_label: str | None = None,
+    status_color: str | None = None,
+    show_icon: bool = True,
+) -> Text:
+    """Return the TalkOps logo + brand lockup + session stack with light beam.
+
+    Left: the 40x16 sub-pixel icon rendered as a 20x8 grid of 2x2 Unicode
+    quadrant blocks (``#1F7ACB`` speech bubble + blue/``#7AC143`` infinity).
+    Right, top to bottom (8 rows, aligned with the icon):
+
+      rows 0-2  ``TalkOps.ai`` as 3-row block letters (bold wordmark colour)
+      row  3    ``D E V O P S   O N   D E M A N D`` letter-spaced tagline,
+                centred under the wordmark (muted ``#94A3B8``)
+      row  4    thin rule separating the brand lockup from session info
+      row  5    authenticated Control Plane user & tier (``#CBD5E1``)
+      row  6    ``vX.Y.Z  ·  ● ready`` version + live health
+
+    The light beam sweeps across the icon and then the wordmark. With
+    ``show_icon=False`` only the right-hand stack is returned; the banner uses
+    this when a graphics-protocol widget displays the real PNG icon.
+    """
+    ascii_mode = _is_ascii()
+    ver = _version()
+    if user_display is None:
+        uid, utier = _collect_auth_user()
+        resolved_user = _format_user_display(uid, utier)
+    else:
+        resolved_user = _format_user_display(user_display)
+
+    if status_label is None or status_color is None:
+        colors = get_theme_colors(None)
+        default_label, default_color = _status_label_and_color(status, colors)
+        status_label = status_label or default_label
+        status_color = status_color or default_color
+
+    # Normalize off-canvas negative beam positions so they share one static cache entry
+    effective_beam_x = -10 if beam_x < -4 else beam_x
+    return _build_logo_text_cached(
+        effective_beam_x,
+        status,
+        resolved_user,
+        panel_bg,
+        status_label,
+        status_color,
+        show_icon,
+        ascii_mode,
+        ver,
+    )
 
 
 # ── Data collection ───────────────────────────────────────────────
@@ -993,9 +1022,14 @@ class _LeftPanel(Widget):
         if next_x > 64:
             self.beam_x = -6
             self._cycle_count += 1
+            # Once connected and initial welcome sweeps have completed, pause the 80ms
+            # timer so idle sessions consume 0.0% CPU and zero GC pressure.
+            if self.status == "connected" and self._cycle_count >= 4 and self._anim_timer is not None:
+                self._anim_timer.pause()
         else:
             self.beam_x = next_x
-        self.refresh()
+        if not self.is_attached:
+            self.refresh()
 
     def _health_line(self) -> Text:
         """Render the status indicator line (e.g. ``● ready``)."""
@@ -1024,9 +1058,15 @@ class _LeftPanel(Widget):
 
     def watch_status(self, _old: str, new: str) -> None:
         """Auto-refresh when status changes and ensure animation timer is active."""
+        self._cycle_count = 0
         if self._anim_timer is None and self.is_attached:
             try:
                 self._anim_timer = self.set_interval(0.08, self._advance_beam)
+            except Exception:
+                pass
+        elif self._anim_timer is not None:
+            try:
+                self._anim_timer.resume()
             except Exception:
                 pass
         self.refresh()

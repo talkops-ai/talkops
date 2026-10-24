@@ -14,6 +14,8 @@
 
 """Middleware for runtime model selection via LangGraph runtime context."""
 import asyncio
+import os
+import time
 from typing import Any, Awaitable, Callable
 
 from deepagents._models import (
@@ -39,6 +41,11 @@ _ANTHROPIC_ONLY_SETTINGS: set[str] = {"cache_control"}
 def _get_ls_provider(model: object) -> str | None:
     """Return the provider name reported by the chat model."""
     try:
+        metadata = getattr(model, "metadata", None)
+        if isinstance(metadata, dict):
+            configured = metadata.get("talkops_configured_provider")
+            if isinstance(configured, str) and configured:
+                return configured
         ls_params = getattr(model, "_get_ls_params", None)
         if ls_params:
             params = ls_params()
@@ -53,6 +60,67 @@ def _get_ls_provider(model: object) -> str | None:
 
 def _is_anthropic_model(model: object) -> bool:
     return _get_ls_provider(model) == "anthropic"
+
+
+def _model_matches_target(
+    model: Any,
+    model_spec: str,
+    requested_effort: str | None = None,
+) -> bool:
+    """Check whether a model instance matches both the target spec and reasoning effort."""
+    if ":" in model_spec:
+        target_provider, _, target_model_name = model_spec.partition(":")
+        configured_provider = _get_ls_provider(model)
+        current_id = get_model_identifier(model)
+        if configured_provider and current_id:
+            norm_cfg = configured_provider.lower().replace("-", "_")
+            norm_tgt = target_provider.lower().replace("-", "_")
+            if norm_cfg != norm_tgt or current_id != target_model_name:
+                return False
+        elif not model_matches_spec(model, model_spec):
+            return False
+    elif not model_matches_spec(model, model_spec):
+        return False
+
+    if requested_effort is not None:
+        model_effort = getattr(model, "reasoning_effort", None) or getattr(model, "thinking_level", None)
+        norm_req = (
+            ""
+            if str(requested_effort).lower() in ("off", "none", "clear", "0", "reset", "")
+            else str(requested_effort).lower()
+        )
+        norm_cur = (
+            ""
+            if model_effort is None or str(model_effort).lower() in ("off", "none", "clear", "0", "reset", "")
+            else str(model_effort).lower()
+        )
+        if norm_req != norm_cur:
+            return False
+
+    return True
+
+
+def _extract_response_usage(response: Any) -> dict[str, int]:
+    """Extract token usage counts from a ModelResponse or ExtendedModelResponse."""
+    try:
+        inner = getattr(response, "model_response", response)
+        messages = getattr(inner, "result", None)
+        if isinstance(messages, list):
+            for msg in reversed(messages):
+                usage = getattr(msg, "usage_metadata", None)
+                if isinstance(usage, dict):
+                    inp = int(usage.get("input_tokens") or 0)
+                    out = int(usage.get("output_tokens") or 0)
+                    tot = int(usage.get("total_tokens") or (inp + out))
+                    if inp or out or tot:
+                        return {
+                            "input_tokens": inp,
+                            "output_tokens": out,
+                            "total_tokens": tot,
+                        }
+    except Exception:
+        pass
+    return {}
 
 
 @register_middleware(name="configurable_model")
@@ -70,7 +138,33 @@ class ConfigurableModelMiddleware(AgentMiddleware):
     ) -> ModelResponse | ExtendedModelResponse:
         """Intercept and wrap synchronous model invocation."""
         resolved_req, resolved_spec, resolved_params = self._apply_overrides(request)
+        effort = (
+            (resolved_params or {}).get("reasoning_effort")
+            or getattr(resolved_req.model, "reasoning_effort", None)
+            or getattr(resolved_req.model, "thinking_level", None)
+        )
+        logger.info(
+            "Dispatching model call to '%s'",
+            resolved_spec or "default",
+            extra={
+                "model": resolved_spec or "default",
+                "reasoning_effort": effort,
+            },
+        )
+        t0 = time.monotonic()
         response = handler(resolved_req)
+        elapsed = time.monotonic() - t0
+        usage_extra = _extract_response_usage(response)
+        logger.info(
+            "Completed model call to '%s' in %.2fs",
+            resolved_spec or "default",
+            elapsed,
+            extra={
+                "model": resolved_spec or "default",
+                "elapsed_s": round(elapsed, 2),
+                **usage_extra,
+            },
+        )
 
         command = (
             self._checkpoint_command(resolved_spec, resolved_params)
@@ -90,7 +184,33 @@ class ConfigurableModelMiddleware(AgentMiddleware):
         resolved_req, resolved_spec, resolved_params = (
             await self._apply_overrides_async(request)
         )
+        effort = (
+            (resolved_params or {}).get("reasoning_effort")
+            or getattr(resolved_req.model, "reasoning_effort", None)
+            or getattr(resolved_req.model, "thinking_level", None)
+        )
+        logger.info(
+            "Dispatching model call to '%s'",
+            resolved_spec or "default",
+            extra={
+                "model": resolved_spec or "default",
+                "reasoning_effort": effort,
+            },
+        )
+        t0 = time.monotonic()
         response = await handler(resolved_req)
+        elapsed = time.monotonic() - t0
+        usage_extra = _extract_response_usage(response)
+        logger.info(
+            "Completed model call to '%s' in %.2fs",
+            resolved_spec or "default",
+            elapsed,
+            extra={
+                "model": resolved_spec or "default",
+                "elapsed_s": round(elapsed, 2),
+                **usage_extra,
+            },
+        )
 
         command = (
             self._checkpoint_command(resolved_spec, resolved_params)
@@ -101,6 +221,22 @@ class ConfigurableModelMiddleware(AgentMiddleware):
             return response
         return ExtendedModelResponse(model_response=response, command=command)
 
+    def _resolve_requested_effort(
+        self, model_spec: str | None, model_params: dict[str, Any]
+    ) -> tuple[str | None, dict[str, Any]]:
+        requested_effort = model_params.get("reasoning_effort")
+        if requested_effort is None:
+            from talkops.config.settings import get_settings
+
+            requested_effort = getattr(get_settings(), "reasoning_effort", None) or os.environ.get(
+                "TALKOPS_REASONING_EFFORT"
+            )
+            if requested_effort and model_spec and model_spec not in {"auto", "dynamic"}:
+                from talkops.model.reasoning import with_effort_model_params
+
+                model_params = with_effort_model_params(model_spec, model_params, str(requested_effort))
+        return (str(requested_effort) if requested_effort is not None else None), model_params
+
     def _apply_overrides(
         self, request: ModelRequest
     ) -> tuple[ModelRequest, str | None, dict[str, Any] | None]:
@@ -108,16 +244,38 @@ class ConfigurableModelMiddleware(AgentMiddleware):
         if ctx is None:
             return request, self._model_spec_from_model(request.model), None
 
+        dyn_route = request.state.get("_dynamic_model_route") if isinstance(request.state, dict) else None
+        is_smart = bool(
+            ctx.get("smart") is True
+            or str(ctx.get("approval_mode") or "").lower() == "smart"
+        )
+        if is_smart and isinstance(dyn_route, dict) and dyn_route.get("spec"):
+            routed_spec = str(dyn_route["spec"])
+            updated_request = self._build_overrides(request, None, {})
+            return updated_request, routed_spec, {"reasoning_effort": dyn_route.get("effort")}
+
         model_spec = ctx.get("model")
-        model_params = ctx.get("model_params") or {}
+        model_params = dict(ctx.get("model_params") or {})
+        requested_effort, model_params = self._resolve_requested_effort(model_spec, model_params)
 
         model_result = None
-        if model_spec and model_spec not in {"auto", "dynamic"} and not model_matches_spec(request.model, model_spec):
+        if (
+            model_spec
+            and model_spec not in {"auto", "dynamic"}
+            and not _model_matches_target(request.model, model_spec, requested_effort)
+        ):
             from talkops.exceptions import ModelConfigError
             from talkops.model.factory import create_model
 
+            extra_kwargs = {"reasoning_effort": requested_effort} if requested_effort else None
             try:
-                model_result = create_model(model_spec)
+                if extra_kwargs:
+                    try:
+                        model_result = create_model(model_spec, extra_kwargs=extra_kwargs)
+                    except TypeError:
+                        model_result = create_model(model_spec)
+                else:
+                    model_result = create_model(model_spec)
             except ModelConfigError:
                 logger.exception(
                     "Failed to resolve model override '%s'; keeping current model.",
@@ -138,16 +296,40 @@ class ConfigurableModelMiddleware(AgentMiddleware):
         if ctx is None:
             return request, self._model_spec_from_model(request.model), None
 
+        dyn_route = request.state.get("_dynamic_model_route") if isinstance(request.state, dict) else None
+        is_smart = bool(
+            ctx.get("smart") is True
+            or str(ctx.get("approval_mode") or "").lower() == "smart"
+        )
+        if is_smart and isinstance(dyn_route, dict) and dyn_route.get("spec"):
+            routed_spec = str(dyn_route["spec"])
+            updated_request = self._build_overrides(request, None, {})
+            return updated_request, routed_spec, {"reasoning_effort": dyn_route.get("effort")}
+
         model_spec = ctx.get("model")
-        model_params = ctx.get("model_params") or {}
+        model_params = dict(ctx.get("model_params") or {})
+        requested_effort, model_params = self._resolve_requested_effort(model_spec, model_params)
 
         model_result = None
-        if model_spec and model_spec not in {"auto", "dynamic"} and not model_matches_spec(request.model, model_spec):
+        if (
+            model_spec
+            and model_spec not in {"auto", "dynamic"}
+            and not _model_matches_target(request.model, model_spec, requested_effort)
+        ):
             from talkops.exceptions import ModelConfigError
             from talkops.model.factory import create_model
 
+            extra_kwargs = {"reasoning_effort": requested_effort} if requested_effort else None
             try:
-                model_result = await asyncio.to_thread(create_model, model_spec)
+                if extra_kwargs:
+                    try:
+                        model_result = await asyncio.to_thread(
+                            create_model, model_spec, extra_kwargs=extra_kwargs
+                        )
+                    except TypeError:
+                        model_result = await asyncio.to_thread(create_model, model_spec)
+                else:
+                    model_result = await asyncio.to_thread(create_model, model_spec)
             except ModelConfigError:
                 logger.exception(
                     "Failed to resolve model override '%s'; keeping current model.",
@@ -246,6 +428,8 @@ class ConfigurableModelMiddleware(AgentMiddleware):
             "model": getattr(ctx, "model", None),
             "model_params": getattr(ctx, "model_params", None),
             "thread_id": getattr(ctx, "thread_id", None),
+            "approval_mode": getattr(ctx, "approval_mode", None),
+            "smart": getattr(ctx, "smart", None),
         }
 
     def _model_spec_from_model(self, model: Any) -> str | None:

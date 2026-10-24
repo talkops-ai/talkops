@@ -397,7 +397,12 @@ def apply_stored_credentials() -> None:
                 env_var = entry.get("env_var")
                 api_key = entry.get("api_key")
                 if isinstance(env_var, str) and env_var and isinstance(api_key, str) and api_key:
-                    if env_var not in os.environ:
+                    cleaned_key = api_key.strip()
+                    if env_var in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "VERTEXAI_PROJECT") and cleaned_key.startswith(("AQ.", "AIza")):
+                        os.environ.setdefault("VERTEXAI_API_KEY", cleaned_key)
+                        if os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip().startswith(("AQ.", "AIza")):
+                            os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+                    elif env_var not in os.environ:
                         os.environ[env_var] = api_key
                 base_url_env = entry.get("base_url_env")
                 base_url = entry.get("base_url")

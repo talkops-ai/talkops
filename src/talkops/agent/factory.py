@@ -158,6 +158,18 @@ def _format_description(tool_call: Any = None, *args: Any, **kwargs: Any) -> str
             if first_line
             else "Evaluate script / dispatch subagents"
         )
+    if name == "call_mcp_tool":
+        from talkops.middleware.headless_mcp_guard import extract_call_mcp_tool_target
+
+        srv, tname, inner_args = extract_call_mcp_tool_target(tool_args)
+        srv_label = srv or "mcp"
+        tname_label = tname or "call_mcp_tool"
+        args_str = ", ".join(f"{k}={v}" for k, v in list(inner_args.items())[:3])
+        return (
+            f"Execute {srv_label} action '{tname_label}' ({args_str})"
+            if args_str
+            else f"Execute {srv_label} action '{tname_label}'"
+        )
     if ":" in name:
         srv, tname = name.split(":", 1)
         args_str = ", ".join(f"{k}={v}" for k, v in list(tool_args.items())[:3])
@@ -183,6 +195,7 @@ def _should_interrupt_tool_call(
     """
     from talkops._constants import READONLY_FS_TOOLS
     from talkops.middleware.auto_mode import _async_routing_mode
+    from talkops.middleware.headless_mcp_guard import is_call_mcp_tool_read_only
     from talkops.middleware.server_hooks import hook_decided_permission
     from talkops.security.approval_mode import ApprovalMode, coerce_approval_mode
     from talkops.security.approval_mode_source import _resolve_approval_mode
@@ -229,6 +242,8 @@ def _should_interrupt_tool_call(
     tool_args = tool_call.get("args") or tool_call.get("parameters") or {} if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
     path_str = str(tool_args.get("path") or tool_args.get("TargetFile") or tool_args.get("file_path") or "")
     if tool_name in READONLY_FS_TOOLS or "AGENTS.md" in path_str:
+        return False
+    if tool_name == "call_mcp_tool" and is_call_mcp_tool_read_only(tool_args):
         return False
 
     return True
@@ -751,6 +766,7 @@ def create_talkops_agent(
                     discovered_tools = build_mcp_tools_from_server_infos(
                         active_coordinator_infos,
                         mcp_manager,
+                        configs=mcp_configs,
                     )
                 cached_infos = coordinator_infos
                 if discovered_tools:
@@ -1248,6 +1264,7 @@ def create_talkops_agent(
             s_meta.get("is_plugin")
             or s_meta.get("plugin_id")
             or s_meta.get("source", "").startswith("plugin:")
+            or s_meta.get("source") in ("project", "user", "user-shared", "custom")
         ):
             try:
                 spec_dict: dict[str, Any] = dict(sub)
@@ -1272,7 +1289,12 @@ def create_talkops_agent(
             except Exception as exc:
                 logger.warning("Failed to compile plugin agent runnable %s: %s", s_name, exc)
 
-    agent_middleware.append(AgentSessionMiddleware(agent_runnables=plugin_agent_runnables))
+    agent_middleware.append(
+        AgentSessionMiddleware(
+            agent_runnables=plugin_agent_runnables,
+            model=active_model,
+        )
+    )
 
     agent_middleware.append(
         GoalCriteriaMiddleware(
@@ -1465,7 +1487,11 @@ async def create_talkops_agent_async(
                 include_dispatcher=True,
             )
         else:
-            mcp_tools = build_mcp_tools_from_server_infos(active_coordinator_infos, manager)
+            mcp_tools = build_mcp_tools_from_server_infos(
+                active_coordinator_infos,
+                manager,
+                configs=mcp_config,
+            )
         kwargs["mcp_server_info"] = coordinator_infos
         kwargs["mcp_config"] = mcp_config
 

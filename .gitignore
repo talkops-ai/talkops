@@ -1,8 +1,6 @@
 .cursor
 .vscode
 benchmarks
-.opscode
-.opscloud
 .talkops
 .venv
 .taskmaster/

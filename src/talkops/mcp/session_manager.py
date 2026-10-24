@@ -16,9 +16,12 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import fnmatch
+import json
 import os
+import re
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
@@ -706,12 +709,33 @@ def build_call_mcp_tool(
             )
         return req
 
+    def _format_schema_hint(schema: Mapping[str, Any] | None) -> str:
+        if not isinstance(schema, Mapping) or not schema:
+            return ""
+        props = schema.get("properties")
+        req = schema.get("required")
+        parts: list[str] = []
+        if isinstance(req, list) and req:
+            parts.append(f"required={req}")
+        if isinstance(props, Mapping) and props:
+            prop_summary = {
+                k: (v.get("type", "any") if isinstance(v, Mapping) else "any")
+                for k, v in list(props.items())[:15]
+            }
+            parts.append(f"properties={json.dumps(prop_summary)}")
+        return f" Expected schema ({', '.join(parts)})." if parts else ""
+
     def _resolve_tool_metadata(resolved_server: str, requested_tool: str) -> tuple[str, dict[str, Any], Any]:
         req_tool = requested_tool.strip()
+        base_srv = resolved_server.rsplit("__", 1)[-1] if "__" in resolved_server else resolved_server
         if ":" in req_tool:
             prefix, rest = req_tool.split(":", 1)
-            if prefix == resolved_server or resolved_server.endswith(f"__{prefix}"):
+            if prefix in (resolved_server, base_srv) or resolved_server.endswith(f"__{prefix}"):
                 req_tool = rest
+        for srv_prefix in (f"{resolved_server}_", f"{base_srv}_"):
+            if srv_prefix and req_tool.startswith(srv_prefix) and len(req_tool) > len(srv_prefix):
+                req_tool = req_tool[len(srv_prefix) :]
+                break
 
         info = info_by_name.get(resolved_server)
         if info is None:
@@ -723,6 +747,8 @@ def build_call_mcp_tool(
         if info is not None:
             for t in info.tools:
                 orig = t.original_name or (t.name.split(":", 1)[1] if ":" in t.name else t.name)
+                if orig.startswith(f"{base_srv}_") and not t.original_name:
+                    orig = orig[len(base_srv) + 1 :]
                 if req_tool in (orig, t.name) or (
                     t.name.endswith(f"_{req_tool}") or t.name.endswith(f":{req_tool}")
                 ):
@@ -735,7 +761,73 @@ def build_call_mcp_tool(
             orig_name = str(disk_schema.get("name") or req_tool)
             return orig_name, _clean_mcp_schema(raw_input), disk_schema
 
+        if info is not None and info.tools and req_tool:
+            available_names = [
+                str(t.original_name or (t.name.split(":", 1)[1] if ":" in t.name else t.name))
+                for t in info.tools
+            ]
+            req_tokens = set(re.findall(r"[a-z0-9]+", req_tool.lower()))
+            suggestions = [
+                name
+                for name in available_names
+                if req_tool.lower() in name.lower()
+                or name.lower() in req_tool.lower()
+                or bool(req_tokens & set(re.findall(r"[a-z0-9]+", name.lower())))
+            ][:10]
+            hint = (
+                f" Did you mean one of: {', '.join(suggestions)}?"
+                if suggestions
+                else f" Available tools include: {', '.join(available_names[:15])}."
+            )
+            raise ToolException(
+                f"MCP tool {req_tool!r} does not exist on server {resolved_server!r}.{hint} "
+                "Use call_mcp_tool with one of the server's valid tool_name values."
+            )
+
         return req_tool, {}, None
+
+    def _coerce_arguments_dict(
+        raw_args: Any,
+        extra_kwargs: dict[str, Any],
+        tool_label: str,
+        input_schema: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        parsed: dict[str, Any] | None = None
+        if raw_args is None:
+            parsed = {}
+        elif isinstance(raw_args, Mapping):
+            parsed = dict(raw_args)
+        elif isinstance(raw_args, str):
+            stripped = raw_args.strip()
+            if not stripped or stripped.lower() in {"null", "none", "undefined"}:
+                parsed = {}
+            else:
+                try:
+                    loaded = json.loads(stripped)
+                except Exception:
+                    try:
+                        import ast
+
+                        loaded = ast.literal_eval(stripped)
+                    except Exception:
+                        loaded = None
+                if isinstance(loaded, Mapping):
+                    parsed = dict(loaded)
+                elif loaded is None and stripped in {"{}", "null", "None"}:
+                    parsed = {}
+
+        if parsed is None:
+            schema_hint = _format_schema_hint(input_schema)
+            raise ToolException(
+                f"Invalid arguments for MCP tool {tool_label!r}: expected a JSON object/dict "
+                f"(e.g. arguments={{...}}).{schema_hint}"
+            )
+
+        if extra_kwargs:
+            merged = dict(extra_kwargs)
+            merged.update(parsed)
+            return merged
+        return parsed
 
     def _handle_tool_error(error: ToolException) -> str:
         raw_msg = str(error) or "call_mcp_tool failed with no error detail"
@@ -745,27 +837,31 @@ def build_call_mcp_tool(
     async def coroutine(
         server_name: str = "",
         tool_name: str = "",
-        arguments: dict[str, Any] | None = None,
+        arguments: dict[str, Any] | str | None = None,
         *,
         ServerName: str = "",
         ToolName: str = "",
-        Arguments: dict[str, Any] | None = None,
+        Arguments: dict[str, Any] | str | None = None,
         runtime: Any = None,
         **extra_kwargs: Any,
     ) -> Any:
         """Execute coroutine."""
         raw_server = server_name or ServerName or str(extra_kwargs.pop("server", "") or "")
         raw_tool = tool_name or ToolName or str(extra_kwargs.pop("tool", "") or "")
-        raw_args = arguments if arguments is not None else Arguments
-        if raw_args is None:
-            raw_args = extra_kwargs if extra_kwargs else {}
-        elif not isinstance(raw_args, dict):
-            raise ToolException(f"Invalid arguments for MCP tool {raw_tool!r}: expected an object/dict.")
+        fallback_args = extra_kwargs.pop("args", None)
+        raw_args = arguments if arguments is not None else (Arguments if Arguments is not None else fallback_args)
 
         resolved_server = _resolve_server_name(raw_server)
         actual_tool_name, input_schema, tool_ref = _resolve_tool_metadata(resolved_server, raw_tool)
         if not actual_tool_name:
             raise ToolException("tool_name is required for call_mcp_tool.")
+
+        coerced_args = _coerce_arguments_dict(
+            raw_args,
+            extra_kwargs,
+            actual_tool_name,
+            input_schema,
+        )
 
         lc_tool_name = f"{resolved_server}:{actual_tool_name}"
         profiler = MCPSemanticProfiler.get_instance()
@@ -782,7 +878,17 @@ def build_call_mcp_tool(
             resolved_server,
             extra={"mcp_server": resolved_server, "tool_name": actual_tool_name},
         )
-        cleaned_args = _normalize_mcp_arguments(dict(raw_args), input_schema)
+        cleaned_args = _normalize_mcp_arguments(dict(coerced_args), input_schema)
+        if isinstance(input_schema, Mapping):
+            req_fields = input_schema.get("required")
+            if isinstance(req_fields, list):
+                missing_req = [r for r in req_fields if isinstance(r, str) and r not in cleaned_args]
+                if missing_req:
+                    schema_hint = _format_schema_hint(input_schema)
+                    raise ToolException(
+                        f"Missing required argument(s) {missing_req} for MCP tool {lc_tool_name!r}.{schema_hint} "
+                        f"Retry call_mcp_tool(server_name={resolved_server!r}, tool_name={actual_tool_name!r}, arguments={{...}})."
+                    )
         try:
             session = await session_manager.get_session(resolved_server)
             result = await session.call_tool(actual_tool_name, cleaned_args)
@@ -802,7 +908,8 @@ def build_call_mcp_tool(
                         "duration_ms": round(duration_ms, 2),
                     },
                 )
-                msg = f"MCP tool {lc_tool_name!r} failed on server {resolved_server!r}: {exc}"
+                schema_hint = _format_schema_hint(input_schema)
+                msg = f"MCP tool {lc_tool_name!r} failed on server {resolved_server!r}: {exc}{schema_hint}"
                 raise ToolException(_enhance_mcp_error_diagnostics(msg)) from None
 
             is_read_only = bool(
@@ -891,7 +998,10 @@ def build_call_mcp_tool(
             },
             "arguments": {
                 "type": "object",
-                "description": "Dictionary of arguments matching the tool's JSON schema.",
+                "description": (
+                    "Dictionary (or JSON object string) of arguments matching the tool's JSON schema. "
+                    "Pass {} if the tool takes no arguments."
+                ),
             },
         },
         "required": ["server_name", "tool_name"],
@@ -906,8 +1016,10 @@ def build_call_mcp_tool(
     return StructuredTool(
         name="call_mcp_tool",
         description=(
-            "Call a lazy-loaded MCP tool. Read the tool's schema file (<toolName>.json) "
-            "in the MCP server's schema directory to understand its arguments and usage."
+            "Call a lazy-loaded MCP tool on a configured MCP server. "
+            "Pass server_name, tool_name (the original tool name on that server), and arguments "
+            "(a dict or JSON object string matching the tool's inputSchema; use {} if no arguments are needed). "
+            "Read <mcp_schema_dir>/<server_name>/<tool_name>.json first when you need the tool's parameter schema."
         ),
         args_schema=args_schema,
         coroutine=coroutine,

@@ -724,6 +724,8 @@ def build_agent_commands(agents: list[Any]) -> list[CommandEntry]:
         if len(desc) > 100:
             desc = desc[:99] + "…"
         plugin_id = str(raw.get("plugin_id") or "")
+        source = str(raw.get("source") or "")
+        badge = plugin_id or (source if source in ("project", "user", "user-shared") else "")
         short_name = name.rsplit(":", 1)[-1]
         if "@" in short_name:
             short_name = short_name.split("@", 1)[0]
@@ -731,7 +733,7 @@ def build_agent_commands(agents: list[Any]) -> list[CommandEntry]:
         entries.append(
             CommandEntry(
                 name=f"/agent:{name}",
-                description=f"(agent · {plugin_id}) {desc}" if plugin_id else f"(agent) {desc}",
+                description=f"(agent · {badge}) {desc}" if badge else f"(agent) {desc}",
                 hidden_keywords=f"agent {name.replace(':', ' ').replace('@', ' ')} {short_name}",
                 argument_hint="[prompt]",
                 display_name=f"/agent:{short_name}",

@@ -27,6 +27,7 @@ import json
 import os
 import re
 import threading
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -63,8 +64,15 @@ class _SafeDescriptorPoolProxy:
         return getattr(self._pool, name)
 
 
+_PROTO_GUARD_INSTALLED = False
+
+
 def _ensure_protobuf_descriptor_pool_guard() -> None:
-    """Install a safe descriptor pool proxy and pre-load canonical googleapis protos."""
+    """Install a safe descriptor pool proxy and pre-load canonical googleapis proto descriptors (without gRPC)."""
+    global _PROTO_GUARD_INSTALLED
+    if _PROTO_GUARD_INSTALLED:
+        return
+    _PROTO_GUARD_INSTALLED = True
     with contextlib.suppress(Exception):
         import google.protobuf.descriptor_pool as _dp
 
@@ -78,17 +86,28 @@ def _ensure_protobuf_descriptor_pool_guard() -> None:
             setattr(_safe_default, "_talkops_patched", True)
             _dp.Default = _safe_default  # type: ignore[assignment]
 
+    # Note: import operations_proto_pb2 directly rather than operations_pb2 to avoid
+    # pulling in operations_grpc_pb2 -> grpc._cython.cygrpc (38.6 MB Cython extension).
     for _proto_mod in (
         "google.rpc.status_pb2",
         "google.type.date_pb2",
-        "google.longrunning.operations_pb2",
         "google.longrunning.operations_proto_pb2",
     ):
         with contextlib.suppress(Exception):
             importlib.import_module(_proto_mod)
 
 
-_ensure_protobuf_descriptor_pool_guard()
+class _FireworksProtoGuardFinder:
+    """Meta-path hook that lazily installs the protobuf descriptor guard only if fireworks is imported."""
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> None:
+        if fullname in ("fireworks", "langchain_fireworks") or fullname.startswith("fireworks."):
+            _ensure_protobuf_descriptor_pool_guard()
+        return None
+
+
+if not any(type(f).__name__ == "_FireworksProtoGuardFinder" for f in sys.meta_path):
+    sys.meta_path.insert(0, _FireworksProtoGuardFinder())
 
 from langchain_core.language_models import BaseChatModel
 
@@ -105,6 +124,7 @@ from talkops.model.config import (
     PROVIDER_SETTINGS_FIELD_MAP,
     ModelConfig,
     ModelSpec,
+    _is_google_api_key_value,
     apply_stored_credentials,
     canonicalize_provider,
     detect_provider,
@@ -152,15 +172,15 @@ def _get_default_model_spec() -> str:
         return bool(provider and has_provider_credentials(provider))
 
     # 1. If explicit model set in settings and has credentials
-    if settings.model_name and _has_creds(settings.model_name):
+    if settings.model_name and settings.model_name not in ("auto", "dynamic") and _has_creds(settings.model_name):
         return normalize_model_spec(settings.model_name)
-    if settings.model and _has_creds(settings.model):
+    if settings.model and settings.model not in ("auto", "dynamic") and _has_creds(settings.model):
         return normalize_model_spec(settings.model)
 
     # 2. If default / recent model set in config and has credentials
-    if config.default_model and _has_creds(config.default_model):
+    if config.default_model and config.default_model not in ("auto", "dynamic") and _has_creds(config.default_model):
         return config.default_model
-    if config.recent_model and _has_creds(config.recent_model):
+    if config.recent_model and config.recent_model not in ("auto", "dynamic") and _has_creds(config.recent_model):
         return config.recent_model
 
     # 3. Auto-detect from available credentials in environment
@@ -180,10 +200,31 @@ def _get_default_model_spec() -> str:
         if has_provider_credentials(prov) is True:
             return default_model
 
+    try:
+        from talkops.state.remote_session import _can_use_disk_auth_session
+
+        if _can_use_disk_auth_session():
+            from talkops.auth.storage import get_credential_storage
+            from talkops.model.config import (
+                DEFAULT_PROVIDER_PRIORITY,
+                get_curated_models_for_provider,
+            )
+
+            storage = get_credential_storage()
+            for prov in DEFAULT_PROVIDER_PRIORITY:
+                if prov in ("ollama", "dynamic"):
+                    continue
+                if storage.get_provider_key(prov) and has_provider_credentials(prov) is True:
+                    curated = get_curated_models_for_provider(prov)
+                    if curated:
+                        return f"{prov}:{curated[0][0]}"
+    except Exception:
+        pass
+
     # 4. If explicit model set without credentials (e.g. testing / local provider)
-    if settings.model_name:
+    if settings.model_name and settings.model_name not in ("auto", "dynamic"):
         return normalize_model_spec(settings.model_name)
-    if settings.model:
+    if settings.model and settings.model not in ("auto", "dynamic"):
         return normalize_model_spec(settings.model)
 
     raise NoCredentialsConfiguredError(
@@ -287,8 +328,24 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
         if field and hasattr(settings, field):
             api_key = getattr(settings, field)
 
-    if not api_key and provider in ("google_genai", "google", "google_vertexai"):
+    if not api_key and provider in ("google_genai", "google"):
         api_key = resolve_env_var("GEMINI_API_KEY") or getattr(settings, "google_api_key", None)
+    elif not api_key and provider == "google_vertexai":
+        g_key = resolve_env_var("GOOGLE_API_KEY") or getattr(settings, "google_api_key", None)
+        if g_key and str(g_key).strip().startswith("AQ."):
+            api_key = g_key
+
+    if api_key and provider in ("google_genai", "google"):
+        stored_genai_key = None
+        with contextlib.suppress(Exception):
+            from talkops.state.remote_session import _can_use_disk_auth_session
+
+            if _can_use_disk_auth_session():
+                from talkops.auth.storage import get_credential_storage
+
+                stored_genai_key = get_credential_storage().get_provider_key("google_genai")
+        if not stored_genai_key and str(api_key).strip().startswith("AQ."):
+            api_key = None
 
     if api_key:
         if provider not in (
@@ -320,7 +377,13 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
             if base_url and "api.anthropic.com" not in base_url:
                 result.setdefault("default_headers", {})["Authorization"] = f"Bearer {api_key}"
         if env_var:
-            os.environ[env_var] = str(api_key)
+            if provider in ("google_vertexai", "google_anthropic_vertex") and _is_google_api_key_value(str(api_key)):
+                os.environ["VERTEXAI_API_KEY"] = str(api_key).strip()
+                os.environ["GOOGLE_VERTEXAI_API_KEY"] = str(api_key).strip()
+                if _is_google_api_key_value(os.environ.get("GOOGLE_CLOUD_PROJECT")):
+                    os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+            else:
+                os.environ[env_var] = str(api_key)
 
     # AWS Bedrock handling
     if provider in ("bedrock", "bedrock_converse", "anthropic_bedrock"):
@@ -353,42 +416,53 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
             result["url"] = watsonx_url
         result.pop("base_url", None)
 
-    # Vertex AI handling
+    # Google Gemini vs Vertex AI handling (strictly separated like dcode)
     if provider in ("google_genai", "google"):
-        use_vertex_env = resolve_env_var("GOOGLE_GENAI_USE_VERTEXAI") or str(
-            getattr(settings, "google_genai_use_vertexai", False)
+        result.setdefault("vertexai", False)
+    elif provider == "google_vertexai":
+        vertex_api_key = (
+            resolve_env_var("VERTEXAI_API_KEY")
+            or resolve_env_var("GOOGLE_VERTEXAI_API_KEY")
+            or (str(api_key).strip() if api_key and _is_google_api_key_value(str(api_key)) else None)
         )
-        is_vertex = use_vertex_env.strip().lower() in ("true", "1", "yes")
-        if is_vertex:
+        project_env = (
+            resolve_env_var("GOOGLE_CLOUD_PROJECT")
+            or resolve_env_var("GCP_PROJECT_ID")
+            or resolve_env_var("VERTEXAI_PROJECT")
+            or getattr(settings, "google_cloud_project", None)
+        )
+        if project_env and _is_google_api_key_value(str(project_env)):
+            vertex_api_key = vertex_api_key or str(project_env).strip()
+            project_env = None
+            os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+
+        if vertex_api_key and not project_env:
             result["vertexai"] = True
-            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+            result["google_api_key"] = str(vertex_api_key).strip()
+            result.pop("project", None)
+            result.pop("location", None)
+        else:
+            if project_env:
+                result["project"] = project_env
+                os.environ["GOOGLE_CLOUD_PROJECT"] = str(project_env)
+            location_env = (
+                resolve_env_var("GOOGLE_CLOUD_LOCATION")
+                or resolve_env_var("GCP_LOCATION")
+                or resolve_env_var("CLOUD_ML_REGION")
+                or resolve_env_var("VERTEXAI_LOCATION")
+                or getattr(settings, "google_cloud_location", None)
+            )
+            if location_env:
+                result["location"] = location_env
+                os.environ["GOOGLE_CLOUD_LOCATION"] = str(location_env)
+    elif provider == "google_anthropic_vertex":
         project_env = (
             resolve_env_var("GOOGLE_CLOUD_PROJECT")
             or resolve_env_var("GCP_PROJECT_ID")
             or resolve_env_var("VERTEXAI_PROJECT")
             or getattr(settings, "google_cloud_project", None)
         )
-        if project_env:
-            result["project"] = project_env
-            os.environ["GOOGLE_CLOUD_PROJECT"] = str(project_env)
-        location_env = (
-            resolve_env_var("GOOGLE_CLOUD_LOCATION")
-            or resolve_env_var("GCP_LOCATION")
-            or resolve_env_var("CLOUD_ML_REGION")
-            or resolve_env_var("VERTEXAI_LOCATION")
-            or getattr(settings, "google_cloud_location", None)
-        )
-        if location_env:
-            result["location"] = location_env
-            os.environ["GOOGLE_CLOUD_LOCATION"] = str(location_env)
-    elif provider in ("google_vertexai", "google_anthropic_vertex"):
-        project_env = (
-            resolve_env_var("GOOGLE_CLOUD_PROJECT")
-            or resolve_env_var("GCP_PROJECT_ID")
-            or resolve_env_var("VERTEXAI_PROJECT")
-            or getattr(settings, "google_cloud_project", None)
-        )
-        if project_env:
+        if project_env and not _is_google_api_key_value(str(project_env)):
             result["project"] = project_env
             os.environ["GOOGLE_CLOUD_PROJECT"] = str(project_env)
         location_env = (
@@ -583,14 +657,25 @@ def _create_model_via_init(
     kwargs: dict[str, Any],
 ) -> BaseChatModel:
     """Delegate to langchain's dynamic init_chat_model function."""
-    _ensure_protobuf_descriptor_pool_guard()
+    if provider == "fireworks":
+        _ensure_protobuf_descriptor_pool_guard()
     from langchain.chat_models import init_chat_model
 
     init_kwargs = dict(kwargs)
 
     target_provider = provider
+    vertex_express_api_key: str | None = None
     if provider in ("openai_codex", "typesafe"):
         target_provider = "openai"
+    elif provider == "google_vertexai" and (
+        init_kwargs.get("vertexai") is True or init_kwargs.get("google_api_key")
+    ):
+        target_provider = "google_genai"
+        init_kwargs["vertexai"] = True
+        init_kwargs.pop("project", None)
+        init_kwargs.pop("location", None)
+        if init_kwargs.get("google_api_key"):
+            vertex_express_api_key = str(init_kwargs["google_api_key"]).strip()
     elif provider in ("cerebras", "sambanova"):
         try:
             has_dedicated_pkg = importlib.util.find_spec(f"langchain_{provider}") is not None
@@ -618,10 +703,23 @@ def _create_model_via_init(
         except Exception as hf_err:
             logger.debug("HuggingFaceEndpoint initialization skipped (%s); trying standard init", hf_err)
 
+    saved_env: dict[str, str | None] = {}
+    if vertex_express_api_key:
+        for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"):
+            saved_env[k] = os.environ.get(k)
+        os.environ["GOOGLE_API_KEY"] = vertex_express_api_key
+        os.environ.pop("GEMINI_API_KEY", None)
+        os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+        os.environ.pop("GOOGLE_CLOUD_LOCATION", None)
+
     try:
         if target_provider:
-            return init_chat_model(model_name, model_provider=target_provider, **init_kwargs)
-        return init_chat_model(model_name, **init_kwargs)
+            model = init_chat_model(model_name, model_provider=target_provider, **init_kwargs)
+        else:
+            model = init_chat_model(model_name, **init_kwargs)
+        if vertex_express_api_key:
+            _configure_vertex_express_model(model, vertex_express_api_key)
+        return model
     except ImportError as e:
         package = provider_package_name(provider)
         module_name = package.replace("-", "_")
@@ -640,12 +738,161 @@ def _create_model_via_init(
         ) from e
     except (ValueError, TypeError) as e:
         raise ModelConfigError(f"Invalid configuration for '{provider}:{model_name}': {e}") from e
+    finally:
+        if vertex_express_api_key:
+            for k, old_val in saved_env.items():
+                if k == "GOOGLE_CLOUD_PROJECT" and _is_google_api_key_value(old_val):
+                    os.environ.pop(k, None)
+                elif old_val is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = old_val
 
 
 _MODEL_CACHE: dict[str, ModelResult] = {}
 _MODEL_CACHE_LOCK = threading.Lock()
 _ANTHROPIC_CACHE_CONTROL_PATCHED = False
 _OLLAMA_MESSAGE_COMPAT_PATCHED = False
+_VERTEX_EXPRESS_PROJECT_CACHE: dict[str, str] = {}
+_VERTEX_EXPRESS_CLIENT_PATCHED = False
+_VERTEX_PROJECT_PATH_RE = re.compile(r"projects/([0-9A-Za-z_-]+)/locations/([0-9A-Za-z_-]+)/publishers/")
+
+
+def _resolve_vertex_express_project(api_key: str) -> str | None:
+    """Resolve the underlying GCP project number for a Vertex AI Express Mode API key ('AQ...').
+
+    Google's Vertex AI Express Mode edge gateway routes bare ``publishers/google/models/...``
+    requests to regional backends (e.g. ``us-central1`` or ``asia-southeast1``) where global-only
+    models such as ``gemini-4-argon`` fail after ~11.7s with a 404 Not Found error.
+    Including ``projects/<project>/locations/global/`` in the request path routes directly
+    to the global endpoint while still authenticating via ``x-goog-api-key``.
+    """
+    key = api_key.strip()
+    if not key:
+        return None
+    cached = _VERTEX_EXPRESS_PROJECT_CACHE.get(key)
+    if cached:
+        return cached
+    env_proj = os.environ.get("TALKOPS_VERTEX_EXPRESS_PROJECT", "").strip()
+    if env_proj and not _is_google_api_key_value(env_proj):
+        _VERTEX_EXPRESS_PROJECT_CACHE[key] = env_proj
+        return env_proj
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
+    try:
+        import httpx
+
+        resp = httpx.post(
+            "https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-2.5-flash-probe:countTokens",
+            headers={"x-goog-api-key": key},
+            json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+            timeout=3.0,
+        )
+        m = _VERTEX_PROJECT_PATH_RE.search(resp.text)
+        if m:
+            proj = m.group(1)
+            _VERTEX_EXPRESS_PROJECT_CACHE[key] = proj
+            os.environ["TALKOPS_VERTEX_EXPRESS_PROJECT"] = proj
+            return proj
+    except Exception as exc:
+        logger.debug("Could not pre-resolve Vertex AI Express project number: %s", exc)
+    return None
+
+
+def _ensure_vertex_express_api_client_patch() -> None:
+    """Install fallback URL rewrite on google.genai BaseApiClient for Vertex AI Express Mode 404s."""
+    global _VERTEX_EXPRESS_CLIENT_PATCHED
+    if _VERTEX_EXPRESS_CLIENT_PATCHED:
+        return
+    try:
+        from google.genai import _api_client as _genai_api_client
+        from google.genai import errors as _genai_errors
+    except ImportError:
+        return
+
+    base_cls = getattr(_genai_api_client, "BaseApiClient", None)
+    if base_cls is None:
+        return
+
+    orig_sync = getattr(base_cls, "_request_once", None)
+    orig_async = getattr(base_cls, "_async_request_once", None)
+
+    def _rewrite_express_url_on_404(client_self: Any, http_request: Any, exc: Exception) -> bool:
+        if not (getattr(client_self, "vertexai", False) and getattr(client_self, "api_key", None)):
+            return False
+        if getattr(exc, "code", None) != 404:
+            return False
+        url = str(getattr(http_request, "url", "") or "")
+        msg = str(exc)
+        m = _VERTEX_PROJECT_PATH_RE.search(msg)
+        proj = m.group(1) if m else getattr(client_self, "project", None)
+        if proj and not _is_google_api_key_value(str(proj)):
+            client_self.project = str(proj)
+            if not getattr(client_self, "location", None):
+                client_self.location = "global"
+            api_key_str = str(getattr(client_self, "api_key", "")).strip()
+            if api_key_str:
+                _VERTEX_EXPRESS_PROJECT_CACHE[api_key_str] = str(proj)
+                os.environ["TALKOPS_VERTEX_EXPRESS_PROJECT"] = str(proj)
+
+        if "/projects/" not in url and "/publishers/" in url and proj:
+            loc = getattr(client_self, "location", None) or "global"
+            http_request.url = url.replace(
+                "/publishers/",
+                f"/projects/{proj}/locations/{loc}/publishers/",
+                1,
+            )
+            return True
+        if "/locations/global/publishers/" in url:
+            http_request.url = re.sub(
+                r"/projects/[^/]+/locations/global/publishers/",
+                "/publishers/",
+                url,
+                count=1,
+            )
+            return True
+        return False
+
+    if orig_sync is not None and not getattr(orig_sync, "_talkops_vertex_express_patched", False):
+        def _patched_request_once(self: Any, http_request: Any, stream: bool = False) -> Any:
+            try:
+                return orig_sync(self, http_request, stream=stream)
+            except _genai_errors.ClientError as exc:
+                if _rewrite_express_url_on_404(self, http_request, exc):
+                    return orig_sync(self, http_request, stream=stream)
+                raise
+
+        setattr(_patched_request_once, "_talkops_vertex_express_patched", True)
+        base_cls._request_once = _patched_request_once  # type: ignore[method-assign]
+
+    if orig_async is not None and not getattr(orig_async, "_talkops_vertex_express_patched", False):
+        async def _patched_async_request_once(self: Any, http_request: Any, stream: bool = False) -> Any:
+            try:
+                return await orig_async(self, http_request, stream=stream)
+            except _genai_errors.ClientError as exc:
+                if _rewrite_express_url_on_404(self, http_request, exc):
+                    return await orig_async(self, http_request, stream=stream)
+                raise
+
+        setattr(_patched_async_request_once, "_talkops_vertex_express_patched", True)
+        base_cls._async_request_once = _patched_async_request_once  # type: ignore[method-assign]
+
+    _VERTEX_EXPRESS_CLIENT_PATCHED = True
+
+
+def _configure_vertex_express_model(model: BaseChatModel, api_key: str) -> None:
+    """Configure ChatGoogleGenerativeAI's underlying BaseApiClient for Vertex AI Express Mode."""
+    _ensure_vertex_express_api_client_patch()
+    proj = _resolve_vertex_express_project(api_key)
+    if not proj:
+        return
+    for client_attr in ("client", "async_client"):
+        client_obj = getattr(model, client_attr, None)
+        api_client = getattr(client_obj, "_api_client", None) if client_obj is not None else None
+        if api_client is not None and getattr(api_client, "vertexai", False) and getattr(api_client, "api_key", None):
+            api_client.project = proj
+            if not getattr(api_client, "location", None):
+                api_client.location = "global"
 
 
 def _sanitize_content_for_ollama(content: Any) -> Any:
@@ -805,11 +1052,13 @@ def create_model(
     if not model_spec:
         model_spec = _get_default_model_spec()
 
+    settings_effort = getattr(get_settings(), "reasoning_effort", None) or os.environ.get("TALKOPS_REASONING_EFFORT")
     cache_key = json.dumps(
         {
             "spec": model_spec,
             "extra": extra_kwargs or {},
             "profile": profile_overrides or {},
+            "settings_effort": settings_effort,
         },
         sort_keys=True,
         default=str,
@@ -935,6 +1184,26 @@ def create_model(
     config = ModelConfig.load()
     class_path = config.get_class_path(provider) if provider else None
 
+    resolved_cache_key = json.dumps(
+        {
+            "provider": provider,
+            "model": model_name,
+            "class_path": class_path,
+            "kwargs": kwargs,
+            "profile": profile_overrides or {},
+        },
+        sort_keys=True,
+        default=str,
+    )
+    with _MODEL_CACHE_LOCK:
+        cached_resolved = _MODEL_CACHE.get(resolved_cache_key)
+        if cached_resolved is not None:
+            _MODEL_CACHE[cache_key] = cached_resolved
+            return cached_resolved
+
+    if provider == "fireworks":
+        _ensure_protobuf_descriptor_pool_guard()
+
     logger.info(
         "Instantiating ChatModel '%s' (provider=%s)",
         model_name,
@@ -952,8 +1221,16 @@ def create_model(
     else:
         model = _create_model_via_init(model_name, provider, kwargs)
 
-    _ensure_anthropic_block_level_cache_control(model)
-    _ensure_ollama_message_compatibility(model)
+    model_mod = type(model).__module__
+    if provider in ("anthropic", "google_anthropic_vertex", "anthropic_bedrock") or "anthropic" in model_mod:
+        _ensure_anthropic_block_level_cache_control(model)
+    if provider == "ollama" or "ollama" in model_mod:
+        _ensure_ollama_message_compatibility(model)
+    if provider:
+        with contextlib.suppress(Exception):
+            from talkops.middleware.cost_tracking import _set_configured_provider_metadata
+
+            _set_configured_provider_metadata(model, provider)
 
     # Resolve model profile & context limits
     spec_key = f"{provider}:{model_name}" if provider else model_name
@@ -984,4 +1261,5 @@ def create_model(
     )
     with _MODEL_CACHE_LOCK:
         _MODEL_CACHE[cache_key] = result
+        _MODEL_CACHE[resolved_cache_key] = result
     return result

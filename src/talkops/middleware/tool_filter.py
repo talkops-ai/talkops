@@ -662,14 +662,27 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
                 else None
             )
             if isinstance(args, Mapping):
-                srv = str(args.get("server_name") or args.get("ServerName") or "").strip()
-                t_name = str(args.get("tool_name") or args.get("ToolName") or "").strip()
+                srv = str(
+                    args.get("server_name")
+                    or args.get("ServerName")
+                    or args.get("server")
+                    or ""
+                ).strip()
+                t_name = str(
+                    args.get("tool_name")
+                    or args.get("ToolName")
+                    or args.get("tool")
+                    or ""
+                ).strip()
                 if t_name and ":" in t_name and not srv:
                     srv, t_name = t_name.split(":", 1)
                 if srv and t_name:
                     qualified = f"{srv}:{t_name}"
                     if self.is_tool_allowed(qualified) or self.is_tool_allowed(t_name):
                         return None
+                    for known_srv in self._known_mcp_servers:
+                        if known_srv.endswith(f"__{srv}") and self.is_tool_allowed(f"{known_srv}:{t_name}"):
+                            return None
                     allowed_str = ", ".join(self._allowed_patterns)
                     logger.warning(
                         "Lazy MCP tool call %r blocked for subagent (not in allowed list: %s)",

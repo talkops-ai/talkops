@@ -208,14 +208,20 @@ class AuthManagerScreen(OpsModalScreen[None]):
                 env_var = (
                     get_credential_env_var(provider) or f"{provider.upper()}_API_KEY"
                 )
-                has_key = bool(os.environ.get(env_var))
-                if not has_key:
-                    try:
-                        from talkops.auth.storage import get_credential_storage
+                has_key = False
+                try:
+                    from talkops.auth.storage import get_credential_storage
 
-                        has_key = bool(get_credential_storage().get_provider_key(provider))
-                    except Exception:
-                        pass
+                    has_key = bool(get_credential_storage().get_provider_key(provider))
+                except Exception:
+                    pass
+                if not has_key and provider not in (
+                    "bedrock",
+                    "google_genai",
+                    "google_vertexai",
+                    "google_anthropic_vertex",
+                ):
+                    has_key = bool(os.environ.get(env_var))
                 if not has_key and provider != "ollama":
                     try:
                         has_key = bool(get_provider_auth_status(provider).as_legacy_bool())
@@ -254,6 +260,12 @@ class AuthManagerScreen(OpsModalScreen[None]):
         def _on_prompt_closed(result: AuthResult | None) -> None:
             if result == AuthResult.SAVED:
                 self.post_message(self.CredentialSaved(provider))
+                if hasattr(self.app, "maybe_start_deferred_server"):
+                    import asyncio
+                    import contextlib
+
+                    with contextlib.suppress(Exception):
+                        asyncio.create_task(self.app.maybe_start_deferred_server())
             self._refresh_options()
 
         self.app.push_screen(AuthPromptScreen(provider, env_var), _on_prompt_closed)

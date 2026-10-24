@@ -129,6 +129,8 @@ class TaskWatcherController:
         """Connect to `/api/v1/threads/{thread_id}/tasks/stream` when using a remote server."""
         backoff = 1.5
         while not getattr(self._app, "_exit", False):
+            if self._is_in_process_mode():
+                return
             server_url, headers = self._resolve_remote_endpoint()
             if not server_url:
                 await asyncio.sleep(2.0)
@@ -165,12 +167,24 @@ class TaskWatcherController:
                 await asyncio.sleep(backoff)
                 backoff = min(10.0, backoff * 1.5)
 
+    def _is_in_process_mode(self) -> bool:
+        """Return True when the app is connected to an in-process runtime (where local queue handles all task events)."""
+        client = getattr(self._app, "_client", None)
+        if client is None and getattr(self._app, "_adapter", None) is not None:
+            client = getattr(self._app._adapter, "_client", None)
+        if client is not None and getattr(client, "is_in_process", False):
+            return True
+        app_url = getattr(self._app, "_server_url", None)
+        if isinstance(app_url, str) and app_url.strip().startswith("inprocess://"):
+            return True
+        return False
+
     def _resolve_remote_endpoint(self) -> tuple[str | None, dict[str, str]]:
         """Extract base URL and auth headers from `self._app._client` if connected."""
         client = getattr(self._app, "_client", None)
         if client is None and getattr(self._app, "_adapter", None) is not None:
             client = getattr(self._app._adapter, "_client", None)
-        if client is None:
+        if client is None or getattr(client, "is_in_process", False):
             return None, {}
 
         base_url = (
@@ -178,7 +192,7 @@ class TaskWatcherController:
             or getattr(client, "_server_url", None)
             or getattr(client, "base_url", None)
         )
-        if not isinstance(base_url, str) or not base_url.strip():
+        if not isinstance(base_url, str) or not base_url.strip() or base_url.strip().startswith("inprocess://"):
             return None, {}
 
         headers: dict[str, str] = {}

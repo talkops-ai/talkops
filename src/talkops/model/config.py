@@ -91,6 +91,7 @@ PROVIDER_API_KEY_ENV: dict[str, str] = {
     "sambanova": "SAMBANOVA_API_KEY",
     "together": "TOGETHER_API_KEY",
     "typesafe": "TYPESAFE_API_KEY",
+    "dynamic": "TYPESAFE_API_KEY",
     "xai": "XAI_API_KEY",
     "openai_codex": "OPENAI_API_KEY",
     "google_anthropic_vertex": "GOOGLE_CLOUD_PROJECT",
@@ -145,9 +146,18 @@ PROVIDER_DEFAULT_BASE_URL: dict[str, str] = {
     "sambanova": "https://api.sambanova.ai/v1",
 }
 
-IMPLICIT_AUTH_PROVIDERS: set[str] = {"google_vertexai", "google_anthropic_vertex"}
-NO_AUTH_REQUIRED_PROVIDERS: set[str] = {"ollama", "dynamic"}
+IMPLICIT_AUTH_PROVIDERS: set[str] = set()
+NO_AUTH_REQUIRED_PROVIDERS: set[str] = {"ollama"}
 OPTIONAL_AUTH_ENV: dict[str, str] = {"ollama": "OLLAMA_API_KEY"}
+
+# Snapshot of ambient shell AWS credentials at import time so DevOps CLI env vars
+# (e.g. ~/.zshrc AWS_ACCESS_KEY_ID for `aws` commands) are not mistaken for
+# explicit Amazon Bedrock LLM provider configuration.
+_INITIAL_SHELL_AWS_CREDS: dict[str, str] = {
+    k: os.environ[k]
+    for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+    if k in os.environ
+}
 
 
 def normalize_ollama_endpoint(endpoint: str | None) -> str | None:
@@ -571,8 +581,14 @@ PROVIDER_SETTINGS_FIELD_MAP: dict[str, str] = {
 PROVIDER_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "google_genai": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-    "google_vertexai": ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "GOOGLE_API_KEY", "GEMINI_API_KEY"),
-    "google_anthropic_vertex": ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "GOOGLE_API_KEY"),
+    "google_vertexai": (
+        "VERTEXAI_API_KEY",
+        "GOOGLE_VERTEXAI_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCP_PROJECT_ID",
+        "VERTEXAI_PROJECT",
+    ),
+    "google_anthropic_vertex": ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "ANTHROPIC_VERTEX_PROJECT_ID"),
     "mistralai": ("MISTRAL_API_KEY", "MISTRALAI_API_KEY"),
     "mistral": ("MISTRAL_API_KEY", "MISTRALAI_API_KEY"),
     "fireworks": ("FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY"),
@@ -582,6 +598,93 @@ PROVIDER_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "ibm": ("WATSONX_APIKEY", "WATSONX_API_KEY", "IBM_CLOUD_API_KEY"),
     "typesafe": ("TYPESAFE_API_KEY", "JEV_API_KEY"),
 }
+
+
+def _is_google_api_key_value(val: str | None) -> bool:
+    """Return True if val looks like a Google / Vertex AI API key rather than a GCP project ID."""
+    if not val or not isinstance(val, str):
+        return False
+    stripped = val.strip()
+    return stripped.startswith(("AQ.", "AIza"))
+
+
+def _is_bedrock_explicitly_configured(provider: str, settings: Any) -> bool:
+    """Return True if Amazon Bedrock is explicitly configured for TalkOps LLM usage."""
+    canon = canonicalize_provider(provider)
+    try:
+        from talkops.state.remote_session import _can_use_disk_auth_session
+
+        if _can_use_disk_auth_session():
+            from talkops.auth.storage import get_credential_storage
+
+            storage = get_credential_storage()
+            if storage.get_provider_key(canon) or (
+                storage.get_provider_key(provider) if provider != canon else None
+            ):
+                return True
+    except Exception:
+        pass
+
+    for env_key in (
+        "TALKOPS_AWS_ACCESS_KEY_ID",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "BEDROCK_API_KEY",
+        "AWS_ENDPOINT_URL_BEDROCK_RUNTIME",
+        "BEDROCK_ENDPOINT_URL",
+        "AWS_BEDROCK_ENDPOINT_URL",
+        "BEDROCK_BASE_URL",
+    ):
+        if os.environ.get(env_key):
+            return True
+
+    ak = os.environ.get("AWS_ACCESS_KEY_ID")
+    sk = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    if ak and sk and (
+        ak != _INITIAL_SHELL_AWS_CREDS.get("AWS_ACCESS_KEY_ID")
+        or sk != _INITIAL_SHELL_AWS_CREDS.get("AWS_SECRET_ACCESS_KEY")
+    ):
+        return True
+
+    try:
+        from talkops.config.paths import GLOBAL_ENV_PATH
+
+        if GLOBAL_ENV_PATH.is_file():
+            from dotenv import dotenv_values
+
+            gvals = dotenv_values(GLOBAL_ENV_PATH)
+            if any(
+                gvals.get(k)
+                for k in (
+                    "AWS_ACCESS_KEY_ID",
+                    "TALKOPS_AWS_ACCESS_KEY_ID",
+                    "AWS_BEARER_TOKEN_BEDROCK",
+                    "BEDROCK_API_KEY",
+                )
+            ):
+                return True
+    except Exception:
+        pass
+
+    try:
+        cfg = ModelConfig.load()
+        if "bedrock" in cfg.providers or provider in cfg.providers:
+            return True
+        for candidate in (
+            getattr(settings, "model_name", None),
+            getattr(settings, "model", None),
+            cfg.default_model,
+            cfg.recent_model,
+        ):
+            if candidate and resolve_model_spec(str(candidate))[0] in (
+                "bedrock",
+                "bedrock_converse",
+                "anthropic_bedrock",
+            ):
+                return True
+    except Exception:
+        pass
+
+    return False
 
 
 def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
@@ -594,6 +697,9 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
         ProviderAuthStatus indicating current configuration state and credentials.
     """
     canon = canonicalize_provider(provider)
+    if canon in ("dynamic", "auto") or provider in ("dynamic", "auto"):
+        return get_provider_auth_status("typesafe")
+
     if canon in NO_AUTH_REQUIRED_PROVIDERS or provider in NO_AUTH_REQUIRED_PROVIDERS:
         return ProviderAuthStatus(state=ProviderAuthState.NOT_REQUIRED, provider=provider, detail="local provider")
 
@@ -617,6 +723,13 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
                 provider=provider,
                 env_var="AWS_SECRET_ACCESS_KEY",
                 detail=err or "Incomplete AWS credentials",
+            )
+        if not _is_bedrock_explicitly_configured(provider, settings):
+            return ProviderAuthStatus(
+                state=ProviderAuthState.MISSING,
+                provider=provider,
+                env_var="AWS_ACCESS_KEY_ID",
+                detail="Bedrock credentials not explicitly configured",
             )
         env_lookup = lambda k: os.environ.get(f"TALKOPS_{k}") or os.environ.get(k)
         resolved = resolve_env_kwargs(AWS_CREDENTIAL_ENV_SOURCES, lookup=env_lookup)
@@ -652,6 +765,21 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
                 )
         except Exception:
             pass
+        try:
+            from talkops.state.remote_session import _can_use_disk_auth_session
+
+            if _can_use_disk_auth_session():
+                from talkops.auth.storage import get_credential_storage
+
+                if get_credential_storage().get_provider_key(canon):
+                    return ProviderAuthStatus(
+                        state=ProviderAuthState.CONFIGURED,
+                        provider=provider,
+                        env_var="AWS_ACCESS_KEY_ID",
+                        detail="Bedrock credentials stored",
+                    )
+        except Exception:
+            pass
         return ProviderAuthStatus(
             state=ProviderAuthState.MISSING,
             provider=provider,
@@ -660,6 +788,29 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
         )
 
     env_var = get_credential_env_var(provider)
+
+    stored_val = None
+    other_vertex_stored = None
+    vertex_stored_val = None
+    try:
+        from talkops.state.remote_session import _can_use_disk_auth_session
+
+        if _can_use_disk_auth_session():
+            from talkops.auth.storage import get_credential_storage
+
+            storage = get_credential_storage()
+            stored_val = storage.get_provider_key(canon) or (
+                storage.get_provider_key(provider) if provider != canon else None
+            )
+            vertex_stored_val = storage.get_provider_key("google_vertexai")
+            if canon in ("google_vertexai", "google_anthropic_vertex"):
+                other_vtx = "google_anthropic_vertex" if canon == "google_vertexai" else "google_vertexai"
+                other_vertex_stored = storage.get_provider_key(other_vtx)
+    except Exception:
+        pass
+
+    if stored_val:
+        return ProviderAuthStatus(state=ProviderAuthState.CONFIGURED, provider=provider, env_var=env_var)
 
     val = None
     if env_var:
@@ -676,33 +827,25 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
         if field and hasattr(settings, field):
             val = getattr(settings, field)
 
-    if not val:
-        try:
-            from talkops.state.remote_session import _can_use_disk_auth_session
+    if val and canon == "google_genai":
+        # Do not treat a Vertex AI Express API key (AQ....) or a key stored for
+        # google_vertexai as a Google Gemini (google_genai) credential.
+        if (
+            str(val).strip().startswith("AQ.")
+            or (vertex_stored_val and str(val) == str(vertex_stored_val))
+        ):
+            val = None
 
-            if _can_use_disk_auth_session():
-                from talkops.auth.storage import get_credential_storage
+    if not val and canon == "google_vertexai":
+        g_key = resolve_env_var("GOOGLE_API_KEY") or getattr(settings, "google_api_key", None)
+        if g_key and str(g_key).strip().startswith("AQ."):
+            val = g_key
 
-                val = get_credential_storage().get_provider_key(canon) or (
-                    get_credential_storage().get_provider_key(provider) if provider != canon else None
-                )
-        except Exception:
-            pass
+    if val and canon in ("google_vertexai", "google_anthropic_vertex") and other_vertex_stored and str(val) == str(other_vertex_stored):
+        val = None
 
     if val:
         return ProviderAuthStatus(state=ProviderAuthState.CONFIGURED, provider=provider, env_var=env_var)
-
-    if canon == "google_genai":
-        use_vertex = resolve_env_var("GOOGLE_GENAI_USE_VERTEXAI") or str(
-            getattr(settings, "google_genai_use_vertexai", False)
-        )
-        if use_vertex.strip().lower() in ("true", "1", "yes"):
-            return ProviderAuthStatus(
-                state=ProviderAuthState.CONFIGURED,
-                provider=provider,
-                env_var="GOOGLE_GENAI_USE_VERTEXAI",
-                detail="Vertex AI backend enabled",
-            )
 
     optional_env = OPTIONAL_AUTH_ENV.get(canon)
     if optional_env and resolve_env_var(optional_env):
@@ -754,8 +897,21 @@ def apply_stored_credentials(provider: str | None = None) -> bool:
     env_var = get_credential_env_var(provider)
     applied = False
 
-    val = None
-    if env_var:
+    stored_entry: dict[str, Any] | None = None
+    try:
+        from talkops.state.remote_session import _can_use_disk_auth_session
+
+        if _can_use_disk_auth_session():
+            from talkops.auth.storage import get_credential_storage
+
+            stored_entry = get_credential_storage().get_provider_entry(canon) or (
+                get_credential_storage().get_provider_entry(provider) if provider != canon else None
+            )
+    except Exception:
+        pass
+
+    val = stored_entry.get("api_key") if stored_entry else None
+    if not val and env_var:
         val = resolve_env_var(env_var)
 
     if not val and canon in PROVIDER_KEY_ALIASES:
@@ -769,31 +925,27 @@ def apply_stored_credentials(provider: str | None = None) -> bool:
         if field and hasattr(settings, field):
             val = getattr(settings, field)
 
-    stored_entry: dict[str, Any] | None = None
-    try:
-        from talkops.state.remote_session import _can_use_disk_auth_session
-
-        if _can_use_disk_auth_session():
-            from talkops.auth.storage import get_credential_storage
-
-            stored_entry = get_credential_storage().get_provider_entry(canon) or (
-                get_credential_storage().get_provider_entry(provider) if provider != canon else None
-            )
-            if not val and stored_entry:
-                val = stored_entry.get("api_key")
-    except Exception:
-        pass
+    if val and canon == "google_genai" and not stored_entry:
+        if str(val).strip().startswith("AQ."):
+            val = None
 
     if val:
-        if env_var:
-            os.environ[env_var] = str(val)
-        if canon in PROVIDER_KEY_ALIASES:
-            for alias in PROVIDER_KEY_ALIASES[canon]:
-                # Only populate key aliases that are API key vars (do not overwrite GOOGLE_CLOUD_PROJECT with an API key)
-                if alias not in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID"):
-                    os.environ[alias] = str(val)
-                elif env_var in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID"):
-                    os.environ[alias] = str(val)
+        val_str = str(val).strip()
+        if canon in ("google_vertexai", "google_anthropic_vertex") and _is_google_api_key_value(val_str):
+            os.environ["VERTEXAI_API_KEY"] = val_str
+            os.environ["GOOGLE_VERTEXAI_API_KEY"] = val_str
+            if _is_google_api_key_value(os.environ.get("GOOGLE_CLOUD_PROJECT")):
+                os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+        else:
+            if env_var:
+                os.environ[env_var] = val_str
+            if canon in PROVIDER_KEY_ALIASES:
+                for alias in PROVIDER_KEY_ALIASES[canon]:
+                    # Only populate key aliases that are API key vars (do not overwrite GOOGLE_CLOUD_PROJECT with an API key)
+                    if alias not in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "VERTEXAI_PROJECT"):
+                        os.environ[alias] = val_str
+                    elif env_var in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID") and not _is_google_api_key_value(val_str):
+                        os.environ[alias] = val_str
         applied = True
 
     # Reconcile provider endpoint / base URLs across canonical key, aliases, and storage
@@ -819,23 +971,20 @@ def apply_stored_credentials(provider: str | None = None) -> bool:
                 os.environ[alias] = str(stored_base_url)
             applied = True
 
-    if canon in ("google_genai", "google_vertexai", "google_anthropic_vertex"):
-        use_vertex = resolve_env_var("GOOGLE_GENAI_USE_VERTEXAI") or str(
-            getattr(settings, "google_genai_use_vertexai", False)
-        )
-        if (
-            canon in ("google_vertexai", "google_anthropic_vertex")
-            or use_vertex.strip().lower() in ("true", "1", "yes")
-        ):
-            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
-            applied = True
+    if canon in ("google_vertexai", "google_anthropic_vertex"):
         proj = (
             resolve_env_var("GOOGLE_CLOUD_PROJECT")
             or resolve_env_var("GCP_PROJECT_ID")
             or getattr(settings, "google_cloud_project", None)
         )
-        if proj:
+        if proj and _is_google_api_key_value(str(proj)):
+            os.environ["VERTEXAI_API_KEY"] = str(proj).strip()
+            os.environ["GOOGLE_VERTEXAI_API_KEY"] = str(proj).strip()
+            os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+            applied = True
+        elif proj:
             os.environ["GOOGLE_CLOUD_PROJECT"] = str(proj)
+            applied = True
         loc = (
             resolve_env_var("GOOGLE_CLOUD_LOCATION")
             or resolve_env_var("GCP_LOCATION")
@@ -1310,6 +1459,18 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "tool_calling": True,
         "structured_output": True,
     },
+    "google_genai:gemini-4-argon": {
+        "name": "Gemini 4 Argon",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
     "google_genai:gemini-3.8-flash": {
         "name": "Gemini 3.8 Flash",
         "max_input_tokens": 1_000_000,
@@ -1370,6 +1531,18 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
     },
 
     # Google Vertex AI
+    "google_vertexai:gemini-4-argon": {
+        "name": "Gemini 4 Argon (Vertex)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
     "google_vertexai:gemini-3.8-flash": {
         "name": "Gemini 3.8 Flash (Vertex)",
         "max_input_tokens": 1_000_000,
@@ -1667,6 +1840,18 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "max_input_tokens": 64_000,
         "max_output_tokens": 8_192,
         "text_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "openrouter:google/gemini-4-argon": {
+        "name": "Gemini 4 Argon (OpenRouter)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
         "reasoning_output": True,
         "reasoning_effort_levels": ["low", "medium", "high"],
         "reasoning_effort_default": "medium",
@@ -2096,6 +2281,18 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "tool_calling": True,
         "structured_output": True,
     },
+    "litellm:gemini/gemini-4-argon": {
+        "name": "Gemini 4 Argon (LiteLLM)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
     "litellm:gemini/gemini-3.8-flash": {
         "name": "Gemini 3.8 Flash (LiteLLM)",
         "max_input_tokens": 1_000_000,
@@ -2355,6 +2552,7 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
         ("gemini-3.5-flash", "Gemini 3.5 Flash"),
         ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"),
         ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview"),
+        ("gemini-4-argon", "Gemini 4 Argon"),
         ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
         ("gemini-3-flash-preview", "Gemini 3 Flash Preview"),
         ("gemini-flash-latest", "Gemini Flash (Latest)"),
@@ -2396,6 +2594,7 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
         ("openai/gpt-5.6-luna", "GPT-5.6 Luna (OpenRouter)"),
         ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro (OpenRouter)"),
         ("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash (OpenRouter)"),
+        ("google/gemini-4-argon", "Gemini 4 Argon (OpenRouter)"),
         ("google/gemini-3.8-flash", "Gemini 3.8 Flash (OpenRouter)"),
         ("google/gemini-3.7-flash", "Gemini 3.7 Flash (OpenRouter)"),
         ("moonshotai/kimi-k3", "Kimi K3 (OpenRouter)"),
@@ -2483,6 +2682,7 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
         ("gpt-4o-mini", "GPT-4o Mini (Azure)"),
     ],
     "google_vertexai": [
+        ("gemini-4-argon", "Gemini 4 Argon (Vertex)"),
         ("gemini-3.8-flash", "Gemini 3.8 Flash (Vertex)"),
         ("gemini-3.7-flash", "Gemini 3.7 Flash (Vertex)"),
         ("gemini-3.5-flash", "Gemini 3.5 Flash (Vertex)"),
@@ -2542,6 +2742,7 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
     "litellm": [
         ("openai/gpt-5.6-luna", "GPT-5.6 Luna (LiteLLM)"),
         ("anthropic/claude-sonnet-5", "Claude Sonnet 5 (LiteLLM)"),
+        ("gemini/gemini-4-argon", "Gemini 4 Argon (LiteLLM)"),
         ("gemini/gemini-3.8-flash", "Gemini 3.8 Flash (LiteLLM)"),
         ("openai/gpt-4o", "GPT-4o (LiteLLM)"),
     ],
@@ -3172,6 +3373,8 @@ def resolve_model_spec(spec: str | None) -> tuple[str, str]:
     if not stripped:
         return "", ""
     stripped_lower = stripped.lower()
+    if stripped_lower in ("auto", "dynamic"):
+        return "typesafe", stripped
     if stripped_lower.startswith("bedrock:"):
         return "bedrock", stripped[len("bedrock:"):]
     if is_bedrock_model_id(stripped_lower):
@@ -3230,6 +3433,9 @@ def revoke_provider_credentials(provider: str | None = None, settings: Any | Non
             for base_var in PROVIDER_BASE_URL_ENV.get(p, ()):
                 env_keys_to_clear.add(base_var)
                 os.environ.pop(base_var, None)
+            if p in ("google_genai", "google_vertexai", "google_anthropic_vertex"):
+                env_keys_to_clear.add("GOOGLE_GENAI_USE_VERTEXAI")
+                os.environ.pop("GOOGLE_GENAI_USE_VERTEXAI", None)
             if settings is not None:
                 field = PROVIDER_SETTINGS_FIELD_MAP.get(p)
                 if field and hasattr(settings, field):

@@ -180,6 +180,7 @@ _TOOLS_WITH_HEADER_INFO: set[str] = {
     # Agent tools
     "task",
     "write_todos",
+    "call_mcp_tool",
 }
 
 

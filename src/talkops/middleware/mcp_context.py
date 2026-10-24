@@ -53,14 +53,25 @@ def _sanitize_error_detail(error: str | None) -> str:
 
 def _build_mcp_context_from_infos(
     servers: Sequence[Any],
+    configs: Mapping[str, Any] | None = None,
 ) -> str:
     """Format MCP server/tool inventory for the system prompt."""
     if not servers:
         return ""
 
     from talkops.mcp.preload import get_mcp_server_state_dir
+    from talkops.mcp.session_manager import (
+        _AUTO_LAZY_MCP_TOOL_THRESHOLD,
+        split_enabled_tools_by_eager_lazy,
+    )
 
     total_tools = sum(len(getattr(s, "tools", ())) for s in servers)
+    total_active_tools = sum(
+        len(getattr(s, "tools", ()) or ())
+        for s in servers
+        if getattr(s, "enabled", True) and getattr(s, "status", "ok") == "ok"
+    )
+    auto_lazy = total_active_tools > _AUTO_LAZY_MCP_TOOL_THRESHOLD
     lines = [f"**MCP Servers** ({len(servers)} servers, {total_tools} tools):"]
     has_active_tools = False
 
@@ -88,15 +99,44 @@ def _build_mcp_context_from_infos(
 
         has_active_tools = True
         is_scoped_server = name.startswith(("subagent__", "plugin__"))
-        tool_names: list[str] = []
-        for t in tools:
-            orig = getattr(t, "original_name", "") or ""
-            raw = getattr(t, "name", str(t))
-            tool_names.append(orig if (is_scoped_server and orig) else raw)
-        shown = tool_names[:_TOOL_NAME_DISPLAY_LIMIT]
-        extra_count = len(tool_names) - len(shown)
-        suffix = f", ... (+{extra_count} more in schema dir)" if extra_count > 0 else ""
-        lines.append(f"- **{name}** ({transport}): {', '.join(shown)}{suffix}")
+        srv_cfg = configs.get(name) if isinstance(configs, Mapping) else None
+        eager_tools, lazy_tools = split_enabled_tools_by_eager_lazy(
+            server,
+            srv_cfg if isinstance(srv_cfg, Mapping) else None,
+            default_lazy=auto_lazy,
+        )
+
+        def _fmt_names(
+            tool_seq: Sequence[Any],
+            *,
+            scoped: bool = is_scoped_server,
+            srv_name: str = name,
+            is_lazy: bool = False,
+        ) -> str:
+            names: list[str] = []
+            for t in tool_seq:
+                orig = getattr(t, "original_name", "") or ""
+                raw = getattr(t, "name", str(t))
+                if scoped and orig:
+                    names.append(orig)
+                elif is_lazy and orig and raw == f"{srv_name}_{orig}":
+                    names.append(orig)
+                else:
+                    names.append(raw)
+            shown = names[:_TOOL_NAME_DISPLAY_LIMIT]
+            extra_count = len(names) - len(shown)
+            suffix = f", ... (+{extra_count} more in schema dir)" if extra_count > 0 else ""
+            return f"{', '.join(shown)}{suffix}"
+
+        if eager_tools and lazy_tools:
+            lines.append(
+                f"- **{name}** ({transport}): "
+                f"Eager: {_fmt_names(eager_tools)} | Lazy (via `call_mcp_tool`): {_fmt_names(lazy_tools, is_lazy=True)}"
+            )
+        elif lazy_tools:
+            lines.append(f"- **{name}** ({transport}) [lazy]: {_fmt_names(lazy_tools, is_lazy=True)}")
+        else:
+            lines.append(f"- **{name}** ({transport}): {_fmt_names(tools)}")
 
     if has_active_tools:
         state_dir = get_mcp_server_state_dir()
@@ -105,7 +145,9 @@ def _build_mcp_context_from_infos(
             "(`<toolName>.json`). Eagerly loaded tools are registered directly (`<serverName>:<toolName>`). "
             f"For lazy-loaded tools, call `read_file` directly on `{state_dir}/<serverName>/<toolName>.json` "
             f"(skip `ls` unless the tool name is hidden behind `+N more in schema dir`), "
-            "then call `call_mcp_tool(server_name=<serverName>, tool_name=<toolName>, arguments={...})`."
+            "then call `call_mcp_tool(server_name=<serverName>, tool_name=<toolName>, arguments={...})` "
+            "(pass `arguments={}` when the tool takes no arguments; always use `call_mcp_tool` for MCP tools "
+            "rather than falling back to `execute` shell workarounds)."
         )
 
     return "\n".join(lines)
@@ -194,7 +236,19 @@ class MCPContextMiddleware(AgentMiddleware):
         """Build MCP context string — prefers MCPServerInfo, falls back to config."""
         applicable = self._get_applicable_server_infos()
         if applicable:
-            return _build_mcp_context_from_infos(applicable)
+            raw_servers = (
+                (
+                    self._config.get("mcpServers")
+                    or self._config.get("mcp_servers")
+                    or self._config
+                )
+                if isinstance(self._config, Mapping)
+                else None
+            )
+            return _build_mcp_context_from_infos(
+                applicable,
+                configs=raw_servers if isinstance(raw_servers, Mapping) else None,
+            )
         if self._config:
             return _build_mcp_context_from_config(self._config)
         return ""

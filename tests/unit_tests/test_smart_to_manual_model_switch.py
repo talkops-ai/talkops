@@ -250,9 +250,10 @@ async def test_textual_adapter_ignores_model_routed_event_in_manual_mode():
 @pytest.mark.asyncio
 async def test_smart_mode_warns_when_typesafe_api_key_missing(monkeypatch):
     """Verify that switching to Smart mode shows a warning toast if TYPESAFE_API_KEY is not configured."""
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    monkeypatch.delenv("JEV_API_KEY", raising=False)
     settings = get_settings()
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("TALKOPS_TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
     monkeypatch.setattr(settings, "typesafe_api_key", None)
 
     app = TalkOpsApp(model="openai:gpt-5.6-luna", defer_server_start=True)
@@ -264,5 +265,20 @@ async def test_smart_mode_warns_when_typesafe_api_key_missing(monkeypatch):
     call_args, call_kwargs = app.notify.call_args
     assert "TYPESAFE_API_KEY is not configured" in call_args[0]
     assert call_kwargs.get("severity") == "warning"
+
+
+@pytest.mark.asyncio
+async def test_explicit_model_switch_exits_smart_mode():
+    """Verify that explicitly selecting a concrete model via /model exits Smart mode so Jev does not override it."""
+    app = TalkOpsApp(model="openai:gpt-5.6-luna", defer_server_start=True)
+    await app._set_approval_mode(ApprovalMode.SMART)
+    assert app._approval_mode == ApprovalMode.SMART
+
+    await app._finalize_model_switch("google_vertexai:gemini-4-argon", effort="medium")
+    assert app._model == "google_vertexai:gemini-4-argon"
+    assert app._manual_model == "google_vertexai:gemini-4-argon"
+    assert app._approval_mode == ApprovalMode.MANUAL
+    assert app._smart_routed_active is False
+
 
 

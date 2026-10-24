@@ -1473,6 +1473,10 @@ def _deterministic_allow(
 ) -> bool:
     """Fast-path deterministic allow for known-safe operations."""
     name = call["name"]
+    if name == "call_mcp_tool":
+        from talkops.middleware.headless_mcp_guard import is_call_mcp_tool_read_only
+
+        return is_call_mcp_tool_read_only(call.get("args") or {})
     if tool is not None and is_mcp_tool(tool):
         return mcp_tool_is_coherently_read_only(tool)
     if name in {"write_file", "edit_file"}:

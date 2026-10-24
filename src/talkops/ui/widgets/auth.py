@@ -263,11 +263,13 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         """Initialize AuthPromptScreen."""
         super().__init__()
         self._is_langsmith = is_langsmith(provider)
-        self._provider = (
-            provider
-            if (self._is_langsmith or provider.lower() == "talkops")
-            else canonicalize_provider(provider)
-        )
+        raw_prov = provider.strip().lower()
+        if raw_prov in ("dynamic", "auto"):
+            self._provider = "typesafe"
+        elif self._is_langsmith or raw_prov == "talkops":
+            self._provider = provider
+        else:
+            self._provider = canonicalize_provider(provider)
         self._env_var = (
             env_var
             or get_credential_env_var(self._provider)
@@ -709,8 +711,14 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
                 self._show_error("API key cannot be empty (unless Vertex AI backend is enabled).")
                 return
 
+        effective_env_var = self._env_var
+        if self._provider == "google_vertexai" and cleaned.startswith(("AQ.", "AIza")):
+            effective_env_var = "VERTEXAI_API_KEY"
+            if os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip().startswith(("AQ.", "AIza")):
+                os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+
         if cleaned:
-            os.environ[self._env_var] = cleaned
+            os.environ[effective_env_var] = cleaned
             if self._provider == "talkops":
                 os.environ["TALKOPS_SERVER_API_KEY"] = cleaned
                 try:
@@ -719,7 +727,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
                         srv_handle.config.api_key = cleaned
                 except Exception:
                     pass
-            logger.info("Saved environment variable credentials for %s (%s)", self._provider, self._env_var)
+            logger.info("Saved environment variable credentials for %s (%s)", self._provider, effective_env_var)
 
         base_url_var = (
             "TALKOPS_SERVER_URL"
@@ -733,7 +741,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         try:
             prov_vars = {}
             if cleaned:
-                prov_vars[self._env_var] = cleaned
+                prov_vars[effective_env_var] = cleaned
                 if self._provider == "talkops":
                     prov_vars["TALKOPS_SERVER_API_KEY"] = cleaned
             if base_url:
@@ -774,7 +782,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
                 storage.set_provider_key(
                     self._provider,
                     cleaned,
-                    env_var=self._env_var,
+                    env_var=effective_env_var,
                     base_url=base_url or None,
                     base_url_env=base_url_var,
                     sync_dotenv=False,

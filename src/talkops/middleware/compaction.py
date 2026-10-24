@@ -890,6 +890,7 @@ MICROCOMPACT_COMPACTABLE_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
         "read",
+        "ls",
         "execute",
         "run_command",
         "bash",
@@ -901,6 +902,7 @@ MICROCOMPACT_COMPACTABLE_TOOLS: frozenset[str] = frozenset(
         "edit_file",
         "write_file",
         "js_eval",
+        "call_mcp_tool",
     }
 )
 
@@ -1021,7 +1023,7 @@ def microcompact_tool_messages(
             continue
         tc_id = str(getattr(msg, "tool_call_id", ""))
         tool_name = str(getattr(msg, "name", "") or call_name_by_id.get(tc_id, "")).lower()
-        if not tool_name or tool_name in MICROCOMPACT_COMPACTABLE_TOOLS:
+        if not tool_name or tool_name in MICROCOMPACT_COMPACTABLE_TOOLS or ":" in tool_name:
             compactable_indices.append(idx)
 
     keep_count = max(0, int(keep_recent_tool_uses))
@@ -1061,7 +1063,7 @@ def microcompact_tool_messages(
             tool_call_id=getattr(orig, "tool_call_id", ""),
             status=getattr(orig, "status", "success"),
             id=getattr(orig, "id", None),
-            artifact=getattr(orig, "artifact", None),
+            artifact=None,
             additional_kwargs=dict(getattr(orig, "additional_kwargs", {}) or {}),
         )
     return result

@@ -14,24 +14,58 @@
 
 """Model creation and configuration package for talkops."""
 
-from talkops.model.config import (
-    MODEL_PROFILES,
-    PROVIDER_API_KEY_ENV,
-    PROVIDER_BASE_URL_ENV,
-    ModelConfig,
-    ModelSpec,
-    apply_stored_credentials,
-    clear_default_model,
-    detect_provider,
-    load_default_model,
-    normalize_model_spec,
-    save_default_model,
-)
-from talkops.model.factory import (
-    ModelResult,
-    clear_model_cache,
-    create_model,
-)
+from __future__ import annotations
+
+import importlib
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from talkops.model.config import (
+        MODEL_PROFILES,
+        PROVIDER_API_KEY_ENV,
+        PROVIDER_BASE_URL_ENV,
+        ModelConfig,
+        ModelSpec,
+        apply_stored_credentials,
+        clear_default_model,
+        detect_provider,
+        load_default_model,
+        normalize_model_spec,
+        save_default_model,
+    )
+    from talkops.model.factory import (
+        ModelResult,
+        clear_model_cache,
+        create_model,
+    )
+
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "MODEL_PROFILES": ("talkops.model.config", "MODEL_PROFILES"),
+    "PROVIDER_API_KEY_ENV": ("talkops.model.config", "PROVIDER_API_KEY_ENV"),
+    "PROVIDER_BASE_URL_ENV": ("talkops.model.config", "PROVIDER_BASE_URL_ENV"),
+    "ModelConfig": ("talkops.model.config", "ModelConfig"),
+    "ModelSpec": ("talkops.model.config", "ModelSpec"),
+    "apply_stored_credentials": ("talkops.model.config", "apply_stored_credentials"),
+    "clear_default_model": ("talkops.model.config", "clear_default_model"),
+    "detect_provider": ("talkops.model.config", "detect_provider"),
+    "load_default_model": ("talkops.model.config", "load_default_model"),
+    "normalize_model_spec": ("talkops.model.config", "normalize_model_spec"),
+    "save_default_model": ("talkops.model.config", "save_default_model"),
+    "ModelResult": ("talkops.model.factory", "ModelResult"),
+    "clear_model_cache": ("talkops.model.factory", "clear_model_cache"),
+    "create_model": ("talkops.model.factory", "create_model"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_IMPORTS:
+        module_name, attr_name = _LAZY_IMPORTS[name]
+        module = importlib.import_module(module_name)
+        value = getattr(module, attr_name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "ModelConfig",

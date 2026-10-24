@@ -551,4 +551,56 @@ def test_microcompact_tool_messages_keeps_recent_and_clears_older() -> None:
         assert recent_tm.content == heavy_output
 
 
+def test_microcompact_includes_call_mcp_tool_and_ls_and_clears_artifact() -> None:
+    """Verify call_mcp_tool, ls, and eager MCP tools are microcompacted and drop large artifact payloads."""
+    from talkops.middleware.compaction import microcompact_tool_messages
+
+    heavy_output = '{"result": "' + ("X" * 15_000) + '"}'
+    messages: list[Any] = [HumanMessage(content="Inspect binary with MCP tools")]
+    tools_seq = [
+        "ls",
+        "call_mcp_tool",
+        "call_mcp_tool",
+        "rea:inspect_macho",
+        "execute",
+        "read_file",
+        "execute",
+        "read_file",
+    ]
+    for idx, t_name in enumerate(tools_seq):
+        tc_id = f"mcp_tc_{idx}"
+        messages.append(
+            AIMessage(
+                content="",
+                tool_calls=[{"id": tc_id, "name": t_name, "args": {}}],
+            )
+        )
+        messages.append(
+            ToolMessage(
+                content=heavy_output,
+                tool_call_id=tc_id,
+                name=t_name,
+                artifact={"structuredContent": {"huge": "Y" * 50_000}},
+            )
+        )
+
+    compacted = microcompact_tool_messages(
+        messages,
+        keep_recent_tool_uses=3,
+        min_saved_chars=10_000,
+        min_message_chars=1_000,
+    )
+    tool_msgs = [m for m in compacted if isinstance(m, ToolMessage)]
+    assert len(tool_msgs) == 8
+    # First 5 (including ls, call_mcp_tool, rea:inspect_macho, execute) are microcompacted and drop artifact
+    for old_tm in tool_msgs[:5]:
+        assert "[Old tool result content cleared by microcompaction" in str(old_tm.content)
+        assert old_tm.artifact is None
+    # Recent 3 retain content and artifact
+    for recent_tm in tool_msgs[5:]:
+        assert recent_tm.content == heavy_output
+        assert recent_tm.artifact is not None
+
+
+
 

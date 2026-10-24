@@ -144,9 +144,23 @@ def _scan_subagents_dir(agents_dir: Path, source: str) -> dict[str, SubagentMeta
     - ``agents_dir/{name}.md``
     - Any markdown file directly under ``agents_dir/``
     """
+    from talkops.subagents.subagents_parser import _discover_local_skill_names
+
     subagents: dict[str, SubagentMetadata] = {}
     if not agents_dir.exists() or not agents_dir.is_dir():
         return subagents
+
+    parent_bundle = agents_dir.parent if agents_dir.name == "agents" else None
+    parent_mcp = (
+        parent_bundle / ".mcp.json"
+        if parent_bundle is not None and (parent_bundle / ".mcp.json").is_file()
+        else None
+    )
+    parent_skills = (
+        _discover_local_skill_names(parent_bundle / "skills")
+        if parent_bundle is not None and (parent_bundle / "skills").is_dir()
+        else []
+    )
 
     for entry in agents_dir.iterdir():
         if entry.is_dir():
@@ -165,13 +179,21 @@ def _scan_subagents_dir(agents_dir: Path, source: str) -> dict[str, SubagentMeta
                 if parsed:
                     parsed["source"] = source
                     bundle_mcp = entry / ".mcp.json"
-                    if bundle_mcp.exists() and "mcp_files" not in parsed:
+                    if bundle_mcp.exists() and "mcp_files" not in parsed and "mcp_config" not in parsed:
                         parsed["mcp_files"] = [str(bundle_mcp)]
+                    elif parent_mcp is not None and "mcp_files" not in parsed and "mcp_config" not in parsed:
+                        parsed["mcp_files"] = [str(parent_mcp)]
+                    if not parsed.get("skills") and parent_skills:
+                        parsed["skills"] = list(parent_skills)
                     subagents[parsed["name"]] = parsed
         elif entry.is_file() and entry.suffix.lower() == ".md":
             parsed = _parse_subagent_file(entry, fallback_name=entry.stem)
             if parsed:
                 parsed["source"] = source
+                if parent_mcp is not None and "mcp_files" not in parsed and "mcp_config" not in parsed:
+                    parsed["mcp_files"] = [str(parent_mcp)]
+                if not parsed.get("skills") and parent_skills:
+                    parsed["skills"] = list(parent_skills)
                 subagents[parsed["name"]] = parsed
 
     return subagents
@@ -229,21 +251,7 @@ def list_subagents(
     if shared_agents_dir.is_dir() and shared_agents_dir != resolved_user_dir:
         discovered.update(_scan_subagents_dir(shared_agents_dir, source="user-shared"))
 
-    # 2. Project subagents (take precedence over user subagents)
-    resolved_proj_dir = project_agents_dir
-    if resolved_proj_dir is None and project_root is not None:
-        candidate = paths.project_agents_dir(project_root)
-        if candidate.is_dir():
-            resolved_proj_dir = candidate
-        elif (project_root / ".agents").is_dir():
-            resolved_proj_dir = project_root / ".agents"
-        elif (project_root / "agents").is_dir():
-            resolved_proj_dir = project_root / "agents"
-
-    if resolved_proj_dir is not None and resolved_proj_dir.is_dir():
-        discovered.update(_scan_subagents_dir(resolved_proj_dir, source="project"))
-
-    # 3. Dynamic Agent Plugins (marketplace & project-local plugins)
+    # 2. Dynamic Agent Plugins (marketplace & project-local plugins)
     if include_plugins:
         try:
             from talkops.plugins.adapters.agents import discover_plugin_subagents
@@ -255,6 +263,24 @@ def list_subagents(
                     discovered[sub_name] = p_meta
         except Exception as exc:
             logger.debug("Plugin subagents discovery encountered non-fatal error: %s", exc)
+
+    # 3. Project subagents (highest precedence: override user and plugin subagents)
+    proj_dirs: list[Path] = []
+    if project_agents_dir is not None:
+        proj_dirs.append(project_agents_dir)
+    elif project_root is not None:
+        for candidate in (
+            project_root / "agents",
+            project_root / ".agents",
+            project_root / ".agents" / "agents",
+            paths.project_agents_dir(project_root),
+        ):
+            if candidate.is_dir() and candidate not in proj_dirs:
+                proj_dirs.append(candidate)
+
+    for proj_dir in proj_dirs:
+        if proj_dir.is_dir():
+            discovered.update(_scan_subagents_dir(proj_dir, source="project"))
 
     return list(discovered.values())
 
