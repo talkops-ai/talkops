@@ -63,7 +63,16 @@ from talkops.webhooks import WebhookConfig, WebhookDispatcher
 
 
 @pytest.fixture(autouse=True)
-def _clean_programmatic_addons() -> Any:
+def _clean_programmatic_addons(monkeypatch: pytest.MonkeyPatch) -> Any:
+    from talkops.config.settings import _ensure_bootstrap
+
+    _ensure_bootstrap()
+    monkeypatch.delenv("TALKOPS_SERVER_API_KEY", raising=False)
+    monkeypatch.delenv("TALKOPS_SERVER_API_KEYS", raising=False)
+    monkeypatch.delenv("TALKOPS_API_KEY", raising=False)
+    monkeypatch.delenv("TALKOPS_CONTROL_PLANE_URL", raising=False)
+    monkeypatch.delenv("TALKOPS_CONTROL_PLANE_JWKS_URL", raising=False)
+    monkeypatch.delenv("TALKOPS_CONTROL_PLANE_SERVICE_KEY", raising=False)
     clear_registered_addons()
     yield
     clear_registered_addons()

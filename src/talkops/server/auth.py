@@ -345,16 +345,29 @@ async def verify_token_with_control_plane(
                 json={"token": token},
                 headers=headers,
             )
-            if resp.status_code == 401 and not service_key:
+            if resp.status_code == 401:
                 try:
                     err_payload = resp.json()
                 except Exception:
                     err_payload = {}
                 if isinstance(err_payload, dict) and err_payload.get("error") == "invalid_service_key":
+                    if _looks_like_jwt(token):
+                        jwt_user = verify_jwt_token(token)
+                        ttl_raw = os.environ.get("TALKOPS_AUTH_CACHE_TTL_SECONDS", "60")
+                        try:
+                            ttl = max(0.0, float(ttl_raw))
+                        except ValueError:
+                            ttl = 60.0
+                        if ttl > 0:
+                            _control_plane_token_cache[token_hash] = (now_mono + ttl, dict(jwt_user))
+                        return jwt_user
+                    fallback_headers = {
+                        k: v for k, v in headers.items() if k.lower() != "x-control-plane-key"
+                    }
                     resp = await client.post(
                         f"{cp_url}/api/v1/auth/token",
                         json={"token": token},
-                        headers=headers,
+                        headers=fallback_headers,
                     )
     except Exception as exc:
         logger.warning("Control Plane token verification request failed: %s", exc)

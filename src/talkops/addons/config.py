@@ -212,6 +212,8 @@ def _load_project_dotenv(project_root: Path | None = None) -> Path:
     """Ensure `.talkops/.env` and `.env` are loaded into `os.environ` for the active project."""
     _ensure_bootstrap()
     effective_root = project_root or find_project_root() or Path.cwd()
+    if "PYTEST_CURRENT_TEST" in os.environ and effective_root.resolve() == Path(__file__).resolve().parents[3]:
+        return effective_root
     try:
         import dotenv
 

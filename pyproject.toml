@@ -1,6 +1,6 @@
 [project]
 name = "talkops-ai"
-version = "0.3.0b14"
+version = "0.3.0b15"
 description = "Autonomous Multi-Agent Framework for Software & Infrastructure Coding, Cloud Operations, DevOps, SRE, FinOps & Event-Driven Automation"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -18,7 +18,8 @@ dependencies = [
     "langchain-mcp-adapters>=0.3.0",
     "langchain-openai>=1.4.1",
     "langchain-anthropic>=1.5.3",
-    "langchain-google-genai>=4.3.2",
+    "google-genai>=2.33.0",
+    "langchain-google-genai>=4.4.2",
     "langgraph>=1.2.10",
     "langgraph-cli[inmem]>=0.4.31",
     "langgraph-checkpoint-sqlite>=3.1.0",
@@ -62,7 +63,7 @@ dependencies = [
     "langchain-fireworks>=1.3.1",
     "langchain-together>=0.4.0",
     "langchain-xai>=1.3.0",
-    "langchain-google-vertexai>=3.2.4",
+    "langchain-google-vertexai>=3.2.5",
     "langchain-ollama>=1.1.0",
     "langchain-openrouter>=0.2.9",
     "langchain-perplexity>=1.4.1",

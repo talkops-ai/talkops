@@ -24,6 +24,7 @@ import contextlib
 import importlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import threading
@@ -755,7 +756,23 @@ _ANTHROPIC_CACHE_CONTROL_PATCHED = False
 _OLLAMA_MESSAGE_COMPAT_PATCHED = False
 _VERTEX_EXPRESS_PROJECT_CACHE: dict[str, str] = {}
 _VERTEX_EXPRESS_CLIENT_PATCHED = False
+_VERTEX_PROBE_LOG_FILTER_INSTALLED = False
 _VERTEX_PROJECT_PATH_RE = re.compile(r"projects/([0-9A-Za-z_-]+)/locations/([0-9A-Za-z_-]+)/publishers/")
+
+
+class _VertexProbeLogFilter(logging.Filter):
+    """Suppress httpx INFO log lines for internal Vertex AI Express project-discovery probes."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "gemini-2.5-flash-probe" not in record.getMessage()
+
+
+def _ensure_vertex_probe_log_filter() -> None:
+    global _VERTEX_PROBE_LOG_FILTER_INSTALLED
+    if _VERTEX_PROBE_LOG_FILTER_INSTALLED:
+        return
+    logging.getLogger("httpx").addFilter(_VertexProbeLogFilter())
+    _VERTEX_PROBE_LOG_FILTER_INSTALLED = True
 
 
 def _resolve_vertex_express_project(api_key: str) -> str | None:
@@ -782,6 +799,7 @@ def _resolve_vertex_express_project(api_key: str) -> str | None:
     try:
         import httpx
 
+        _ensure_vertex_probe_log_filter()
         resp = httpx.post(
             "https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-2.5-flash-probe:countTokens",
             headers={"x-goog-api-key": key},
@@ -854,24 +872,34 @@ def _ensure_vertex_express_api_client_patch() -> None:
         return False
 
     if orig_sync is not None and not getattr(orig_sync, "_talkops_vertex_express_patched", False):
-        def _patched_request_once(self: Any, http_request: Any, stream: bool = False) -> Any:
+        def _patched_request_once(
+            self: Any,
+            http_request: Any,
+            *args: Any,
+            **kwargs: Any,
+        ) -> Any:
             try:
-                return orig_sync(self, http_request, stream=stream)
+                return orig_sync(self, http_request, *args, **kwargs)
             except _genai_errors.ClientError as exc:
                 if _rewrite_express_url_on_404(self, http_request, exc):
-                    return orig_sync(self, http_request, stream=stream)
+                    return orig_sync(self, http_request, *args, **kwargs)
                 raise
 
         setattr(_patched_request_once, "_talkops_vertex_express_patched", True)
         base_cls._request_once = _patched_request_once  # type: ignore[method-assign]
 
     if orig_async is not None and not getattr(orig_async, "_talkops_vertex_express_patched", False):
-        async def _patched_async_request_once(self: Any, http_request: Any, stream: bool = False) -> Any:
+        async def _patched_async_request_once(
+            self: Any,
+            http_request: Any,
+            *args: Any,
+            **kwargs: Any,
+        ) -> Any:
             try:
-                return await orig_async(self, http_request, stream=stream)
+                return await orig_async(self, http_request, *args, **kwargs)
             except _genai_errors.ClientError as exc:
                 if _rewrite_express_url_on_404(self, http_request, exc):
-                    return await orig_async(self, http_request, stream=stream)
+                    return await orig_async(self, http_request, *args, **kwargs)
                 raise
 
         setattr(_patched_async_request_once, "_talkops_vertex_express_patched", True)
@@ -956,6 +984,8 @@ def _ensure_ollama_message_compatibility(model: BaseChatModel | None = None) -> 
         def _patched_convert_messages_to_ollama_messages(
             self: Any,
             messages: list[Any],
+            *args: Any,
+            **kwargs: Any,
         ) -> Any:
             sanitized: list[Any] = []
             for msg in messages:
@@ -976,7 +1006,7 @@ def _ensure_ollama_message_compatibility(model: BaseChatModel | None = None) -> 
                     sanitized.append(msg.model_copy(update=updates))
                 else:
                     sanitized.append(msg)
-            return orig_convert(self, sanitized)
+            return orig_convert(self, sanitized, *args, **kwargs)
 
         setattr(_patched_convert_messages_to_ollama_messages, "_talkops_compat_patched", True)
         _ollama_cm.ChatOllama._convert_messages_to_ollama_messages = (  # type: ignore[method-assign]
@@ -1013,11 +1043,11 @@ def _ensure_anthropic_block_level_cache_control(model: BaseChatModel | None = No
             def _patched_get_request_payload(
                 self: Any,
                 input_: Any,
-                *,
+                *args: Any,
                 stop: list[str] | None = None,
                 **kwargs: Any,
             ) -> dict[str, Any]:
-                payload = orig_get_payload(self, input_, stop=stop, **kwargs)
+                payload = orig_get_payload(self, input_, *args, stop=stop, **kwargs)
                 top_cc = payload.pop("cache_control", None)
                 if top_cc and isinstance(payload.get("messages"), list) and payload["messages"]:
                     tool_ids = _anth_cm._collect_code_execution_tool_ids(payload["messages"])

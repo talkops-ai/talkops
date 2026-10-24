@@ -1178,6 +1178,112 @@ def test_vertex_express_mode_global_project_routing_and_404_rewrite(monkeypatch:
     clear_model_cache()
 
 
+@pytest.mark.asyncio
+async def test_vertex_express_patch_forwards_implicit_retry_and_extra_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify patched _request_once and _async_request_once forward 'implicit_retry' and arbitrary kwargs."""
+    import logging
+    from types import SimpleNamespace
+    from typing import Any
+    from google.genai import _api_client as genai_api_client
+    from google.genai import errors as genai_errors
+    import talkops.model.factory as factory_mod
+
+    monkeypatch.setattr(factory_mod, "_VERTEX_EXPRESS_CLIENT_PATCHED", False)
+
+    sync_calls: list[tuple[Any, tuple[Any, ...], dict[str, Any]]] = []
+    async_calls: list[tuple[Any, tuple[Any, ...], dict[str, Any]]] = []
+
+    def fake_orig_sync(self: Any, http_request: Any, *args: Any, **kwargs: Any) -> str:
+        sync_calls.append((http_request.url, args, kwargs))
+        if len(sync_calls) == 1:
+            err = genai_errors.ClientError(
+                404,
+                {
+                    "error": {
+                        "code": 404,
+                        "message": "Publisher Model `projects/492468289179/locations/asia-southeast1/publishers/google/models/gemini-4-argon` was not found",
+                    }
+                },
+            )
+            raise err
+        return "sync-ok"
+
+    async def fake_orig_async(self: Any, http_request: Any, *args: Any, **kwargs: Any) -> str:
+        async_calls.append((http_request.url, args, kwargs))
+        if len(async_calls) == 1:
+            err = genai_errors.ClientError(
+                404,
+                {
+                    "error": {
+                        "code": 404,
+                        "message": "Publisher Model `projects/492468289179/locations/asia-southeast1/publishers/google/models/gemini-4-argon` was not found",
+                    }
+                },
+            )
+            raise err
+        return "async-ok"
+
+    monkeypatch.setattr(genai_api_client.BaseApiClient, "_request_once", fake_orig_sync)
+    monkeypatch.setattr(genai_api_client.BaseApiClient, "_async_request_once", fake_orig_async)
+
+    factory_mod._ensure_vertex_express_api_client_patch()
+
+    dummy_client = SimpleNamespace(vertexai=True, api_key="AQ.test-key", project=None, location=None)
+    sync_req = SimpleNamespace(url="https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-4-argon:generateContent")
+    sync_res = genai_api_client.BaseApiClient._request_once(
+        dummy_client,
+        sync_req,
+        True,
+        implicit_retry=True,
+    )
+    assert sync_res == "sync-ok"
+    assert len(sync_calls) == 2
+    assert sync_calls[0][1] == (True,)
+    assert sync_calls[0][2] == {"implicit_retry": True}
+    assert sync_calls[1][1] == (True,)
+    assert sync_calls[1][2] == {"implicit_retry": True}
+    assert "/projects/492468289179/locations/global/publishers/" in sync_calls[1][0]
+
+    dummy_async_client = SimpleNamespace(vertexai=True, api_key="AQ.test-key", project=None, location=None)
+    async_req = SimpleNamespace(url="https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-4-argon:streamGenerateContent")
+    async_res = await genai_api_client.BaseApiClient._async_request_once(
+        dummy_async_client,
+        async_req,
+        stream=True,
+        implicit_retry=False,
+    )
+    assert async_res == "async-ok"
+    assert len(async_calls) == 2
+    assert async_calls[0][2] == {"stream": True, "implicit_retry": False}
+    assert async_calls[1][2] == {"stream": True, "implicit_retry": False}
+    assert "/projects/492468289179/locations/global/publishers/" in async_calls[1][0]
+
+    # Verify probe log filter suppresses gemini-2.5-flash-probe 404 logs
+    flt = factory_mod._VertexProbeLogFilter()
+    probe_rec = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='HTTP Request: POST https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-2.5-flash-probe:countTokens "HTTP/1.1 404 Not Found"',
+        args=(),
+        exc_info=None,
+    )
+    normal_rec = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='HTTP Request: POST https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-4-argon:generateContent "HTTP/1.1 200 OK"',
+        args=(),
+        exc_info=None,
+    )
+    assert flt.filter(probe_rec) is False
+    assert flt.filter(normal_rec) is True
+
+
 
 
 

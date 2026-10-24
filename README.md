@@ -99,7 +99,7 @@ pipx install --pip-args="--pre" talkops-ai
 pip install --pre -U talkops-ai
 
 # Install a specific version via install.sh
-curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- 0.3.0b14
+curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- 0.3.0b15
 ```
 
 </details>

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from pathlib import Path
@@ -49,12 +50,17 @@ def clean_environment(monkeypatch, tmp_path):
     monkeypatch.setattr("talkops.config.toml_config.STATE_DIR", test_state_dir)
     monkeypatch.setattr("talkops.config.toml_config._RECENT_MODELS_FILE", test_state_dir / "recent_models.json")
     monkeypatch.setattr("talkops.config.toml_config._RECENT_PROFILES_FILE", test_state_dir / "recent_cloud_profiles.json")
+    with contextlib.suppress(Exception):
+        from talkops.config.settings import _ensure_bootstrap
+
+        _ensure_bootstrap()
     for k in (
         "TALKOPS_CONTROL_PLANE_URL",
         "TALKOPS_CONTROL_PLANE_SERVICE_KEY",
         "TALKOPS_CONTROL_PLANE_JWKS_URL",
         "TALKOPS_API_KEY",
         "TALKOPS_SERVER_API_KEY",
+        "TALKOPS_SERVER_API_KEYS",
         "TALKOPS_SERVER_URL",
         "TALKOPS_USER_ID",
     ):
