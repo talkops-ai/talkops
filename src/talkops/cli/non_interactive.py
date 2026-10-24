@@ -255,6 +255,8 @@ async def _run_headless(
         final_prompt[:80] + ("..." if len(final_prompt) > 80 else ""),
     )
 
+    target_agent_name = agent.strip() if isinstance(agent, str) and agent.strip() else None
+
     with server_session(config) as agent:
         if not quiet and not json_output:
             print(f"TalkOps running headless: {final_prompt}\n", file=sys.stderr)
@@ -299,14 +301,14 @@ async def _run_headless(
             run_config["recursion_limit"] = recursion_limit
 
         input_data: dict[str, Any] = {"messages": [{"role": "user", "content": final_prompt}]}
-        if agent:
+        if target_agent_name:
             from talkops.commands.power.agents import resolve_plugin_agent
             from talkops.subagents.loader import list_subagents
 
             proj_root = project_context.project_root or project_context.user_cwd
             discovered_specs = list_subagents(project_root=proj_root, include_plugins=True)
-            matched_spec = resolve_plugin_agent(agent, discovered_specs)
-            resolved_agent_name = str(matched_spec.get("name") or agent) if matched_spec else agent
+            matched_spec = resolve_plugin_agent(target_agent_name, discovered_specs)
+            resolved_agent_name = str(matched_spec.get("name") or target_agent_name) if matched_spec else target_agent_name
             resolved_plugin_id = str(matched_spec.get("plugin_id") or "") if matched_spec else ""
             input_data["agent_session_request"] = {
                 "kind": "start",
