@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Comprehensive tests for project-local plugin auto-discovery and bifurcation.
 
 Covers:
@@ -16,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from opscloud.plugins.project_plugins import (
+from talkops.plugins.project_plugins import (
     ProjectPluginResult,
     _collect_skill_names,
     _has_agents,
@@ -112,6 +126,7 @@ def _make_sample_non_agent_plugin(
 
 
 def test_empty_directory_returns_empty_result(tmp_path: Path):
+    """Verify empty directory returns empty result."""
     result = load_project_plugins(tmp_path)
     assert isinstance(result, ProjectPluginResult)
     assert len(result.subagent_metas) == 0
@@ -180,7 +195,7 @@ def test_bifurcation_agent_vs_non_agent(tmp_path: Path):
     assert "dcf" in cmd_files
     assert "lbo" in cmd_files
 
-    from opscloud.plugins.adapters.commands import discover_plugin_commands
+    from talkops.plugins.adapters.commands import discover_plugin_commands
     handlers = discover_plugin_commands(tmp_path)
     handler_names = [h.name for h in handlers]
     assert "/dcf" in handler_names
@@ -199,7 +214,7 @@ def test_load_real_financial_services_reference_marketplace(
 ):
     """Verify full end-to-end discovery of reference/financial-services without modifying reference files."""
     monkeypatch.setattr(
-        "opscloud.plugins.store._user_settings_path", lambda: tmp_path / "settings.json"
+        "talkops.plugins.store._user_settings_path", lambda: tmp_path / "settings.json"
     )
     repo_root = Path(__file__).resolve().parent.parent.parent
     fin_root = repo_root / "reference" / "financial-services"
@@ -244,7 +259,7 @@ def test_load_real_financial_services_reference_marketplace(
     assert "comps" in cmd_files
     assert "lbo" in cmd_files
 
-    from opscloud.plugins.adapters.commands import discover_plugin_commands
+    from talkops.plugins.adapters.commands import discover_plugin_commands
     handlers = discover_plugin_commands(fin_root)
     handler_names = [h.name for h in handlers]
     assert "/dcf" in handler_names

@@ -1,13 +1,34 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for HITL auto mode and destructive command detection."""
+import os
+import sys
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolCall, ToolMessage
+from langchain_core.tools import BaseTool
 
-from opscloud.approval_mode import ApprovalMode
-from opscloud.middleware.auto_mode_hitl import is_potentially_destructive
+from talkops.approval_mode import ApprovalMode
+from talkops.middleware.auto_mode_hitl import is_potentially_destructive
 
 
 def test_destructive_aws_command_detection():
     # Destructive AWS operations
+    """Verify destructive aws command detection."""
     is_dest, reason = is_potentially_destructive("execute_command", {"command": "aws ec2 terminate-instances --instance-ids i-12345"})
     assert is_dest is True
     assert "high-risk" in reason
@@ -25,6 +46,7 @@ def test_destructive_aws_command_detection():
 
 
 def test_sensitive_file_modification_detection():
+    """Verify sensitive file modification detection."""
     is_dest, reason = is_potentially_destructive("write_file", {"path": "~/.aws/credentials"})
     assert is_dest is True
     assert "sensitive" in reason
@@ -35,9 +57,8 @@ def test_sensitive_file_modification_detection():
 
 @pytest.mark.asyncio
 async def test_auto_mode_decision_plan_enforcement():
-    from unittest.mock import MagicMock
-    from langchain_core.messages import AIMessage, ToolMessage
-    from opscloud.middleware.auto_mode_hitl import AutoModeHITLMiddleware
+    """Verify auto mode decision plan enforcement."""
+    from talkops.middleware.auto_mode_hitl import AutoModeHITLMiddleware
 
     mw = AutoModeHITLMiddleware()
     runtime = MagicMock()
@@ -72,7 +93,6 @@ async def test_auto_mode_decision_plan_enforcement():
         },
     }
 
-    from typing import Any, cast
     from langchain.agents.middleware.types import AgentState
 
     result = await mw.aafter_model(cast(AgentState[Any], state), runtime)
@@ -88,9 +108,8 @@ async def test_auto_mode_decision_plan_enforcement():
 
 
 def test_should_interrupt_tool_call_streamlined():
-    from opscloud.agent.factory import _should_interrupt_tool_call
-    from opscloud.approval_mode import ApprovalMode
-    from unittest.mock import MagicMock
+    """Verify should interrupt tool call streamlined."""
+    from talkops.agent.factory import _should_interrupt_tool_call
 
     # 1. SMART mode with auto_mode_enabled=True bypasses stock interrupt (middleware classifies)
     req_smart = MagicMock()
@@ -128,7 +147,8 @@ def test_should_interrupt_tool_call_streamlined():
 
 @pytest.mark.asyncio
 async def test_jev_classifier_missing_key(monkeypatch):
-    from opscloud.security.jev_classifier import JevSecurityClassifier
+    """Verify jev classifier missing key."""
+    from talkops.security.jev_classifier import JevSecurityClassifier
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.delenv("JEV_API_KEY", raising=False)
     classifier = JevSecurityClassifier(api_key="")
@@ -145,8 +165,10 @@ async def test_jev_classifier_missing_key(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jev_classifier_safe_call(monkeypatch):
-    from opscloud.security.jev_classifier import JevSecurityClassifier
+    """Verify jev classifier safe call."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier()
@@ -172,8 +194,10 @@ async def test_jev_classifier_safe_call(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jev_classifier_mutating_high_blast_radius(monkeypatch):
-    from opscloud.security.jev_classifier import JevSecurityClassifier
+    """Verify jev classifier mutating high blast radius."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier()
@@ -198,8 +222,8 @@ async def test_jev_classifier_mutating_high_blast_radius(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jev_classifier_timeout(monkeypatch):
-    from opscloud.security.jev_classifier import JevSecurityClassifier
-    from unittest.mock import AsyncMock, patch
+    """Verify jev classifier timeout."""
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier(timeout_seconds=0.01)
@@ -220,8 +244,10 @@ async def test_jev_classifier_timeout(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jev_classifier_shell_ast_destructive(monkeypatch):
-    from opscloud.security.jev_classifier import JevSecurityClassifier
+    """Verify jev classifier shell ast destructive."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier()
@@ -247,9 +273,10 @@ async def test_jev_classifier_shell_ast_destructive(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jev_classifier_mcp_destructive_hint(monkeypatch):
-    from opscloud.security.jev_classifier import JevSecurityClassifier
-    from langchain_core.tools import BaseTool
+    """Verify jev classifier mcp destructive hint."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier()
@@ -279,8 +306,10 @@ async def test_jev_classifier_mcp_destructive_hint(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jev_classifier_subagent_dispatch(monkeypatch):
-    from opscloud.security.jev_classifier import JevSecurityClassifier
+    """Verify jev classifier subagent dispatch."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier()
@@ -309,8 +338,10 @@ async def test_jev_classifier_subagent_dispatch(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jev_classifier_intent_divergence(monkeypatch):
-    from opscloud.security.jev_classifier import JevSecurityClassifier
+    """Verify jev classifier intent divergence."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier()
@@ -339,8 +370,10 @@ async def test_jev_classifier_intent_divergence(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_jev_classifier_deep_agent_autonomous_mutation(monkeypatch):
-    from opscloud.security.jev_classifier import JevSecurityClassifier
+    """Verify jev classifier deep agent autonomous mutation."""
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier()
@@ -367,8 +400,8 @@ async def test_jev_classifier_deep_agent_autonomous_mutation(monkeypatch):
 
 def test_jev_credential_manifest_and_aliases():
     """Verify typesafe credentials registration and provider aliases."""
-    from opscloud.config.manifest import get_option
-    from opscloud.model.config import PROVIDER_KEY_ALIASES
+    from talkops.config.manifest import get_option
+    from talkops.model.config import PROVIDER_KEY_ALIASES
 
     opt = get_option("credentials.typesafe")
     assert opt is not None
@@ -382,16 +415,14 @@ def test_jev_credential_manifest_and_aliases():
 
 def test_jev_classifier_settings_without_environ_mutation(monkeypatch):
     """Verify JevSecurityClassifier resolves settings without mutating os.environ."""
-    import os
-    import sys
-    import opscloud.config.settings
-    from opscloud.config.settings import Settings
-    from opscloud.security.jev_classifier import JevSecurityClassifier
+    import talkops.config.settings
+    from talkops.config.settings import Settings
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.delenv("JEV_API_KEY", raising=False)
 
-    settings_mod = sys.modules["opscloud.config.settings"]
+    settings_mod = sys.modules["talkops.config.settings"]
     test_settings = Settings(typesafe_api_key="settings-key-xyz")
     with monkeypatch.context() as m:
         m.setattr(settings_mod, "get_settings", lambda: test_settings)
@@ -403,14 +434,13 @@ def test_jev_classifier_settings_without_environ_mutation(monkeypatch):
 
 def test_runtime_context_dataclass_and_execution_info():
     """Verify _runtime_context extracts fields from CLIContextSchema and execution_info."""
-    from unittest.mock import MagicMock
-    from opscloud.agent.config import CLIContextSchema
-    from opscloud.middleware.auto_mode_hitl import (
+    from talkops.agent.config import CLIContextSchema
+    from talkops.middleware.auto_mode_hitl import (
         _execution_thread_id,
         _runtime_context,
         _thread_key,
     )
-    from opscloud.security.approval_mode import approval_mode_key
+    from talkops.security.approval_mode import approval_mode_key
 
     schema = CLIContextSchema(
         approval_mode="smart",
@@ -436,8 +466,8 @@ def test_runtime_context_dataclass_and_execution_info():
 
 def test_approval_policy_resolver_store_key_and_fallback():
     """Verify ApprovalPolicyResolver key validation rules and context mode fallback."""
-    from opscloud.security.approval_mode import ApprovalMode, approval_mode_key
-    from opscloud.security.approval_mode_source import ApprovalPolicyResolver
+    from talkops.security.approval_mode import ApprovalMode, approval_mode_key
+    from talkops.security.approval_mode_source import ApprovalPolicyResolver
 
     # 1. Unknown thread_id trusts the key
     assert ApprovalPolicyResolver.validate_store_key("some_key", None) == "some_key"
@@ -461,7 +491,8 @@ def test_approval_policy_resolver_store_key_and_fallback():
 async def test_awrite_approval_mode_store_broadening():
     """Verify awrite_approval_mode persists to various store interfaces and in-memory."""
     from unittest.mock import AsyncMock, MagicMock
-    from opscloud.security.approval_mode import (
+
+    from talkops.security.approval_mode import (
         APPROVAL_MODE_NAMESPACE,
         ApprovalMode,
         approval_mode_key,
@@ -493,14 +524,15 @@ async def test_awrite_approval_mode_store_broadening():
 @pytest.mark.asyncio
 async def test_middleware_smart_mode_with_jev():
     """Verify end-to-end AutoModeHITLMiddleware in SMART mode with mock Jev classifier."""
-    from typing import Any, cast
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from langchain.agents.middleware.types import AgentState
     from langchain_core.messages import AIMessage
-    from opscloud.agent.config import CLIContextSchema
-    from opscloud.middleware.auto_mode_hitl import AutoModeHITLMiddleware
-    from opscloud.security.approval_mode import approval_mode_key
-    from opscloud.security.jev_classifier import JevToolVerdict
+
+    from talkops.agent.config import CLIContextSchema
+    from talkops.middleware.auto_mode_hitl import AutoModeHITLMiddleware
+    from talkops.security.approval_mode import approval_mode_key
+    from talkops.security.jev_classifier import JevToolVerdict
 
     mw = AutoModeHITLMiddleware(interrupt_on={"execute": True, "write_file": True})
 
@@ -524,6 +556,7 @@ async def test_middleware_smart_mode_with_jev():
     response = MagicMock(result=[ai_msg])
 
     async def mock_handler(req):
+        """Provide mock handler test helper or fixture."""
         return response
 
     # Mock Jev verdict (allow safe read command)
@@ -559,15 +592,19 @@ async def test_middleware_smart_mode_with_jev():
 
 @pytest.mark.asyncio
 async def test_auto_mode_smart_mode_jev_mutating_requires_human_interrupt():
-    """Verify that when Jev flags a mutating command requiring human interrupt,
+    """Verify Jev mutating command interrupt disposition.
+
+    When Jev flags a mutating command requiring human interrupt,
     AutoModeHITLMiddleware marks disposition as 'require_human' rather than a hard denial.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from langchain_core.messages import AIMessage
-    from opscloud.agent.config import CLIContextSchema
-    from opscloud.middleware.auto_mode_hitl import AutoModeHITLMiddleware
-    from opscloud.security.approval_mode import approval_mode_key
-    from opscloud.security.jev_classifier import JevToolVerdict
+
+    from talkops.agent.config import CLIContextSchema
+    from talkops.middleware.auto_mode_hitl import AutoModeHITLMiddleware
+    from talkops.security.approval_mode import approval_mode_key
+    from talkops.security.jev_classifier import JevToolVerdict
 
     mw = AutoModeHITLMiddleware(interrupt_on={"execute": True, "write_file": True})
 
@@ -593,6 +630,7 @@ async def test_auto_mode_smart_mode_jev_mutating_requires_human_interrupt():
     response = MagicMock(result=[ai_msg])
 
     async def mock_handler(req):
+        """Provide mock handler test helper or fixture."""
         return response
 
     mock_verdict = JevToolVerdict(
@@ -630,15 +668,17 @@ async def test_auto_mode_smart_mode_jev_mutating_requires_human_interrupt():
 
 @pytest.mark.asyncio
 async def test_auto_mode_aafter_model_require_human_delegates_to_manual():
-    """Verify that when a decision plan has 'require_human', aafter_model invokes
+    """Verify aafter_model delegation when decision plan requires human approval.
+
+    When a decision plan has 'require_human', aafter_model invokes
     super().after_model with ApprovalMode.MANUAL to trigger LangGraph interrupt.
     """
-    from typing import Any, cast
     from unittest.mock import AsyncMock, MagicMock, patch
+
     from langchain.agents.middleware.types import AgentState
     from langchain_core.messages import AIMessage
-    from opscloud.approval_mode import ApprovalMode
-    from opscloud.middleware.auto_mode_hitl import AutoModeHITLMiddleware
+
+    from talkops.middleware.auto_mode_hitl import AutoModeHITLMiddleware
 
     mw = AutoModeHITLMiddleware()
     runtime = MagicMock()
@@ -672,16 +712,18 @@ async def test_auto_mode_aafter_model_require_human_delegates_to_manual():
         assert result == {"messages": [], "_auto_decision_plan": None}
         mock_super_after.assert_called_once()
         call_args = mock_super_after.call_args[0]
-        assert call_args[0]["_opscloud_async_approval_routing"].mode == ApprovalMode.MANUAL
+        assert call_args[0]["_talkops_async_approval_routing"].mode == ApprovalMode.MANUAL
 
 
 @pytest.mark.asyncio
 async def test_jev_classifier_tail_risk_critical_probability(monkeypatch):
-    """Verify that when expected score is below 1.2 but Critical tail probability >= 35%,
-    Jev triggers human interrupt.
+    """Verify Jev triggers human interrupt on high Critical tail probability.
+
+    Triggers when expected score is below 1.2 but Critical tail probability >= 35%.
     """
-    from opscloud.security.jev_classifier import JevSecurityClassifier
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier()
@@ -711,8 +753,9 @@ async def test_jev_classifier_tail_risk_critical_probability(monkeypatch):
 @pytest.mark.asyncio
 async def test_jev_classifier_low_confidence_gate(monkeypatch):
     """Verify that low classifier confidence (< 0.65) escalates to human confirmation."""
-    from opscloud.security.jev_classifier import JevSecurityClassifier
     from unittest.mock import AsyncMock, MagicMock, patch
+
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-key-123")
     classifier = JevSecurityClassifier()
@@ -737,7 +780,7 @@ async def test_jev_classifier_low_confidence_gate(monkeypatch):
 
 def test_jev_classifier_tool_description_compaction():
     """Verify tool description compaction extracts the primary sentence and removes massive manuals."""
-    from opscloud.security.jev_classifier import JevSecurityClassifier
+    from talkops.security.jev_classifier import JevSecurityClassifier
 
     classifier = JevSecurityClassifier()
     long_desc = (
@@ -753,8 +796,8 @@ def test_jev_classifier_tool_description_compaction():
 
 
 def test_is_auto_mode_classifier_chunk():
-    """Verify _is_auto_mode_classifier_chunk correctly detects internal classifier chunks identical to dcode."""
-    from opscloud.ui.textual_adapter import _is_auto_mode_classifier_chunk
+    """Verify _is_auto_mode_classifier_chunk correctly detects internal classifier chunks."""
+    from talkops.ui.textual_adapter import _is_auto_mode_classifier_chunk
 
     assert _is_auto_mode_classifier_chunk({"lc_source": "auto_mode_classifier"}) is True
     assert _is_auto_mode_classifier_chunk({"lc_source": "other"}) is False
@@ -763,11 +806,11 @@ def test_is_auto_mode_classifier_chunk():
 
 
 def test_auto_classifier_policy_prompt():
-    """Verify auto classifier policy prompt is adapted for OpsCloud multi-cloud + coding agent."""
-    from opscloud.middleware.auto_mode_hitl import _CLASSIFIER_POLICY
+    """Verify auto classifier policy prompt is adapted for TalkOps multi-cloud + coding agent."""
+    from talkops.middleware.auto_mode_hitl import _CLASSIFIER_POLICY
 
-    assert "You are OpsCloud's action authorization classifier." in _CLASSIFIER_POLICY
-    assert "K8s Autopilot" not in _CLASSIFIER_POLICY
+    assert "You are TalkOps's action authorization classifier." in _CLASSIFIER_POLICY
+    assert "LegacyAgent" not in _CLASSIFIER_POLICY
     # Mentions cloud and infrastructure operations
     assert "cloud & infrastructure" in _CLASSIFIER_POLICY.lower()
     # Mentions coding and workspace operations
@@ -780,13 +823,11 @@ def test_auto_classifier_policy_prompt():
 @pytest.mark.asyncio
 async def test_textual_adapter_filters_classifier_stream_chunks():
     """Verify textual adapter discards classifier chunks while preserving token accounting."""
-    from unittest.mock import MagicMock
-    from langchain_core.messages import AIMessageChunk
-    from opscloud.ui.textual_adapter import TextualAdapter, _TurnStreamState
+    from talkops.ui.textual_adapter import TextualAdapter, _TurnStreamState
 
     mock_client = MagicMock()
     mock_messages = MagicMock()
-    adapter = TextualAdapter(client=mock_client, assistant_id="opscloud", messages_widget=mock_messages)
+    adapter = TextualAdapter(client=mock_client, assistant_id="talkops", messages_widget=mock_messages)
 
     stream_state = _TurnStreamState()
 
@@ -796,8 +837,8 @@ async def test_textual_adapter_filters_classifier_stream_chunks():
     )
     meta = {
         "lc_source": "auto_mode_classifier",
-        "tags": ["opscloud:auto"],
-        "run_name": "opscloud_auto_classifier",
+        "tags": ["talkops:auto"],
+        "run_name": "talkops_auto_classifier",
     }
 
     # Handle classifier stream event
@@ -819,29 +860,31 @@ async def test_textual_adapter_filters_classifier_stream_chunks():
 
 
 def test_auto_classifier_timeout_resolution(monkeypatch):
-    from opscloud.middleware.auto_mode_hitl import _resolve_classifier_timeout
+    """Verify auto classifier timeout resolution."""
+    from talkops.middleware.auto_mode_hitl import _resolve_classifier_timeout
 
     # Default should be 60.0s
-    monkeypatch.delenv("OPSCLOUD_AUTO_CLASSIFIER_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("OPSCLOUD_AUTO_CLASSIFIER_TIMEOUT", raising=False)
+    monkeypatch.delenv("TALKOPS_AUTO_CLASSIFIER_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("TALKOPS_AUTO_CLASSIFIER_TIMEOUT", raising=False)
     assert _resolve_classifier_timeout() == 60.0
 
     # Custom env override
-    monkeypatch.setenv("OPSCLOUD_AUTO_CLASSIFIER_TIMEOUT_SECONDS", "45.5")
+    monkeypatch.setenv("TALKOPS_AUTO_CLASSIFIER_TIMEOUT_SECONDS", "45.5")
     assert _resolve_classifier_timeout() == 45.5
 
 
 @pytest.mark.asyncio
 async def test_auto_classifier_structured_output():
-    from opscloud.middleware.auto_mode_hitl import (
+    """Verify auto classifier structured output."""
+    from typing import cast
+    from unittest.mock import AsyncMock, MagicMock
+
+    from talkops.middleware.auto_mode_hitl import (
         AutoDecision,
         AutoDecisionBatch,
         AutoDecisionCategory,
         AutoModeHITLMiddleware,
     )
-    from langchain_core.messages import ToolCall
-    from typing import cast
-    from unittest.mock import AsyncMock, MagicMock
 
     mw = AutoModeHITLMiddleware(classifier_timeout_seconds=5.0)
 

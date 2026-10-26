@@ -1,0 +1,128 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Configuration management and options registry for TalkOps."""
+
+from talkops.config.aws import (
+    AWSConfig,
+    AWSIdentity,
+    get_aws_config,
+    get_aws_context,
+    get_aws_credentials_dict,
+    get_boto3_session,
+    resolve_aws_identity,
+)
+from talkops.config.manifest import (
+    ConfigOption,
+    OptionKind,
+    get_config_options,
+    get_option,
+    get_option_by_db_key,
+    iter_groups,
+    load_config_toml,
+    option_keys,
+    resolve_scalar,
+)
+from talkops.config.metadata import build_coding_agent_metadata, build_stream_config
+from talkops.config.paths import (
+    CONFIG_FILE_PATH,
+    CONFIG_PATH,
+    DATA_DIR,
+    DEFAULT_AGENT_NAME,
+    ENV_PREFIX,
+    GLOBAL_ENV_PATH,
+    PLUGINS_CACHE_DIR,
+    SERVER_RUNTIME_DIR,
+    SESSIONS_DB_PATH,
+    STATE_DIR,
+    TALKOPS_HOME,
+    USER_HOME,
+    find_project_root,
+)
+from talkops.config.plugins import (
+    DEFAULT_MARKETPLACE_CONFIGS,
+    DefaultMarketplaceConfig,
+    fetch_marketplace_manifest,
+    get_default_marketplace_config,
+    get_default_marketplace_names,
+    get_primary_default_marketplace_name,
+    is_default_marketplace,
+)
+from talkops.config.settings import (
+    Settings,
+    get_glyphs,
+    get_settings,
+    reload_from_store,
+    reload_settings,
+    resolve_env_var,
+    settings,
+    sync_aws_env_aliases,
+)
+from talkops.config.store import ConfigCategory, ConfigEntry, ConfigStore, ConfigValue
+from talkops.config.store_factory import create_config_store, create_config_store_sync
+
+__all__ = [
+    "AWSConfig",
+    "AWSIdentity",
+    "CONFIG_FILE_PATH",
+    "CONFIG_PATH",
+    "ConfigCategory",
+    "ConfigEntry",
+    "ConfigOption",
+    "ConfigStore",
+    "ConfigValue",
+    "DATA_DIR",
+    "DEFAULT_AGENT_NAME",
+    "DEFAULT_MARKETPLACE_CONFIGS",
+    "DefaultMarketplaceConfig",
+    "ENV_PREFIX",
+    "GLOBAL_ENV_PATH",
+    "TALKOPS_HOME",
+    "OptionKind",
+    "PLUGINS_CACHE_DIR",
+    "SERVER_RUNTIME_DIR",
+    "SESSIONS_DB_PATH",
+    "STATE_DIR",
+    "Settings",
+    "USER_HOME",
+    "build_coding_agent_metadata",
+    "build_stream_config",
+    "create_config_store",
+    "create_config_store_sync",
+    "fetch_marketplace_manifest",
+    "find_project_root",
+    "get_aws_config",
+    "get_aws_context",
+    "get_aws_credentials_dict",
+    "get_boto3_session",
+    "get_config_options",
+    "get_default_marketplace_config",
+    "get_default_marketplace_names",
+    "get_glyphs",
+    "get_option",
+    "get_option_by_db_key",
+    "get_primary_default_marketplace_name",
+    "get_settings",
+    "is_default_marketplace",
+    "iter_groups",
+    "load_config_toml",
+    "option_keys",
+    "reload_from_store",
+    "reload_settings",
+    "resolve_aws_identity",
+    "resolve_env_var",
+    "resolve_scalar",
+    "settings",
+    "sync_aws_env_aliases",
+]

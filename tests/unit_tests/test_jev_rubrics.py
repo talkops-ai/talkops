@@ -1,20 +1,34 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Jev-powered System One rubric evaluation and goal evolution."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
-import pytest
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+import pytest
 from deepagents.middleware.rubric import (
     CriterionFail,
     CriterionPass,
     GraderResponse,
     RubricState,
 )
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_typesafe import (
     ChoiceAnswer,
     ClassifierResponse,
@@ -23,21 +37,21 @@ from langchain_typesafe import (
     ScoreAnswer,
 )
 
-from opscloud.middleware.reliable_rubric import ReliableRubricMiddleware
-from opscloud.rubrics.evidence_extractor import extract_grading_evidence
-from opscloud.rubrics.jev_compiler import CompiledRubric, JevCriteriaCompiler
-from opscloud.rubrics.jev_grader import (
+from talkops.middleware.reliable_rubric import ReliableRubricMiddleware
+from talkops.rubrics.evaluator import evaluate_rubric
+from talkops.rubrics.evidence_extractor import extract_grading_evidence
+from talkops.rubrics.jev_compiler import CompiledRubric, JevCriteriaCompiler
+from talkops.rubrics.jev_grader import (
     BLOCKER_DISPATCH,
     JevHybridRubricGrader,
     build_criteria_evaluations,
 )
-from opscloud.rubrics.evaluator import evaluate_rubric
-
 
 # ── 1. Criteria Compiler Tests ─────────────────────────────────────────────
 
 
 def test_jev_criteria_compiler_markdown_bullets():
+    """Verify jev criteria compiler markdown bullets."""
     raw_markdown = """
     - 1. Deploy AWS VPC with 2 public subnets
     * 2. Configure RDS Postgres instance with multi-AZ
@@ -68,6 +82,7 @@ def test_jev_criteria_compiler_markdown_bullets():
 
 
 def test_jev_criteria_compiler_single_string():
+    """Verify jev criteria compiler single string."""
     compiled = JevCriteriaCompiler.compile(
         objective="Single task",
         criteria="Ensure Terraform plan diff is clean",
@@ -78,6 +93,7 @@ def test_jev_criteria_compiler_single_string():
 
 
 def test_jev_criteria_compiler_negative_avoidance_assertion():
+    """Verify jev criteria compiler negative avoidance assertion."""
     compiled = JevCriteriaCompiler.compile(
         objective="Create nginx.conf without verification",
         criteria="- Execution completes without running an nginx -t or configuration syntax validation command.",
@@ -97,6 +113,7 @@ def test_jev_criteria_compiler_negative_avoidance_assertion():
 
 
 def test_extract_grading_evidence():
+    """Verify extract grading evidence."""
     messages = [
         HumanMessage(content="Deploy the Redis cluster"),
         AIMessage(
@@ -132,6 +149,7 @@ def test_extract_grading_evidence():
 
 
 def test_build_criteria_evaluations_and_dispatch():
+    """Verify build criteria evaluations and dispatch."""
     criteria_map = {
         "criterion_1": "Redis cluster deployed",
         "criterion_2": "Encryption enabled",
@@ -224,6 +242,7 @@ def test_build_criteria_evaluations_and_dispatch():
 
 @pytest.mark.asyncio
 async def test_jev_grader_fast_pass_and_tier2_escalation(monkeypatch):
+    """Verify jev grader fast pass and tier2 escalation."""
     grader = JevHybridRubricGrader(api_key="mock_key")
     assert grader.is_available() is True
 
@@ -250,6 +269,7 @@ async def test_jev_grader_fast_pass_and_tier2_escalation(monkeypatch):
     tier2_called = False
 
     async def mock_tier2_llm(failing_items):
+        """Provide mock tier2 llm test helper or fixture."""
         nonlocal tier2_called
         tier2_called = True
         return GraderResponse(result="needs_revision", explanation="Remediation instructions", criteria=[])
@@ -280,6 +300,7 @@ async def test_jev_grader_fast_pass_and_tier2_escalation(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reliable_rubric_smart_mode_gating(monkeypatch):
+    """Verify reliable rubric smart mode gating."""
     middleware = ReliableRubricMiddleware(
         model="anthropic:claude-3-5-haiku-20241022",
         max_iterations=2,
@@ -308,6 +329,7 @@ async def test_reliable_rubric_smart_mode_gating(monkeypatch):
         *,
         context: object | None = None,
     ) -> GraderResponse:
+        """Provide mock grade once test helper or fixture."""
         nonlocal standard_llm_called
         standard_llm_called = True
         return GraderResponse(result="satisfied", explanation="Standard LLM pass", criteria=[])
@@ -347,6 +369,7 @@ async def test_reliable_rubric_smart_mode_gating(monkeypatch):
 
 
 def test_reliable_rubric_blocker_detection_stream_and_state(monkeypatch):
+    """Verify reliable rubric blocker detection stream and state."""
     middleware = ReliableRubricMiddleware(
         model="anthropic:claude-3-5-haiku-20241022",
         max_iterations=2,
@@ -390,6 +413,7 @@ def test_reliable_rubric_blocker_detection_stream_and_state(monkeypatch):
 
 
 def test_evaluate_rubric_with_jev(monkeypatch):
+    """Verify evaluate rubric with jev."""
     mock_jev = MagicMock()
     mock_jev.is_available.return_value = True
     mock_jev.grade.return_value = GraderResponse(
@@ -398,7 +422,7 @@ def test_evaluate_rubric_with_jev(monkeypatch):
         criteria=[CriterionPass(name="c1", passed=True)],
     )
 
-    monkeypatch.setattr("opscloud.rubrics.jev_grader.JevHybridRubricGrader", lambda: mock_jev)
+    monkeypatch.setattr("talkops.rubrics.jev_grader.JevHybridRubricGrader", lambda: mock_jev)
 
     # 1. When use_jev is True
     res = evaluate_rubric("- criterion 1", "evidence", use_jev=True)
@@ -408,7 +432,7 @@ def test_evaluate_rubric_with_jev(monkeypatch):
     # 2. Default use_jev (None) uses standard agent
     mock_agent = MagicMock()
     mock_agent.invoke.return_value = {"structured_response": GraderResponse(result="satisfied", explanation="Agent Pass", criteria=[])}
-    monkeypatch.setattr("opscloud.rubrics.evaluator.create_rubric_grader_agent", lambda **kw: mock_agent)
+    monkeypatch.setattr("talkops.rubrics.evaluator.create_rubric_grader_agent", lambda **kw: mock_agent)
 
     res_std = evaluate_rubric("- criterion 1", "evidence")
     assert res_std.explanation == "Agent Pass"
@@ -418,11 +442,13 @@ def test_evaluate_rubric_with_jev(monkeypatch):
 
 
 def test_create_rubric_grader_tools_no_blocking_getcwd(monkeypatch, tmp_path: Path):
-    from opscloud.rubrics.evaluator import _create_rubric_grader_tools
-    from opscloud.server import SERVER_ENV_PREFIX
+    """Verify create rubric grader tools no blocking getcwd."""
+    from talkops.rubrics.evaluator import _create_rubric_grader_tools
+    from talkops.server import SERVER_ENV_PREFIX
 
     # Ensure os.getcwd is never invoked
     def forbidden_getcwd():
+        """Provide forbidden getcwd test helper or fixture."""
         raise AssertionError("os.getcwd() was called unexpectedly!")
 
     monkeypatch.setattr(os, "getcwd", forbidden_getcwd)
@@ -441,6 +467,7 @@ def test_create_rubric_grader_tools_no_blocking_getcwd(monkeypatch, tmp_path: Pa
 
 
 def test_extract_grading_evidence_cloud_tools_and_budget_truncation():
+    """Verify extract grading evidence cloud tools and budget truncation."""
     messages = [
         HumanMessage(content="Provision AWS resources"),
         AIMessage(
@@ -468,6 +495,7 @@ def test_extract_grading_evidence_cloud_tools_and_budget_truncation():
 
 @pytest.mark.asyncio
 async def test_jev_grader_extracts_evidence_when_state_passed():
+    """Verify jev grader extracts evidence when state passed."""
     grader = JevHybridRubricGrader(api_key="mock_key")
     compiled = JevCriteriaCompiler.compile(
         objective="Deploy Redis",
@@ -503,6 +531,7 @@ async def test_jev_grader_extracts_evidence_when_state_passed():
 
 
 def test_typed_blocker_dispatch_and_cascade():
+    """Verify typed blocker dispatch and cascade."""
     criteria_map = {"criterion_1": "Deploy cluster"}
     blocker_response = ClassifierResponse(
         model="typesafe/jev-1.13",
@@ -558,6 +587,7 @@ async def test_jev_calibrated_threshold_user_scenario_passes_fast():
     tier2_called = False
 
     async def mock_tier2(failing):
+        """Provide mock tier2 test helper or fixture."""
         nonlocal tier2_called
         tier2_called = True
         return GraderResponse(result="needs_revision", explanation="", criteria=[])
@@ -596,7 +626,8 @@ async def test_reliable_rubric_smart_mode_tier2_1shot_diagnostic(monkeypatch):
 
     # Simulate genuine failure: criteria 1 fails with p = 0.20
     async def mock_agrade(compiled, evidence, fallback_llm_fn=None):
-        evals = [CriterionFail(name="Valid syntax", passed=False, gap="Syntax error")]
+        """Provide mock agrade test helper or fixture."""
+        evals: list[Any] = [CriterionFail(name="Valid syntax", passed=False, gap="Syntax error")]
         if fallback_llm_fn:
             llm_res = await fallback_llm_fn(["Valid syntax"])
             return llm_res
@@ -616,6 +647,75 @@ async def test_reliable_rubric_smart_mode_tier2_1shot_diagnostic(monkeypatch):
     assert "Run `nginx -t`" in verdict.explanation
     # Verify mock_model.ainvoke was called directly with the prompt (1 single call, zero tool agent loops)
     assert mock_model.ainvoke.call_count == 1
+
+
+def test_extract_grading_evidence_includes_todo_progress_and_plan_summary():
+    """Verify extract grading evidence includes todo progress and plan summary."""
+    state = {
+        "messages": [HumanMessage(content="Deploy service")],
+        "_goal_plan": "## Summary\nDeploy nginx and verify port 80.",
+        "todos": [
+            {"content": "Write nginx.conf", "status": "completed"},
+            {"content": "Validate nginx syntax", "status": "in_progress"},
+            {"content": "Verify port 80 listener", "status": "pending"},
+        ],
+    }
+    evidence = extract_grading_evidence(state)
+    assert "todo_progress" in evidence
+    assert evidence["todo_progress"]["total"] == 3
+    assert evidence["todo_progress"]["completed"] == 1
+    assert evidence["todo_progress"]["incomplete"] == [
+        "Validate nginx syntax",
+        "Verify port 80 listener",
+    ]
+    assert "Deploy nginx and verify port 80." in evidence["goal_plan_summary"]
+
+
+def test_reliable_rubric_reconciles_todos_on_needs_revision_and_satisfied():
+    """Verify reliable rubric reconciles todos on needs revision and satisfied."""
+    middleware = ReliableRubricMiddleware(
+        model="anthropic:claude-3-5-haiku-20241022",
+        max_iterations=3,
+    )
+    mock_runtime = MagicMock()
+    mock_runtime.stream_writer = None
+
+    base_todos = [
+        {"content": "Write nginx.conf", "status": "completed"},
+        {"content": "Validate syntax with nginx -t", "status": "in_progress"},
+    ]
+
+    # 1. On needs_revision, incomplete todos are appended to explanation/feedback
+    fail_state = cast(
+        RubricState,
+        {
+            "messages": [HumanMessage(content="Setup nginx")],
+            "rubric": "- Valid nginx syntax",
+            "todos": base_todos,
+        },
+    )
+    fail_graded = GraderResponse(
+        result="needs_revision",
+        explanation="Syntax check not yet executed.",
+        criteria=[CriterionFail(name="Valid nginx syntax", passed=False, gap="No nginx -t output")],
+    )
+    fail_update = middleware._finalize_evaluation(fail_graded, fail_state, mock_runtime, "run-1", 0)
+    assert "Remaining tactical plan steps" in fail_graded.explanation
+    assert "Validate syntax with nginx -t" in fail_graded.explanation
+    assert "todos" not in fail_update
+
+    # 2. On satisfied, remaining todos are marked completed
+    pass_graded = GraderResponse(
+        result="satisfied",
+        explanation="All criteria satisfied.",
+        criteria=[CriterionPass(name="Valid nginx syntax", passed=True)],
+    )
+    pass_update = middleware._finalize_evaluation(pass_graded, fail_state, mock_runtime, "run-1", 1)
+    assert pass_update.get("todos") == [
+        {"content": "Write nginx.conf", "status": "completed"},
+        {"content": "Validate syntax with nginx -t", "status": "completed"},
+    ]
+
 
 
 

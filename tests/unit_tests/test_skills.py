@@ -1,10 +1,26 @@
-"""Unit tests for OpsCloud skill system, parser, loader, trust store, and commands."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for TalkOps skill system, parser, loader, trust store, and commands."""
 import argparse
 from pathlib import Path
-import pytest
+from unittest.mock import MagicMock
 
-from opscloud.skills.commands import (
+import pytest
+from langchain_core.messages import AIMessage
+
+from talkops.skills.commands import (
     _create,
     _delete,
     _format_info_fields,
@@ -14,25 +30,25 @@ from opscloud.skills.commands import (
     execute_skills_command,
     setup_skills_parser,
 )
-from opscloud.skills.invocation import (
+from talkops.skills.invocation import (
     build_skill_invocation_envelope,
     discover_skills_and_roots,
     parse_skill_command,
 )
-from opscloud.skills.load import (
+from talkops.skills.load import (
     _parse_skill_file,
     get_skill_by_name,
     get_skill_content_by_name,
     list_skills,
     load_skill_content,
 )
-from opscloud.skills.merge import merge_skill
-from opscloud.skills.registry import (
+from talkops.skills.merge import merge_skill
+from talkops.skills.registry import (
     SkillRegistry,
     SkillSource,
     _parse_skill_frontmatter,
 )
-from opscloud.skills.trust import (
+from talkops.skills.trust import (
     RevokeResult,
     SkillTrustStore,
     clear_trusted_skill_dirs,
@@ -47,6 +63,7 @@ from opscloud.skills.trust import (
 
 @pytest.fixture(autouse=True)
 def reset_skill_registry():
+    """Provide reset skill registry test helper or fixture."""
     SkillRegistry.reset()
     yield
     SkillRegistry.reset()
@@ -56,6 +73,7 @@ def reset_skill_registry():
 
 
 def test_parse_skill_frontmatter_and_file(tmp_path: Path):
+    """Verify parse skill frontmatter and file."""
     skill_dir = tmp_path / "aws-cost-analysis"
     skill_dir.mkdir()
     skill_file = skill_dir / "SKILL.md"
@@ -92,6 +110,7 @@ This skill performs detailed analysis on AWS billing data.
 
 def test_validate_name():
     # Valid names
+    """Verify validate name."""
     assert _validate_name("aws-terraform")[0] is True
     assert _validate_name("eks-debug-123")[0] is True
     assert _validate_name("cost-finops")[0] is True
@@ -110,6 +129,7 @@ def test_validate_name():
 
 
 def test_validate_skill_path(tmp_path: Path):
+    """Verify validate skill path."""
     base_dir = tmp_path / "skills"
     base_dir.mkdir()
     child_dir = base_dir / "custom-skill"
@@ -129,6 +149,7 @@ def test_validate_skill_path(tmp_path: Path):
 
 
 def test_merge_skill_precedence(caplog):
+    """Verify merge skill precedence."""
     merged = {}
     labels = {}
 
@@ -148,6 +169,7 @@ def test_merge_skill_precedence(caplog):
 
 
 def test_trust_store_lifecycle(tmp_path: Path):
+    """Verify trust store lifecycle."""
     store_file = tmp_path / "skill_trust.json"
     skill_dir = (tmp_path / "custom_skill").resolve()
     skill_dir.mkdir()
@@ -180,6 +202,7 @@ def test_trust_store_lifecycle(tmp_path: Path):
 
 
 def test_load_trusted_skill_dirs_symlink_safety(tmp_path: Path):
+    """Verify load trusted skill dirs symlink safety."""
     store_file = tmp_path / "skill_trust.json"
     real_dir = (tmp_path / "real_skill").resolve()
     real_dir.mkdir()
@@ -191,6 +214,7 @@ def test_load_trusted_skill_dirs_symlink_safety(tmp_path: Path):
 
 
 def test_skill_trust_store_compat(tmp_path: Path):
+    """Verify skill trust store compat."""
     store_file = tmp_path / "skill_trust.json"
     compat_store = SkillTrustStore(trust_file_path=store_file)
 
@@ -206,6 +230,7 @@ def test_skill_trust_store_compat(tmp_path: Path):
 
 
 def test_load_skill_content_containment(tmp_path: Path):
+    """Verify load skill content containment."""
     root_a = tmp_path / "skills_a"
     root_a.mkdir()
     skill_file = root_a / "SKILL.md"
@@ -224,6 +249,7 @@ def test_load_skill_content_containment(tmp_path: Path):
 
 
 def test_list_skills_precedence(tmp_path: Path):
+    """Verify list skills precedence."""
     built_in = tmp_path / "bi"
     built_in.mkdir()
     (built_in / "common-skill").mkdir()
@@ -262,22 +288,30 @@ def test_list_skills_precedence(tmp_path: Path):
 
 
 def test_build_skill_invocation_envelope():
+    """Verify build skill invocation envelope."""
     skill = {
         "name": "ecs-remediate",
         "description": "Fix ECS crashloops",
         "source": "user",
     }
-    content = "Follow step 1, step 2"
+    content = "---\nname: ecs-remediate\ndescription: Fix ECS crashloops\n---\nFollow step 1, step 2"
     envelope = build_skill_invocation_envelope(skill, content, args="cluster=prod")
 
     assert envelope.skill_name == "ecs-remediate"
     assert "I'm invoking the skill `ecs-remediate`." in envelope.prompt
-    assert "Follow step 1, step 2" in envelope.prompt
+    assert (
+        "<SKILL>The user has explicitly invoked the (ecs-remediate) skill. "
+        "You must strictly follow the instructions in this skill to process their request. "
+        "Here are its contents:\nFollow step 1, step 2</SKILL>"
+    ) in envelope.prompt
     assert "**User request:** cluster=prod" in envelope.prompt
     assert envelope.message_kwargs["additional_kwargs"]["__skill"]["args"] == "cluster=prod"
+    assert envelope.message_kwargs["additional_kwargs"]["__skill"]["slash_command"] == "/ecs-remediate"
+    assert envelope.message_kwargs["additional_kwargs"]["__skill"]["kind"] == "SLASH_COMMAND_KIND_SKILL"
 
 
 def test_parse_skill_command():
+    """Verify parse skill command."""
     name, args = parse_skill_command("/skill:aws-terraform apply -auto-approve")
     assert name == "aws-terraform"
     assert args == "apply -auto-approve"
@@ -286,18 +320,67 @@ def test_parse_skill_command():
     assert name == "eks-debug"
     assert args == ""
 
+    name, args = parse_skill_command("/chrome-devtools-plugin:a11y-debugging check login page")
+    assert name == "chrome-devtools-plugin:a11y-debugging"
+    assert args == "check login page"
+
+    name, args = parse_skill_command("/reverse-engineer-anything")
+    assert name == "reverse-engineer-anything"
+    assert args == ""
+
+    name, args = parse_skill_command("/skill eks-debug check pods")
+    assert name == "eks-debug"
+    assert args == "check pods"
+
     name, args = parse_skill_command("not a skill command")
     assert name == ""
     assert args == ""
+
+
+def test_format_and_match_plugin_skills():
+    """Verify format and match plugin skills."""
+    from talkops.skills.invocation import (
+        format_skill_slash_name,
+        match_discovered_skill,
+    )
+
+    aws_skill = {
+        "name": "aws-core@agent-toolkit-for-aws:signing-in-to-aws",
+        "description": "Sign in to AWS",
+        "source": "plugin",
+        "plugin_id": "aws-core@agent-toolkit-for-aws",
+    }
+    devtools_skill = {
+        "name": "chrome-devtools-plugin@default:chrome-devtools-plugin:a11y-debugging",
+        "description": "Accessibility debugging",
+        "source": "plugin",
+    }
+    user_skill = {
+        "name": "reverse-engineer-anything",
+        "description": "Reverse engineer binaries",
+        "source": "user",
+    }
+
+    assert format_skill_slash_name(aws_skill) == "aws-core:signing-in-to-aws"
+    assert format_skill_slash_name(devtools_skill) == "chrome-devtools-plugin:a11y-debugging"
+    assert format_skill_slash_name(user_skill) == "reverse-engineer-anything"
+
+    skills = [aws_skill, devtools_skill, user_skill]
+    assert match_discovered_skill(skills, "/aws-core:signing-in-to-aws") is aws_skill
+    assert match_discovered_skill(skills, "aws-core@agent-toolkit-for-aws:signing-in-to-aws") is aws_skill
+    assert match_discovered_skill(skills, "signing-in-to-aws") is aws_skill
+    assert match_discovered_skill(skills, "/chrome-devtools-plugin:a11y-debugging") is devtools_skill
+    assert match_discovered_skill(skills, "/reverse-engineer-anything") is user_skill
 
 
 # ── CLI Commands Tests ───────────────────────────────────────────────────────
 
 
 def test_skills_create_and_delete(tmp_path: Path, monkeypatch):
-    from opscloud.config.settings import settings
+    """Verify skills create and delete."""
+    from talkops.config.settings import settings
 
-    monkeypatch.setattr("opscloud.config.paths.DATA_DIR", tmp_path)
+    monkeypatch.setattr("talkops.config.paths.DATA_DIR", tmp_path)
     monkeypatch.setattr(settings, "project_root", tmp_path)
 
     # Template generation
@@ -306,21 +389,22 @@ def test_skills_create_and_delete(tmp_path: Path, monkeypatch):
     assert "## Overview" in template
 
     # Create skill
-    _create("karpenter-scale", agent="opscloud", project=False, output_format="json")
+    _create("karpenter-scale", agent="talkops", project=False, output_format="json")
     created_skill_dir = tmp_path / "skills" / "karpenter-scale"
     assert created_skill_dir.is_dir()
     assert (created_skill_dir / "SKILL.md").is_file()
 
     # Dry-run delete
-    _delete("karpenter-scale", agent="opscloud", project=False, dry_run=True, output_format="json")
+    _delete("karpenter-scale", agent="talkops", project=False, dry_run=True, output_format="json")
     assert created_skill_dir.is_dir()
 
     # Actual delete
-    _delete("karpenter-scale", agent="opscloud", project=False, force=True, output_format="json")
+    _delete("karpenter-scale", agent="talkops", project=False, force=True, output_format="json")
     assert not created_skill_dir.exists()
 
 
 def test_setup_skills_parser():
+    """Verify setup skills parser."""
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand")
     skills_parser = setup_skills_parser(subparsers)
@@ -336,6 +420,7 @@ def test_setup_skills_parser():
 
 
 def test_skill_registry_registration_and_lookup():
+    """Verify skill registry registration and lookup."""
     registry = SkillRegistry.get_instance()
     skill = SkillSource(
         name="eks-diagnostics",
@@ -357,6 +442,7 @@ def test_skill_registry_registration_and_lookup():
 
 
 def test_skill_registry_discover_directories(tmp_path: Path):
+    """Verify skill registry discover directories."""
     registry = SkillRegistry.get_instance()
 
     user_skills = tmp_path / "skills"
@@ -376,8 +462,8 @@ def test_skill_registry_discover_directories(tmp_path: Path):
 
 
 def test_plugin_skills_middleware_handles_none_metadata(tmp_path: Path):
-    from unittest.mock import MagicMock
-    from opscloud.middleware.skills import PluginSkillsMiddleware
+    """Verify plugin skills middleware handles none metadata."""
+    from talkops.middleware.skills import PluginSkillsMiddleware
 
     middleware = PluginSkillsMiddleware(
         sources=[(str(tmp_path), "test")],
@@ -399,7 +485,8 @@ def test_plugin_skills_middleware_handles_none_metadata(tmp_path: Path):
 
 
 def test_built_in_remember_skill_discovered():
-    from opscloud.skills.load import list_skills
+    """Verify built in remember skill discovered."""
+    from talkops.skills.load import list_skills
     skills = list_skills()
     remember = next((s for s in skills if s["name"] == "remember"), None)
     assert remember is not None, "Built-in remember skill should be discovered"
@@ -414,7 +501,8 @@ def test_built_in_remember_skill_discovered():
 
 
 def test_built_in_skill_creator_discovered():
-    from opscloud.skills.load import list_skills
+    """Verify built in skill creator discovered."""
+    from talkops.skills.load import list_skills
     skills = list_skills()
     creator = next((s for s in skills if s["name"] == "skill-creator"), None)
     assert creator is not None, "Built-in skill-creator should be discovered"
@@ -422,6 +510,7 @@ def test_built_in_skill_creator_discovered():
 
 
 def test_skill_invocation_envelope_remember():
+    """Verify skill invocation envelope remember."""
     cached = {
         "name": "remember",
         "description": "Capture valuable knowledge",
@@ -439,7 +528,8 @@ def test_skill_invocation_envelope_remember():
 
 
 def test_strip_frontmatter_and_skill_message():
-    from opscloud.ui.widgets.messages import _strip_frontmatter, SkillMessage
+    """Verify strip frontmatter and skill message."""
+    from talkops.ui.widgets.messages import SkillMessage, _strip_frontmatter
     raw = """---
 name: remember
 description: Some desc
@@ -466,5 +556,200 @@ Body text goes here.
     assert msg._expanded is True
     msg.toggle_body()
     assert msg._expanded is False
+
+
+def test_plugin_skill_envelope_and_adapter_stream_input():
+    """Verify plugin skill envelope and adapter stream input."""
+    from talkops.ui.textual_adapter import TextualAdapter
+
+    skill = {
+        "name": "aws-core@agent-toolkit-for-aws:signing-in-to-aws",
+        "description": "Use when CLI/SDK commands fail with missing credentials.",
+        "source": "plugin",
+        "plugin_id": "aws-core@agent-toolkit-for-aws",
+        "path": "/tmp/plugins/aws-core/skills/signing-in-to-aws/SKILL.md",
+    }
+    raw_md = (
+        "---\n"
+        "name: signing-in-to-aws\n"
+        "description: Use when CLI/SDK commands fail\n"
+        "---\n"
+        "# Sign In — Get CLI/SDK Credentials\n\n"
+        "Install `@aws-sdk/client-sts` if needed."
+    )
+    envelope = build_skill_invocation_envelope(skill, raw_md, args="")
+
+    assert "I'm invoking the skill `aws-core:signing-in-to-aws`." in envelope.prompt
+    assert "aws-core@agent-toolkit-for-aws" not in envelope.prompt
+    assert (
+        "<SKILL>The user has explicitly invoked the (aws-core:signing-in-to-aws) skill. "
+        "You must strictly follow the instructions in this skill to process their request. "
+        "Here are its contents:\n# Sign In — Get CLI/SDK Credentials\n\n"
+        "Install `@aws-sdk/client-sts` if needed.</SKILL>"
+    ) in envelope.prompt
+    assert "Skill directory on disk: `/tmp/plugins/aws-core/skills/signing-in-to-aws`" in envelope.prompt
+
+    adapter = TextualAdapter(client=None, assistant_id="agent")
+    input_msg, turn_id = adapter._prepare_stream_input(
+        envelope.prompt,
+        None,
+        message_kwargs=envelope.message_kwargs,
+    )
+    assert turn_id is not None
+    human_msg = input_msg["messages"][0]
+    assert human_msg.content == envelope.prompt
+    assert "__skill" in human_msg.additional_kwargs
+    assert human_msg.additional_kwargs["__skill"]["slash_command"] == "/aws-core:signing-in-to-aws"
+    assert human_msg.additional_kwargs["__skill"]["kind"] == "SLASH_COMMAND_KIND_SKILL"
+    assert (
+        human_msg.additional_kwargs["talkops_user_prompt"]["literal_user_text"]
+        == "/aws-core:signing-in-to-aws"
+    )
+
+
+def test_lean_core_built_in_skills_registered() -> None:
+    """Verify only the lean core built-in skills (commit, remember, simplify, skill-creator) are shipped."""
+    built_in_dir = Path(__file__).resolve().parents[2] / "src" / "talkops" / "built_in_skills"
+    skills = list_skills(built_in_skills_dir=built_in_dir)
+    names = {s["name"] for s in skills if s.get("source") == "built-in"}
+
+    expected = {
+        "commit",
+        "remember",
+        "simplify",
+        "skill-creator",
+    }
+    assert names == expected
+    for pruned in (
+        "batch",
+        "commit-push-pr",
+        "fewer-permission-prompts",
+        "init",
+        "pr",
+        "run",
+        "security-review",
+        "update-config",
+        "verify",
+        "verify-infra",
+        "incident-triage",
+        "simplify-iac",
+        "cost-audit",
+    ):
+        assert pruned not in names
+
+
+def test_skill_invocation_envelope_dynamic_precomputation(tmp_path: Path) -> None:
+    """Verify $ARGUMENTS, ${TALKOPS_SKILL_DIR}, and inline !`cmd` shell pre-computation in SKILL.md."""
+    skill_dir = tmp_path / "custom-skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_md_path = skill_dir / "SKILL.md"
+    raw_md = (
+        "---\n"
+        "name: custom-skill\n"
+        "description: Test dynamic skill expansion\n"
+        "---\n"
+        "Skill dir: ${TALKOPS_SKILL_DIR}\n"
+        "Inline output: !`printf 'hello-dynamic-skill'`\n"
+        "Target arg: $ARGUMENTS"
+    )
+    skill_md_path.write_text(raw_md, encoding="utf-8")
+
+    skill = {
+        "name": "custom-skill",
+        "description": "Test dynamic skill expansion",
+        "source": "user",
+        "path": str(skill_md_path),
+    }
+    envelope = build_skill_invocation_envelope(skill, raw_md, args="src/main.py")
+    assert f"Skill dir: {skill_dir}" in envelope.prompt
+    assert "Inline output: hello-dynamic-skill" in envelope.prompt
+    assert "Target arg: src/main.py" in envelope.prompt
+
+
+def test_skill_tool_resolves_built_in_skills() -> None:
+    """Verify the Skill tool resolves built-in skills such as simplify and verify."""
+    from talkops.middleware.custom_commands import create_custom_command_skill_tool
+
+    skill_tool = create_custom_command_skill_tool()
+    output = skill_tool.invoke({"skill": "simplify", "args": "src/talkops"})
+    assert "<command-name>/simplify</command-name>" in output
+    assert "Phase 1 — Review (4 cleanup angles)" in output
+    assert "src/talkops" in output
+
+
+def test_plugin_skills_middleware_cost_hierarchy_and_auto_reload(tmp_path: Path) -> None:
+    """Verify TALKOPS_SKILLS_SYSTEM_PROMPT Cost-Hierarchy of Levers and after_agent skill reload."""
+    from talkops.middleware.skills import (
+        TALKOPS_SKILLS_SYSTEM_PROMPT,
+        PluginSkillsMiddleware,
+    )
+
+    assert "Cost-Hierarchy of Levers" in TALKOPS_SKILLS_SYSTEM_PROMPT
+    assert "metadata.include_tools" in TALKOPS_SKILLS_SYSTEM_PROMPT
+
+    middleware = PluginSkillsMiddleware(
+        sources=[(str(tmp_path), "test")],
+    )
+    assert middleware.system_prompt_template == TALKOPS_SKILLS_SYSTEM_PROMPT
+
+    # Normal tool call does not reset skills_metadata
+    normal_msg = AIMessage(
+        content="",
+        tool_calls=[{"name": "write_file", "args": {"file_path": "/tmp/app.py"}, "id": "tc1"}],
+    )
+    assert middleware.after_agent({"messages": [normal_msg]}, MagicMock()) is None  # type: ignore[arg-type]
+
+    # Writing a SKILL.md file resets skills_metadata to None for cache-safe reload on next turn
+    skill_edit_msg = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_file",
+                "args": {"file_path": "/workspace/.talkops/skills/new-skill/SKILL.md"},
+                "id": "tc2",
+            }
+        ],
+    )
+    reload_update = middleware.after_agent({"messages": [skill_edit_msg]}, MagicMock())  # type: ignore[arg-type]
+    assert reload_update == {"skills_metadata": None}
+
+
+def test_subagent_skill_scoping_and_compact_formatting(tmp_path: Path) -> None:
+    """Verify subagent PluginSkillsMiddleware enforces plugin namespace and compacts large catalogs."""
+    from talkops.middleware.skills import (
+        TALKOPS_SUBAGENT_SKILLS_SYSTEM_PROMPT,
+        PluginSkillsMiddleware,
+    )
+
+    mw = PluginSkillsMiddleware(
+        sources=[(str(tmp_path), "plugin")],
+        allowed_skills=["aws-platform-engineer@talkops-devops-plugins:*"],
+        is_subagent=True,
+    )
+    assert mw.system_prompt_template == TALKOPS_SUBAGENT_SKILLS_SYSTEM_PROMPT
+    assert "js_eval" not in (mw.system_prompt_template or "")
+
+    # Own un-namespaced bundled skills and matching plugin skills are allowed
+    assert mw._is_skill_allowed("aws-compute") is True
+    assert mw._is_skill_allowed("aws-platform-engineer@talkops-devops-plugins:aws-compute") is True
+    assert mw._is_skill_allowed("aws-platform-engineer:aws-compute") is True
+    # Other plugin skills are strictly rejected even when base_pat is '*'
+    assert mw._is_skill_allowed("other-plugin@marketplace:leaked-skill") is False
+
+    # Compact formatting for >8 skills deduplicates the shared root path and truncates prose
+    fake_skills = [
+        {
+            "name": f"skill-{i}",
+            "description": f"First sentence summary for skill {i}. " + ("Extra verbose paragraph. " * 20),
+            "path": f"{tmp_path}/skill-{i}/SKILL.md",
+            "allowed_tools": [],
+        }
+        for i in range(10)
+    ]
+    formatted = mw._format_skills_list(fake_skills)  # type: ignore[arg-type]
+    assert f"*(Read `{tmp_path}/<skill-name>/SKILL.md` with `read_file` for full instructions)*" in formatted
+    assert "Extra verbose paragraph." not in formatted
+
+
 
 

@@ -1,19 +1,48 @@
-"""Unit tests for OpsCloudCheckpointer extended capabilities."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for TalkOpsCheckpointer extended capabilities."""
+import fcntl
 import os
+import sys
+from typing import Any, cast
+
 import pytest
-from langgraph.checkpoint.base import Checkpoint
-from opscloud.state.session import OpsCloudCheckpointer, get_checkpointer
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata, empty_checkpoint
+
+from talkops.state.session import TalkOpsCheckpointer, get_checkpointer
+
+
+def _make_checkpoint(cp_id: str, channel_values: dict[str, Any] | None = None) -> Checkpoint:
+    """Helper to create a fully-typed Checkpoint for unit tests."""
+    cp = empty_checkpoint()
+    cp["id"] = cp_id
+    if channel_values:
+        cp["channel_values"] = channel_values
+    return cp
 
 
 @pytest.mark.asyncio
 async def test_checkpointer_capabilities_detection():
-    """Verify that LangGraph API detects all required extended capabilities on OpsCloudCheckpointer."""
+    """Verify that LangGraph API detects all required extended capabilities on TalkOpsCheckpointer."""
     os.environ["REDIS_URI"] = ""
     from langgraph_api._checkpointer._adapter import CheckpointerCapabilities
 
     async with get_checkpointer() as saver:
         caps = CheckpointerCapabilities.from_type(type(saver))
+        assert caps.has_aget_iter is True
         assert caps.has_adelete_thread is True
         assert caps.has_adelete_for_runs is True
         assert caps.has_acopy_thread is True
@@ -23,21 +52,25 @@ async def test_checkpointer_capabilities_detection():
 @pytest.mark.asyncio
 async def test_checkpointer_adelete_for_runs():
     """Verify adelete_for_runs removes checkpoints and writes for cancelled/rolled-back runs."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
-        cfg1 = {"configurable": {"thread_id": "thread-1", "checkpoint_ns": "", "run_id": "run-alpha"}}
-        cp1: Checkpoint = {"v": 1, "id": "cp-1", "ts": "2026-09-30T14:00:00Z", "channel_values": {}, "channel_versions": {}, "versions_seen": {}}
-        await saver.aput(cfg1, cp1, {"run_id": "run-alpha"}, {})
+        cfg1: RunnableConfig = {"configurable": {"thread_id": "thread-1", "checkpoint_ns": "", "run_id": "run-alpha"}}
+        cp1 = _make_checkpoint("cp-1")
+        meta1: CheckpointMetadata = {"run_id": "run-alpha"}
+        await saver.aput(cfg1, cp1, meta1, {})
 
-        cfg2 = {"configurable": {"thread_id": "thread-1", "checkpoint_ns": "", "run_id": "run-beta"}}
-        cp2: Checkpoint = {"v": 1, "id": "cp-2", "ts": "2026-09-30T14:01:00Z", "channel_values": {}, "channel_versions": {}, "versions_seen": {}}
-        await saver.aput(cfg2, cp2, {"run_id": "run-beta"}, {})
+        cfg2: RunnableConfig = {"configurable": {"thread_id": "thread-1", "checkpoint_ns": "", "run_id": "run-beta"}}
+        cp2 = _make_checkpoint("cp-2")
+        meta2: CheckpointMetadata = {"run_id": "run-beta"}
+        await saver.aput(cfg2, cp2, meta2, {})
 
         # Delete run-alpha
         await saver.adelete_for_runs(["run-alpha"])
 
-        tup1 = await saver.aget_tuple({"configurable": {"thread_id": "thread-1", "checkpoint_id": "cp-1"}})
-        tup2 = await saver.aget_tuple({"configurable": {"thread_id": "thread-1", "checkpoint_id": "cp-2"}})
+        tup1_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-1", "checkpoint_id": "cp-1"}}
+        tup2_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-1", "checkpoint_id": "cp-2"}}
+        tup1 = await saver.aget_tuple(tup1_cfg)
+        tup2 = await saver.aget_tuple(tup2_cfg)
 
         assert tup1 is None, "Run alpha checkpoint must be deleted"
         assert tup2 is not None, "Run beta checkpoint must remain intact"
@@ -46,19 +79,21 @@ async def test_checkpointer_adelete_for_runs():
 @pytest.mark.asyncio
 async def test_checkpointer_acopy_thread():
     """Verify acopy_thread duplicates all checkpoints and writes to target thread."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
-        cfg = {"configurable": {"thread_id": "src-thread", "checkpoint_ns": "", "checkpoint_id": "cp-orig"}}
-        cp: Checkpoint = {"v": 1, "id": "cp-orig", "ts": "2026-09-30T14:00:00Z", "channel_values": {"msg": "hi"}, "channel_versions": {}, "versions_seen": {}}
-        stored_cfg = await saver.aput(cfg, cp, {"thread_id": "src-thread"}, {})
+        cfg: RunnableConfig = {"configurable": {"thread_id": "src-thread", "checkpoint_ns": "", "checkpoint_id": "cp-orig"}}
+        cp = _make_checkpoint("cp-orig", channel_values={"msg": "hi"})
+        stored_cfg = await saver.aput(cfg, cp, cast(CheckpointMetadata, {"thread_id": "src-thread"}), {})
         await saver.aput_writes(stored_cfg, [("msg", "reply")], task_id="task-1")
 
         # Copy to dst-thread
         await saver.acopy_thread("src-thread", "dst-thread")
 
-        dst_tup = await saver.aget_tuple({"configurable": {"thread_id": "dst-thread", "checkpoint_id": "cp-orig"}})
+        dst_cfg: RunnableConfig = {"configurable": {"thread_id": "dst-thread", "checkpoint_id": "cp-orig"}}
+        dst_tup = await saver.aget_tuple(dst_cfg)
         assert dst_tup is not None
-        assert dst_tup.config["configurable"]["thread_id"] == "dst-thread"
+        assert dst_tup.config.get("configurable", {}).get("thread_id") == "dst-thread"
+        assert dst_tup.pending_writes is not None
         assert len(dst_tup.pending_writes) == 1
         assert dst_tup.pending_writes[0][1] == "msg"
 
@@ -66,22 +101,290 @@ async def test_checkpointer_acopy_thread():
 @pytest.mark.asyncio
 async def test_checkpointer_aprune():
     """Verify aprune with keep_latest and delete_all strategies."""
-    async with OpsCloudCheckpointer.from_conn_string(":memory:") as saver:
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
         await saver.setup()
-        cfg = {"configurable": {"thread_id": "thread-prune", "checkpoint_ns": ""}}
         for i in range(1, 4):
             cp_id = f"cp-{i:03d}"
-            cp: Checkpoint = {"v": 1, "id": cp_id, "ts": f"2026-09-30T14:0{i}:00Z", "channel_values": {}, "channel_versions": {}, "versions_seen": {}}
-            await saver.aput({**cfg, "configurable": {**cfg["configurable"], "checkpoint_id": cp_id}}, cp, {}, {})
+            cp = _make_checkpoint(cp_id)
+            step_cfg: RunnableConfig = {
+                "configurable": {
+                    "thread_id": "thread-prune",
+                    "checkpoint_ns": "",
+                    "checkpoint_id": cp_id,
+                }
+            }
+            await saver.aput(step_cfg, cp, cast(CheckpointMetadata, {}), {})
 
         # Prune keep_latest
         await saver.aprune(["thread-prune"], strategy="keep_latest")
 
-        assert await saver.aget_tuple({**cfg, "configurable": {**cfg["configurable"], "checkpoint_id": "cp-001"}}) is None
-        assert await saver.aget_tuple({**cfg, "configurable": {**cfg["configurable"], "checkpoint_id": "cp-002"}}) is None
-        latest = await saver.aget_tuple({**cfg, "configurable": {**cfg["configurable"], "checkpoint_id": "cp-003"}})
+        c1_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-prune", "checkpoint_ns": "", "checkpoint_id": "cp-001"}}
+        c2_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-prune", "checkpoint_ns": "", "checkpoint_id": "cp-002"}}
+        c3_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-prune", "checkpoint_ns": "", "checkpoint_id": "cp-003"}}
+
+        assert await saver.aget_tuple(c1_cfg) is None
+        assert await saver.aget_tuple(c2_cfg) is None
+        latest = await saver.aget_tuple(c3_cfg)
         assert latest is not None
 
         # Prune delete_all
         await saver.aprune(["thread-prune"], strategy="delete_all")
-        assert await saver.aget_tuple({**cfg, "configurable": {**cfg["configurable"], "checkpoint_id": "cp-003"}}) is None
+        assert await saver.aget_tuple(c3_cfg) is None
+
+
+@pytest.mark.asyncio
+async def test_checkpointer_aprune_subagents_and_vacuum():
+    """Verify aprune drops subagent namespaces and avacuum works."""
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
+        await saver.setup()
+        main_cfg: RunnableConfig = {
+            "configurable": {
+                "thread_id": "thread-sub",
+                "checkpoint_ns": "",
+                "checkpoint_id": "cp-main-001",
+            }
+        }
+        sub_cfg: RunnableConfig = {
+            "configurable": {
+                "thread_id": "thread-sub",
+                "checkpoint_ns": "tools:call_123",
+                "checkpoint_id": "cp-sub-001",
+            }
+        }
+        await saver.aput(main_cfg, _make_checkpoint("cp-main-001"), cast(CheckpointMetadata, {}), {})
+        await saver.aput(sub_cfg, _make_checkpoint("cp-sub-001"), cast(CheckpointMetadata, {}), {})
+
+        assert await saver.aget_tuple(sub_cfg) is not None
+
+        await saver.aprune(["thread-sub"], strategy="keep_latest", prune_subagents=True)
+
+        assert await saver.aget_tuple(main_cfg) is not None
+        assert await saver.aget_tuple(sub_cfg) is None
+
+        # Verify avacuum executes cleanly
+        await saver.avacuum()
+
+
+@pytest.mark.asyncio
+async def test_checkpointer_aprune_preserves_interrupt_checkpoints():
+    """Verify aprune preserves non-terminal checkpoints containing pending HITL interrupts (IA-04)."""
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
+        await saver.setup()
+        # Create cp-001 (historical regular)
+        cfg1: RunnableConfig = {"configurable": {"thread_id": "thread-hitl", "checkpoint_ns": "", "checkpoint_id": "cp-001"}}
+        await saver.aput(cfg1, _make_checkpoint("cp-001"), cast(CheckpointMetadata, {}), {})
+
+        # Create cp-002 (interrupted HITL checkpoint with __interrupt__ write)
+        cfg2: RunnableConfig = {"configurable": {"thread_id": "thread-hitl", "checkpoint_ns": "", "checkpoint_id": "cp-002"}}
+        stored_cfg2 = await saver.aput(cfg2, _make_checkpoint("cp-002"), cast(CheckpointMetadata, {}), {})
+        await saver.aput_writes(stored_cfg2, [("__interrupt__", {"approval_requested": True})], task_id="task-hitl")
+
+        # Create cp-003 (latest regular)
+        cfg3: RunnableConfig = {"configurable": {"thread_id": "thread-hitl", "checkpoint_ns": "", "checkpoint_id": "cp-003"}}
+        await saver.aput(cfg3, _make_checkpoint("cp-003"), cast(CheckpointMetadata, {}), {})
+
+        # Compact thread
+        await saver.aprune(["thread-hitl"], strategy="keep_latest")
+
+        # cp-001 must be pruned (historical regular)
+        assert await saver.aget_tuple(cfg1) is None
+        # cp-002 MUST be preserved (contains pending HITL interrupt)
+        tup2 = await saver.aget_tuple(cfg2)
+        assert tup2 is not None
+        assert tup2.pending_writes is not None
+        assert tup2.pending_writes[0][1] == "__interrupt__"
+        # cp-003 must be preserved (latest checkpoint)
+        assert await saver.aget_tuple(cfg3) is not None
+
+
+@pytest.mark.asyncio
+async def test_checkpointer_aprune_preserves_subagent_interrupt_checkpoints():
+    """Verify aprune preserves subagent checkpoints that contain active HITL interrupts (DV-01)."""
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
+        await saver.setup()
+        # 1. Main agent checkpoint
+        main_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-sub-hitl", "checkpoint_ns": "", "checkpoint_id": "cp-main"}}
+        await saver.aput(main_cfg, _make_checkpoint("cp-main"), cast(CheckpointMetadata, {}), {})
+
+        # 2. Regular completed subagent (should be pruned)
+        sub_dead_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-sub-hitl", "checkpoint_ns": "tools:call_dead", "checkpoint_id": "cp-sub-dead"}}
+        await saver.aput(sub_dead_cfg, _make_checkpoint("cp-sub-dead"), cast(CheckpointMetadata, {}), {})
+
+        # 3. Interrupted subagent with pending __interrupt__ write (MUST be preserved)
+        sub_hitl_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-sub-hitl", "checkpoint_ns": "tools:call_active_hitl", "checkpoint_id": "cp-sub-hitl"}}
+        stored_sub = await saver.aput(sub_hitl_cfg, _make_checkpoint("cp-sub-hitl"), cast(CheckpointMetadata, {}), {})
+        await saver.aput_writes(stored_sub, [("__interrupt__", {"tool_approval": "terraform apply"})], task_id="task-sub-1")
+
+        # 4. Another interrupted subagent under subagent:ns
+        sub_agent_cfg: RunnableConfig = {"configurable": {"thread_id": "thread-sub-hitl", "checkpoint_ns": "subagent:cloud_sec", "checkpoint_id": "cp-subagent-hitl"}}
+        stored_agent = await saver.aput(sub_agent_cfg, _make_checkpoint("cp-subagent-hitl"), cast(CheckpointMetadata, {}), {})
+        await saver.aput_writes(stored_agent, [("__interrupt__", {"escalation_needed": True})], task_id="task-sub-2")
+
+        # Prune with prune_subagents=True
+        await saver.aprune(["thread-sub-hitl"], strategy="keep_latest", prune_subagents=True)
+
+        # Main checkpoint preserved
+        assert await saver.aget_tuple(main_cfg) is not None
+        # Dead subagent was pruned
+        assert await saver.aget_tuple(sub_dead_cfg) is None
+        # Interrupted subagent in tools:* MUST be preserved
+        sub_tup = await saver.aget_tuple(sub_hitl_cfg)
+        assert sub_tup is not None
+        assert sub_tup.pending_writes is not None
+        assert sub_tup.pending_writes[0][1] == "__interrupt__"
+        # Interrupted subagent in subagent:* MUST be preserved
+        agent_tup = await saver.aget_tuple(sub_agent_cfg)
+        assert agent_tup is not None
+        assert agent_tup.pending_writes is not None
+        assert agent_tup.pending_writes[0][1] == "__interrupt__"
+
+
+@pytest.mark.asyncio
+async def test_session_manager_maintain_database_lease_contention(tmp_path):
+    """Verify maintain_database respects size threshold and skips when lease is held (DV-08)."""
+    from talkops.state.session import SessionManager
+
+    db_path = tmp_path / "sessions.db"
+    # Create empty DB file
+    db_path.write_bytes(b"0" * 1024)
+
+    # 1. Below threshold
+    res = await SessionManager.maintain_database(db_path=db_path, size_threshold_mb=10.0)
+    assert res["performed"] is False
+    assert res["reason"] == "below_threshold"
+
+    if sys.platform != "win32":
+        # Simulate active lease held by another process
+        lock_file = db_path.with_name(db_path.name + ".maint_lock")
+        with open(lock_file, "w") as lock_fp:
+            fcntl.flock(lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # 2. Above threshold (size_threshold_mb=0) but lease held -> must report lease_busy
+            busy_res = await SessionManager.maintain_database(db_path=db_path, size_threshold_mb=0.0)
+            assert busy_res["performed"] is False
+            assert busy_res["reason"] == "lease_busy"
+            fcntl.flock(lock_fp, fcntl.LOCK_UN)
+
+
+@pytest.mark.asyncio
+async def test_checkpointer_aprune_agent_session_namespaces_and_resolved_interrupts():
+    """Verify aprune drops AgentSessionMiddleware namespaces and resolved HITL interrupts."""
+    async with TalkOpsCheckpointer.from_conn_string(":memory:") as saver:
+        await saver.setup()
+        # 1. Historical root checkpoint with a RESOLVED interrupt (__interrupt__ + __resume__)
+        cfg_resolved_hitl: RunnableConfig = {
+            "configurable": {
+                "thread_id": "thread-bloat",
+                "checkpoint_ns": "",
+                "checkpoint_id": "cp-root-001",
+            }
+        }
+        stored_root_1 = await saver.aput(cfg_resolved_hitl, _make_checkpoint("cp-root-001"), cast(CheckpointMetadata, {}), {})
+        await saver.aput_writes(stored_root_1, [("__interrupt__", {"approval": True})], task_id="task-hitl")
+        await saver.aput_writes(stored_root_1, [("__resume__", {"type": "approve"})], task_id="task-resume")
+
+        # 2. Historical root checkpoint with a RESOLVED interrupt via branch:to:*
+        cfg_branched_hitl: RunnableConfig = {
+            "configurable": {
+                "thread_id": "thread-bloat",
+                "checkpoint_ns": "",
+                "checkpoint_id": "cp-root-002",
+            }
+        }
+        stored_root_2 = await saver.aput(cfg_branched_hitl, _make_checkpoint("cp-root-002"), cast(CheckpointMetadata, {}), {})
+        await saver.aput_writes(stored_root_2, [("__interrupt__", {"approval": True})], task_id="task-hitl-2")
+        await saver.aput_writes(stored_root_2, [("branch:to:model", None)], task_id="task-branch-2")
+
+        # 3. Latest root checkpoint
+        cfg_latest: RunnableConfig = {
+            "configurable": {
+                "thread_id": "thread-bloat",
+                "checkpoint_ns": "",
+                "checkpoint_id": "cp-root-003",
+            }
+        }
+        await saver.aput(cfg_latest, _make_checkpoint("cp-root-003"), cast(CheckpointMetadata, {}), {})
+
+        # 4. Orphaned AgentSessionMiddleware subgraph checkpoint
+        cfg_agent_ns: RunnableConfig = {
+            "configurable": {
+                "thread_id": "thread-bloat",
+                "checkpoint_ns": "AgentSessionMiddleware.before_agent:abc123",
+                "checkpoint_id": "cp-agent-001",
+            }
+        }
+        await saver.aput(cfg_agent_ns, _make_checkpoint("cp-agent-001"), cast(CheckpointMetadata, {}), {})
+
+        await saver.aprune(["thread-bloat"], strategy="keep_latest", prune_subagents=True)
+
+        # Resolved interrupt checkpoints must be pruned
+        assert await saver.aget_tuple(cfg_resolved_hitl) is None
+        assert await saver.aget_tuple(cfg_branched_hitl) is None
+        # Latest root checkpoint must remain
+        assert await saver.aget_tuple(cfg_latest) is not None
+        # Orphaned AgentSessionMiddleware namespace must be pruned
+        assert await saver.aget_tuple(cfg_agent_ns) is None
+
+
+@pytest.mark.asyncio
+async def test_thread_presence_lock_and_maintain_database_skips_active_terminals(tmp_path):
+    """Verify per-thread presence lock prevents maintain_database contention across terminals."""
+    from talkops.state.session import (
+        SessionManager,
+        acquire_thread_presence,
+        has_other_active_talkops_sessions,
+        is_thread_active_elsewhere,
+        release_thread_presence,
+    )
+
+    db_path = tmp_path / "sessions.db"
+    db_path.write_bytes(b"0" * 2048)
+
+    assert acquire_thread_presence("thread-local-1", db_path=db_path) is True
+    assert is_thread_active_elsewhere("thread-local-1", db_path=db_path) is False
+    release_thread_presence("thread-local-1")
+
+    if sys.platform != "win32":
+        presence_dir = tmp_path / "presence"
+        presence_dir.mkdir(parents=True, exist_ok=True)
+        foreign_lock = presence_dir / "thread-terminal-2.lock"
+        with open(foreign_lock, "a+", encoding="utf-8") as fp:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert is_thread_active_elsewhere("thread-terminal-2", db_path=db_path) is True
+            assert has_other_active_talkops_sessions(db_path=db_path) is True
+            res = await SessionManager.maintain_database(db_path=db_path, size_threshold_mb=0.0)
+            assert res["performed"] is False
+            assert res["reason"] == "active_sessions_present"
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_agent_task_drains_queued_messages_without_reconciling_deadlock():
+    """Verify _cleanup_agent_task clears _agent_reconciling before calling _process_next_from_queue."""
+    from unittest.mock import AsyncMock
+
+    from talkops.ui.app import QueuedMessage, TalkOpsApp
+
+    app = TalkOpsApp(defer_server_start=True)
+    app._startup_sequence_running = False
+    app._connecting = False
+    app._reloading = False
+    app._sync_goal_state_from_checkpoint = AsyncMock(return_value=True)
+    app._sync_session_cost_from_checkpoint = AsyncMock()
+    app._regroup_completed_tools = AsyncMock()
+    app._mount_turn_summary = AsyncMock()
+
+    processed: list[tuple[str, str]] = []
+
+    async def _fake_process(text: str, mode: str) -> None:
+        processed.append((text, mode))
+
+    app._process_message = _fake_process  # type: ignore[method-assign]
+    app._pending_messages.append(QueuedMessage(text="second prompt on same terminal", mode="normal"))
+
+    await app._cleanup_agent_task()
+
+    assert app._agent_reconciling is False
+    assert len(app._pending_messages) == 0
+    assert processed == [("second prompt on same terminal", "normal")]
+
+

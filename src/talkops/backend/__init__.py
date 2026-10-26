@@ -1,0 +1,104 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Backend module for TalkOps — shell execution, sandbox environments, and filesystem access."""
+
+from __future__ import annotations
+
+import importlib
+from typing import TYPE_CHECKING, Any
+
+from talkops.backend.registry import (
+    BackendRegistry,
+    get_backend_class,
+    get_backend_registry,
+    register_backend,
+)
+
+if TYPE_CHECKING:
+    from talkops.backend.composite import CompositeBackend, TalkOpsCompositeBackend
+    from talkops.backend.local import LocalShellBackend
+    from talkops.backend.sandbox_config import SandboxConfig
+    from talkops.backend.sandbox_factory import (
+        cleanup_all_sandboxes,
+        cleanup_sandbox,
+        clear_sandbox_cache,
+        create_sandbox,
+        create_sandbox_backend,
+        get_default_working_dir,
+        get_sandbox_backend,
+        verify_sandbox_deps,
+    )
+    from talkops.backend.sandbox_provider import (
+        SandboxError,
+        SandboxInstallHint,
+        SandboxNotFoundError,
+        SandboxProvider,
+        SandboxProviderMetadata,
+    )
+    from talkops.backend.sandbox_registry import SandboxRegistry
+
+__all__ = [
+    "BackendRegistry",
+    "CompositeBackend",
+    "LocalShellBackend",
+    "TalkOpsCompositeBackend",
+    "SandboxConfig",
+    "SandboxError",
+    "SandboxInstallHint",
+    "SandboxNotFoundError",
+    "SandboxProvider",
+    "SandboxProviderMetadata",
+    "SandboxRegistry",
+    "cleanup_all_sandboxes",
+    "cleanup_sandbox",
+    "clear_sandbox_cache",
+    "create_sandbox",
+    "create_sandbox_backend",
+    "get_backend_class",
+    "get_backend_registry",
+    "get_default_working_dir",
+    "get_sandbox_backend",
+    "register_backend",
+    "verify_sandbox_deps",
+]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy-load backend classes to avoid circular imports and unnecessary dependencies."""
+    _lazy_map = {
+        "LocalShellBackend": "talkops.backend.local",
+        "TalkOpsCompositeBackend": "talkops.backend.composite",
+        "CompositeBackend": "talkops.backend.composite",
+        "SandboxConfig": "talkops.backend.sandbox_config",
+        "SandboxError": "talkops.backend.sandbox_provider",
+        "SandboxInstallHint": "talkops.backend.sandbox_provider",
+        "SandboxNotFoundError": "talkops.backend.sandbox_provider",
+        "SandboxProvider": "talkops.backend.sandbox_provider",
+        "SandboxProviderMetadata": "talkops.backend.sandbox_provider",
+        "SandboxRegistry": "talkops.backend.sandbox_registry",
+        "get_sandbox_backend": "talkops.backend.sandbox_factory",
+        "create_sandbox": "talkops.backend.sandbox_factory",
+        "create_sandbox_backend": "talkops.backend.sandbox_factory",
+        "get_default_working_dir": "talkops.backend.sandbox_factory",
+        "verify_sandbox_deps": "talkops.backend.sandbox_factory",
+        "cleanup_sandbox": "talkops.backend.sandbox_factory",
+        "cleanup_all_sandboxes": "talkops.backend.sandbox_factory",
+        "clear_sandbox_cache": "talkops.backend.sandbox_factory",
+    }
+    if name in _lazy_map:
+
+        mod = importlib.import_module(_lazy_map[name])
+        return getattr(mod, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

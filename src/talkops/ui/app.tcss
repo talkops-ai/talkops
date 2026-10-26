@@ -1,0 +1,529 @@
+/* TalkOps TUI Theme — Variable-based CSS
+ *
+ * Theme color variables automatically resolved from theme.py
+ * Layer ordering: base → autocomplete → overlay
+ */
+
+/* ── Screen layers (critical for z-ordering) ─────────── */
+
+Screen {
+    layers: base autocomplete overlay;
+    background: $background;
+    color: $foreground;
+}
+
+
+/* ── Universal Scrollbar Styling ────────────────────────── */
+
+* {
+    scrollbar-size-vertical: 1;
+}
+
+MarkdownFence {
+    overflow: hidden hidden;
+    scrollbar-size-horizontal: 0;
+    scrollbar-size-vertical: 0;
+}
+
+Scrollbar {
+    background: $surface;
+    color: $primary;
+}
+
+Scrollbar:hover {
+    background: $surface;
+    color: $primary-lighten-1;
+}
+
+/* ── Message list scroll area ────────────────────────────── */
+
+#messages {
+    height: 1fr;
+    background: $background;
+    scrollbar-size-vertical: 1;
+    padding-bottom: 1;
+}
+
+/* ── Bottom container ────────────────────────────────── */
+
+#bottom-container {
+    height: auto;
+    margin: 0;
+    padding: 0;
+}
+
+/* ── Diff lines ──────────────────────────────────────── */
+
+.diff-line-added, .diff-added {
+    background: transparent;
+}
+
+.diff-line-removed, .diff-removed {
+    background: transparent;
+}
+
+.diff-line-hunk {
+    color: $text-muted;
+}
+
+.diff-line-header {
+    text-style: bold;
+}
+
+.diff-line-context {
+    color: $text-muted;
+}
+
+.diff-line-truncated {
+    color: $text-muted;
+    pointer: pointer;
+}
+
+/* ── Status bar ──────────────────────────────────────── */
+
+StatusBar {
+    dock: bottom;
+    height: 1;
+    color: $foreground;
+}
+
+/* ── Chat input ──────────────────────────────────────── */
+
+/* Styled in ChatInput.DEFAULT_CSS (widgets/chat_input.py). Rules here
+   would override the mode-coloured borders, so keep this section empty. */
+
+
+/* ── Messages ────────────────────────────────────────── */
+
+/* Mode-specific borders for UserMessage — currently all use $primary */
+/* Reserved for future mode-specific border colors if needed */
+
+AssistantMessage {
+    padding: 0 1;
+    margin: 1 0 0 0;
+    color: $foreground;
+    pointer: text;
+}
+
+ToolCallMessage {
+    /* Spacing lives in ToolCallMessage.DEFAULT_CSS (standalone rows get a
+       top margin, expanded group members nest without one). */
+    color: $foreground;
+}
+
+ToolCallMessage:hover {
+    background: $surface;
+}
+
+ErrorMessage {
+    height: auto;
+    padding: 1 2;
+    margin: 1 0 0 0;
+    background: $error-muted;
+    color: $foreground;
+    border-left: wide $error;
+    pointer: text;
+}
+
+SystemMessage {
+    padding: 0 1;
+    margin: 1 0 0 0;
+    height: auto;
+    color: $text;
+    pointer: text;
+}
+
+SystemMessage.-card,
+SystemMessage.-command-output,
+CommandOutputMessage {
+    height: auto;
+    padding: 1 2;
+    margin: 1 0 1 0;
+    background: $surface 75%;
+    border-left: wide $primary;
+    color: $foreground;
+    pointer: text;
+}
+
+
+/* ── Queued User Message ─────────────────────────────── */
+
+QueuedUserMessage {
+    padding: 0 1;
+    margin: 1 0 0 0;
+    background: transparent;
+    color: $text-muted;
+    border-left: wide $warning 45%;
+}
+
+/* ── Skill Message ──────────────────────────────────── */
+
+SkillMessage {
+    height: auto;
+    padding: 0 1 0 0;
+    margin: 1 0 1 0;
+    background: transparent;
+    border-left: wide $skill;
+}
+
+SkillMessage:hover {
+    border-left: wide $skill-hover;
+}
+
+/* ── Approval overlay ────────────────────────────────── */
+
+/* ApprovalMenu styles are now contained within the component's DEFAULT_CSS */
+
+
+/* ── Overlay panels (model/thread/mcp selectors) ─────── */
+
+ModelSelector, ThreadSelector, MCPViewer {
+    layer: overlay;
+    dock: right;
+    width: 45;
+    height: 100%;
+    background: $surface;
+    border-left: tall $panel;
+    padding: 1;
+}
+
+/* ── Sub-agent panel ─────────────────────────────────── */
+
+SubagentPanel {
+    color: $foreground;
+}
+
+/* ── Autocomplete Popup ──────────────────────────────── */
+
+#autocomplete-popup {
+    height: auto;
+    max-height: 10;
+    width: 100%;
+    background: $surface;
+    border-top: solid $primary;
+    scrollbar-size-vertical: 1;
+    scrollbar-gutter: stable;
+    display: none;
+}
+
+/* ── Muted helper class ──────────────────────────────── */
+
+.muted {
+    color: $foreground;
+    text-style: italic;
+}
+
+/* ── Inline Prompts & Approval Menus ─────────────────── */
+
+.inline-prompt {
+    height: auto;
+    margin: 1 0;
+    padding: 0 1;
+    background: $surface;
+    border: solid $primary;
+}
+
+.inline-prompt .inline-prompt-title {
+    text-style: bold;
+    color: $primary;
+    margin-bottom: 0;
+}
+
+.inline-prompt .inline-prompt-help {
+    color: $text-muted;
+    text-style: italic;
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.inline-prompt-input {
+    & .text-area--cursor-line {
+        background: transparent;
+    }
+
+    & .text-area--cursor-gutter {
+        background: transparent;
+    }
+}
+
+/* ── Ask user widget ─────────────────────────────────── */
+.ask-user-menu .ask-user-questions {
+    height: auto;
+    padding: 0 1;
+}
+
+.ask-user-menu .ask-user-question {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.ask-user-menu .ask-user-question-active {
+    border-left: thick $primary;
+    padding-left: 1;
+}
+
+.ask-user-menu .ask-user-question-inactive {
+    opacity: 0.6;
+    padding-left: 2;
+}
+
+.ask-user-menu .ask-user-question-text {
+    margin: 0 0 0 1;
+    padding: 0;
+    color: $foreground;
+}
+
+.ask-user-menu .ask-user-choice {
+    height: auto;
+    padding: 0 1;
+    color: $foreground;
+}
+
+.ask-user-menu .ask-user-choice-selected {
+    color: $primary;
+    text-style: bold;
+}
+
+.ask-user-menu .ask-user-text-input {
+    margin: 1 0 0 2;
+    height: auto;
+    min-height: 3;
+    max-height: 10;
+    background: $background;
+    border: solid $panel;
+    padding: 0 1;
+    color: $foreground;
+}
+
+.ask-user-menu .ask-user-text-input:focus {
+    border: solid $primary;
+}
+
+.ask-user-menu .ask-user-other-input {
+    margin: 1 0 0 2;
+    height: auto;
+    min-height: 3;
+    max-height: 10;
+    background: $background;
+    border: solid $panel;
+    padding: 0 1;
+    color: $foreground;
+}
+
+.ask-user-menu .ask-user-other-input:focus {
+    border: solid $primary;
+}
+
+.goal-review-menu .goal-review-content {
+    height: auto;
+    max-height: 24;
+    padding: 0 1;
+}
+
+.goal-review-menu .goal-review-body {
+    height: auto;
+}
+
+.goal-review-menu .goal-review-markdown {
+    margin: 0 0 1 0;
+    padding: 0;
+}
+
+.goal-review-menu .goal-review-questions-section {
+    height: auto;
+    margin: 0 1 1 1;
+    padding: 0 1;
+    background: $background;
+    border: solid $primary;
+}
+
+.goal-review-menu .goal-review-questions-header {
+    text-style: bold;
+    color: $primary;
+    margin: 0 0 1 0;
+}
+
+.goal-review-menu .goal-review-questions {
+    height: auto;
+    padding: 0;
+}
+
+.goal-review-menu .ask-user-question {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.goal-review-menu .ask-user-question-active {
+    border-left: thick $primary;
+    padding-left: 1;
+}
+
+.goal-review-menu .ask-user-question-inactive {
+    opacity: 0.75;
+    padding-left: 2;
+}
+
+.goal-review-menu .ask-user-question-text {
+    margin: 0 0 0 1;
+    padding: 0;
+    color: $foreground;
+}
+
+.goal-review-menu .ask-user-choice {
+    height: auto;
+    padding: 0 1;
+    color: $foreground;
+}
+
+.goal-review-menu .ask-user-choice-selected {
+    color: $primary;
+    text-style: bold;
+}
+
+.goal-review-menu .ask-user-text-input,
+.goal-review-menu .ask-user-other-input {
+    margin: 1 0 0 2;
+    height: auto;
+    min-height: 3;
+    max-height: 8;
+    background: $surface;
+    border: solid $primary;
+    padding: 0 1;
+    color: $foreground;
+}
+
+.goal-review-menu .ask-user-text-input:focus,
+.goal-review-menu .ask-user-other-input:focus {
+    border: heavy $accent;
+}
+
+.goal-review-menu .goal-review-options-container {
+    height: auto;
+    background: $surface;
+    padding: 0 1;
+    margin-top: 0;
+}
+
+.goal-review-menu .goal-review-option {
+    height: 1;
+    padding: 0 1;
+}
+
+.goal-review-menu .goal-review-option-selected {
+    background: $primary;
+    text-style: bold;
+}
+
+.goal-review-menu .goal-review-input-label {
+    margin: 1 1 0 1;
+    padding: 0 1;
+    text-style: bold;
+    color: $primary;
+}
+
+.goal-review-menu .goal-review-edit-input {
+    margin: 0 1 1 1;
+    height: auto;
+    min-height: 4;
+    max-height: 12;
+    background: $background;
+    border: solid $primary;
+    padding: 0 1;
+    color: $foreground;
+}
+
+.goal-review-menu .goal-review-edit-input:focus {
+    border: heavy $accent;
+    background: $background;
+}
+
+.approval-menu {
+    height: auto;
+    margin: 1 0;
+    padding: 0 1;
+    background: $surface;
+    border: round $primary;
+}
+
+.approval-menu .approval-title {
+    display: none;
+}
+
+.approval-menu .approval-command {
+    height: auto;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    color: $text;
+}
+
+.approval-menu .approval-separator {
+    height: 1;
+    border-top: solid $panel;
+    margin: 0;
+}
+
+.approval-menu .tool-info-scroll {
+    height: auto;
+    max-height: 40;
+    margin-top: 0;
+}
+
+.approval-menu .tool-info-container {
+    height: auto;
+}
+
+.approval-menu .approval-options-container {
+    height: auto;
+    background: $surface;
+    padding: 0 0;
+    margin-top: 0;
+}
+
+.approval-menu .approval-option {
+    height: 1;
+    padding: 0 1;
+}
+
+.approval-menu .approval-option-selected {
+    background: $primary 12%;
+    color: $text;
+    text-style: bold;
+}
+
+.approval-menu .approval-reason-input {
+    margin: 1 0 0 0;
+    border: round $warning;
+    background: $surface;
+}
+
+.approval-menu .approval-help {
+    display: none;
+}
+
+/* Tool approval widgets & diff styling */
+.tool-approval-widget {
+    height: auto;
+}
+
+.diff-removed {
+    height: auto;
+    color: $text-error;
+    background: transparent;
+    padding: 0;
+}
+
+.diff-added {
+    height: auto;
+    color: $text-success;
+    background: transparent;
+    padding: 0;
+}
+
+.diff-context {
+    height: auto;
+    color: $text-muted;
+    background: transparent;
+    padding: 0;
+}
+
+

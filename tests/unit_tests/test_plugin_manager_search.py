@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for PluginManagerScreen search functionality and filtering."""
 
 from __future__ import annotations
@@ -9,7 +23,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 
-from opscloud.ui.widgets.plugin_manager import (
+from talkops.ui.widgets.plugin_manager import (
     PluginManagerScreen,
     _ManagerState,
     _MarketplaceRow,
@@ -21,13 +35,16 @@ class DummyPluginManagerApp(App):
     """Minimal textual app to mount and test PluginManagerScreen."""
 
     def __init__(self, screen_instance: PluginManagerScreen) -> None:
+        """Initialize DummyPluginManagerApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
@@ -101,7 +118,7 @@ async def test_plugin_manager_search_input_updates_view() -> None:
     marketplaces = (_MarketplaceRow(name="talkops-devops-plugins", source="local", plugin_count=3, installed_count=0),)
     mock_state = _ManagerState(available_plugins=plugins, installed_plugins=(), marketplaces=marketplaces, errors=())
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
         app = DummyPluginManagerApp(screen)
         async with app.run_test() as pilot:
             # Let initial state load
@@ -127,9 +144,9 @@ async def test_plugin_manager_search_input_updates_view() -> None:
             # Verify only 1 plugin is now shown
             # OptionList should only have 1 plugin option (id starts with detail:aws-platform-engineer)
             plugin_option_ids = [
-                options.get_option_at_index(i).id
+                opt_id
                 for i in range(options.option_count)
-                if options.get_option_at_index(i).id and not options.get_option_at_index(i).id.startswith("spacer:")
+                if (opt_id := options.get_option_at_index(i).id) and not opt_id.startswith("spacer:")
             ]
             assert plugin_option_ids == ["detail:aws-platform-engineer@talkops-devops-plugins"]
 
@@ -140,9 +157,9 @@ async def test_plugin_manager_search_input_updates_view() -> None:
 
             # All 3 plugins return
             plugin_option_ids_all = [
-                options.get_option_at_index(i).id
+                opt_id
                 for i in range(options.option_count)
-                if options.get_option_at_index(i).id and not options.get_option_at_index(i).id.startswith("spacer:")
+                if (opt_id := options.get_option_at_index(i).id) and not opt_id.startswith("spacer:")
             ]
             assert len(plugin_option_ids_all) == 3
 
@@ -155,7 +172,7 @@ async def test_plugin_manager_cancel_clears_search() -> None:
     marketplaces = (_MarketplaceRow(name="talkops-devops-plugins", source="local", plugin_count=3, installed_count=0),)
     mock_state = _ManagerState(available_plugins=plugins, installed_plugins=(), marketplaces=marketplaces, errors=())
 
-    with patch("opscloud.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=mock_state):
         app = DummyPluginManagerApp(screen)
         async with app.run_test() as pilot:
             await pilot.pause()

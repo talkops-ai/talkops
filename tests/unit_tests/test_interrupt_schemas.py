@@ -1,4 +1,18 @@
-"""Comprehensive unit tests for OpsCloud's terminal-native interrupt schemas."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Comprehensive unit tests for TalkOps's terminal-native interrupt schemas."""
 
 import json
 from uuid import uuid4
@@ -6,49 +20,49 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from opscloud.schema.interrupts import (
-    # Tool approval / HITL
-    ActionRequest,
-    ApproveDecision,
-    AutoApproveAllDecision,
-    EditDecision,
-    HITLRequest,
-    HitlDecision,
-    HitlResumePayload,
-    RejectDecision,
-    ReviewConfig,
-    SmartApproveAllDecision,
-    SwitchManualDecision,
+from talkops.schema.interrupts import (
     # Ask user protocol
     ASK_USER_ANSWERED_SUMMARY,
     ASK_USER_CANCELLED_ANSWER,
     ASK_USER_CANCELLED_SUMMARY,
     ASK_USER_ERROR_ANSWER_PREFIX,
     ASK_USER_FAILED_SUMMARY,
-    ASK_USER_NOTHING_SELECTED,
     ASK_USER_NO_ANSWER,
+    ASK_USER_NOTHING_SELECTED,
+    CHOICE_QUESTION_TYPES,
+    # Hooks interrupt
+    HOOK_INVOCATION_INTERRUPT_TYPE,
+    # Tool approval / HITL
+    ActionRequest,
+    ApproveDecision,
     AskUserAnswered,
     AskUserCancelled,
     AskUserRequest,
     AskUserResumePayload,
-    CHOICE_QUESTION_TYPES,
+    AutoApproveAllDecision,
     Choice,
+    EditDecision,
+    # Goal / rubric review
+    GoalReviewRequest,
+    GoalReviewResumePayload,
+    HitlDecision,
+    HITLRequest,
+    HitlResumePayload,
+    HookInvocationInterrupt,
     Question,
     QuestionType,
+    RejectDecision,
+    ReviewConfig,
+    SmartApproveAllDecision,
+    SwitchManualDecision,
     ask_user_answer_is_empty,
+    build_hook_interrupt_payload,
     decode_multi_select_answer,
     encode_multi_select_answer,
     format_ask_user_error_answer,
     format_ask_user_transcript,
-    render_ask_user_transcript_for_display,
-    # Goal / rubric review
-    GoalReviewRequest,
-    GoalReviewResumePayload,
-    # Hooks interrupt
-    HOOK_INVOCATION_INTERRUPT_TYPE,
-    HookInvocationInterrupt,
-    build_hook_interrupt_payload,
     is_hook_interrupt_payload,
+    render_ask_user_transcript_for_display,
 )
 
 
@@ -57,6 +71,7 @@ class TestHitlSchemas:
 
     def test_hitl_decision_types(self):
         # Approve
+        """Verify hitl decision types."""
         d_app = ApproveDecision()
         assert d_app.type == "approve"
         assert d_app.model_dump() == {"type": "approve"}
@@ -84,6 +99,7 @@ class TestHitlSchemas:
         assert d_smart.type == "smart_approve_all"
 
     def test_hitl_decision_to_command_dict(self):
+        """Verify hitl decision to command dict."""
         d1 = HitlDecision(type="approve")
         assert d1.to_command_dict() == {"type": "approve"}
 
@@ -97,13 +113,15 @@ class TestHitlSchemas:
         assert d4.to_command_dict() == {"type": "smart_approve_all"}
 
     def test_hitl_request_typed_dict(self):
+        """Verify hitl request typed dict."""
         act: ActionRequest = {"name": "aws_cli", "args": {"cmd": "ec2 describe-instances"}, "id": "call_123"}
         rev: ReviewConfig = {"action_name": "aws_cli", "allowed_decisions": ["approve", "reject", "edit"]}
         hitl_req: HITLRequest = {"action_requests": [act], "review_configs": [rev]}
         assert len(hitl_req["action_requests"]) == 1
-        assert hitl_req["action_requests"][0]["name"] == "aws_cli"
+        assert hitl_req["action_requests"][0].get("name") == "aws_cli"
 
     def test_hitl_resume_payload_from_raw_approve(self):
+        """Verify hitl resume payload from raw approve."""
         payload = HitlResumePayload.from_raw("approve", count=2)
         assert len(payload.decisions) == 2
         assert all(d.type == "approve" for d in payload.decisions)
@@ -115,6 +133,7 @@ class TestHitlSchemas:
         assert HitlResumePayload.from_raw("confirm").decisions[0].type == "approve"
 
     def test_hitl_resume_payload_from_raw_reject(self):
+        """Verify hitl resume payload from raw reject."""
         payload = HitlResumePayload.from_raw({"decision": "reject", "message": "Forbidden in prod"}, count=1)
         assert len(payload.decisions) == 1
         assert payload.decisions[0].type == "reject"
@@ -125,6 +144,7 @@ class TestHitlSchemas:
         assert HitlResumePayload.from_raw("deny").decisions[0].type == "reject"
 
     def test_hitl_resume_payload_from_raw_edit(self):
+        """Verify hitl resume payload from raw edit."""
         raw = {
             "decision": "edit",
             "args": {"command": "kubectl get pods -n kube-system"},
@@ -148,6 +168,7 @@ class TestHitlSchemas:
         assert payload_list.decisions[1].type == "approve"
 
     def test_hitl_resume_payload_from_raw_switch_manual(self):
+        """Verify hitl resume payload from raw switch manual."""
         payload = HitlResumePayload.from_raw("switch_manual")
         assert payload.decisions[0].type == "switch_manual"
 
@@ -155,6 +176,7 @@ class TestHitlSchemas:
         assert payload_dict.decisions[0].type == "switch_manual"
 
     def test_hitl_resume_payload_from_raw_auto_approve(self):
+        """Verify hitl resume payload from raw auto approve."""
         payload = HitlResumePayload.from_raw("auto")
         assert payload.auto_approve_requested is True
         assert payload.decisions[0].type == "approve"
@@ -163,6 +185,7 @@ class TestHitlSchemas:
         assert payload2.auto_approve_requested is True
 
     def test_hitl_resume_payload_from_raw_smart_approve(self):
+        """Verify hitl resume payload from raw smart approve."""
         payload = HitlResumePayload.from_raw("smart")
         assert payload.smart_approve_requested is True
         assert payload.auto_approve_requested is True
@@ -177,6 +200,7 @@ class TestHitlSchemas:
         assert payload_dict.decisions[0].type == "approve"
 
     def test_hitl_resume_payload_to_command_value(self):
+        """Verify hitl resume payload to command value."""
         payload = HitlResumePayload(
             decisions=[
                 HitlDecision(type="approve"),
@@ -196,11 +220,13 @@ class TestAskUserProtocol:
     """Test interactive ask_user question models, encodings, and serializers."""
 
     def test_question_types_and_choice_requirement(self):
+        """Verify question types and choice requirement."""
         assert "text" not in CHOICE_QUESTION_TYPES
         assert "multiple_choice" in CHOICE_QUESTION_TYPES
         assert "multi_select" in CHOICE_QUESTION_TYPES
 
     def test_multi_select_encoding_roundtrip(self):
+        """Verify multi select encoding roundtrip."""
         selected = ["us-east-1", "us-west-2", "eu-west-1"]
         encoded = encode_multi_select_answer(selected)
         assert isinstance(encoded, str)
@@ -220,6 +246,7 @@ class TestAskUserProtocol:
 
     def test_ask_user_answer_is_empty(self):
         # Text question
+        """Verify ask user answer is empty."""
         assert ask_user_answer_is_empty("", "text") is True
         assert ask_user_answer_is_empty("   ", "text") is True
         assert ask_user_answer_is_empty("production", "text") is False
@@ -230,6 +257,7 @@ class TestAskUserProtocol:
         assert ask_user_answer_is_empty("malformed", "multi_select") is True
 
     def test_format_and_render_transcript(self):
+        """Verify format and render transcript."""
         questions: list[Question] = [
             {"question": "Target VPC?", "type": "text"},
             {
@@ -243,12 +271,13 @@ class TestAskUserProtocol:
         assert "Q: Target VPC?\nA: vpc-12345" in transcript
         assert 'Q: Select target subnets\nA: ["subnet-a", "subnet-b"]' in transcript
 
-        display = render_ask_user_transcript_for_display(questions, transcript)
+        display = render_ask_user_transcript_for_display([*questions], transcript)
         assert display is not None
         assert "Q: Select target subnets\nA: subnet-a\nsubnet-b" in display
 
     def test_ask_user_resume_payload_from_raw(self):
         # Single choice answer
+        """Verify ask user resume payload from raw."""
         p1 = AskUserResumePayload.from_raw({"choice": "us-east-1"})
         assert p1.status == "answered"
         assert p1.answers == ["us-east-1"]
@@ -273,11 +302,13 @@ class TestGoalReviewSchemas:
     """Test Goal Review and Acceptance Criteria models."""
 
     def test_goal_review_resume_payload_confirm(self):
+        """Verify goal review resume payload confirm."""
         payload = GoalReviewResumePayload.from_raw("confirm")
         assert payload.decision == "confirm"
         assert payload.criteria is None
 
     def test_goal_review_resume_payload_edit(self):
+        """Verify goal review resume payload edit."""
         raw = {
             "decision": "edit",
             "criteria": ["Check IAM policy", "Verify CloudWatch alarm"],
@@ -289,12 +320,14 @@ class TestGoalReviewSchemas:
         assert payload.feedback == "Add alarm threshold"
 
     def test_goal_review_resume_payload_reject(self):
+        """Verify goal review resume payload reject."""
         raw = {"decision": "reject", "feedback": "Need to rollback instead"}
         payload = GoalReviewResumePayload.from_raw(raw)
         assert payload.decision == "reject"
         assert payload.feedback == "Need to rollback instead"
 
     def test_goal_review_to_command_value(self):
+        """Verify goal review to command value."""
         payload = GoalReviewResumePayload(decision="confirm")
         assert payload.to_command_value() == {"decision": "confirm"}
 
@@ -303,6 +336,7 @@ class TestHookInvocationInterrupt:
     """Test hook invocation interrupt helpers."""
 
     def test_hook_interrupt_check(self):
+        """Verify hook interrupt check."""
         assert is_hook_interrupt_payload({"type": "hook_invocation"}) is True
         assert is_hook_interrupt_payload({"type": "ask_user"}) is False
         assert is_hook_interrupt_payload("not_a_dict") is False

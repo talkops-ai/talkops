@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for Jev-powered dynamic model and reasoning router."""
 
 from __future__ import annotations
@@ -7,27 +21,30 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
-from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_typesafe import TypeSafeClassifier
 
-from opscloud.middleware.jev_model_router import (
+from talkops.middleware.jev_model_router import (
     JevDynamicModelRouterMiddleware,
     ModelChoice,
     ModelRouterMiddleware,
 )
-from opscloud.model.pool import DynamicModelPoolManager
+from talkops.model.pool import DynamicModelPoolManager
 
 
 class DummyRuntime:
+    """Test suite or helper class for dummy runtime."""
     def __init__(self, context=None):
+        """Initialize DummyRuntime."""
         self.context = context
 
 
 @pytest.fixture(autouse=True)
 def isolate_agent_pool(monkeypatch):
-    from opscloud.config import toml_config
+    """Provide isolate agent pool test helper or fixture."""
+    from talkops.config import toml_config
 
     orig_load = toml_config.load_agent_pool
 
@@ -36,15 +53,17 @@ def isolate_agent_pool(monkeypatch):
             return None
         return orig_load(config_path)
 
-    monkeypatch.setattr("opscloud.config.toml_config.load_agent_pool", _safe_load)
+    monkeypatch.setattr("talkops.config.toml_config.load_agent_pool", _safe_load)
 
 
 @pytest.fixture
 def pool_manager():
+    """Provide pool manager test helper or fixture."""
     return DynamicModelPoolManager()
 
 
 def test_dynamic_tier_discovery_google_genai(pool_manager):
+    """Verify dynamic tier discovery google genai."""
     tiers = pool_manager.discover_tiers(provider="google_genai")
     assert 0 in tiers
     assert 1 in tiers
@@ -61,6 +80,7 @@ def test_dynamic_tier_discovery_google_genai(pool_manager):
 
 
 def test_dynamic_tier_discovery_openai(pool_manager):
+    """Verify dynamic tier discovery openai."""
     tiers = pool_manager.discover_tiers(provider="openai")
     assert len(tiers) == 3
     assert tiers[0][1] == "off"
@@ -69,6 +89,7 @@ def test_dynamic_tier_discovery_openai(pool_manager):
 
 
 def test_dynamic_tier_discovery_anthropic(pool_manager):
+    """Verify dynamic tier discovery anthropic."""
     tiers = pool_manager.discover_tiers(provider="anthropic")
     assert len(tiers) == 3
     assert tiers[0][1] == "off"
@@ -77,13 +98,15 @@ def test_dynamic_tier_discovery_anthropic(pool_manager):
 
 
 def test_dynamic_tiering_with_single_reasoning_base_spec(pool_manager):
+    """Verify dynamic tiering with single reasoning base spec."""
     tiers = pool_manager.discover_tiers(base_spec="google_genai:gemini-3.7-flash")
     assert tiers[0][1] == "off"
     assert tiers[2][1] == "high"
 
 
 def test_dynamic_tier_discovery_all_22_providers(pool_manager):
-    from opscloud.model.config import AVAILABLE_MODELS
+    """Verify dynamic tier discovery all 22 providers."""
+    from talkops.model.config import AVAILABLE_MODELS
 
     for prov in AVAILABLE_MODELS:
         tiers = pool_manager.discover_tiers(provider=prov)
@@ -103,6 +126,7 @@ def test_dynamic_tier_discovery_all_22_providers(pool_manager):
 
 def test_pool_manager_get_model_choices(pool_manager):
     # 1. Orchestrator criteria (default)
+    """Verify pool manager get model choices."""
     choices = pool_manager.get_model_choices(provider="google_genai", is_subagent=False)
     assert "fast" in choices
     assert "standard" in choices
@@ -144,8 +168,25 @@ def test_pool_manager_get_model_choices(pool_manager):
     assert "Deep cross-service root-cause correlation" in sub_powerful_crit
 
 
+def test_middleware_construction_does_not_resolve_model_pool() -> None:
+    """Creating many subagent middleware instances must perform zero model work."""
+    pool = MagicMock(spec=DynamicModelPoolManager)
+
+    middlewares = [
+        JevDynamicModelRouterMiddleware(
+            pool_manager=pool,
+            subagent_name=f"agent-{index}",
+        )
+        for index in range(100)
+    ]
+
+    pool.get_model_choices.assert_not_called()
+    assert all(middleware._router is None for middleware in middlewares)
+
+
 @pytest.mark.asyncio
 async def test_middleware_sends_candidate_models_in_question_choices():
+    """Verify middleware sends candidate models in question choices."""
     middleware = JevDynamicModelRouterMiddleware()
 
     smart_runtime = DummyRuntime(context={"approval_mode": "smart", "smart": True, "model": "google_genai:gemini-3.7-flash"})
@@ -158,7 +199,7 @@ async def test_middleware_sends_candidate_models_in_question_choices():
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
 
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 result = await middleware.abefore_agent(state, smart_runtime)
                 assert result is not None
 
@@ -183,26 +224,28 @@ async def test_middleware_sends_candidate_models_in_question_choices():
 
 
 def test_auto_detect_provider_with_various_credentials(pool_manager):
-    with patch("opscloud.model.pool.has_provider_credentials", side_effect=lambda p: p == "xai"):
-        with patch("opscloud.model.config.ModelConfig.load") as mock_cfg:
+    """Verify auto detect provider with various credentials."""
+    with patch("talkops.model.pool.has_provider_credentials", side_effect=lambda p: p == "xai"):
+        with patch("talkops.model.config.ModelConfig.load") as mock_cfg:
             mock_cfg.return_value.default_model = None
             mock_cfg.return_value.recent_model = None
             assert pool_manager._resolve_provider() == "xai"
 
-    with patch("opscloud.model.pool.has_provider_credentials", side_effect=lambda p: p == "mistralai"):
-        with patch("opscloud.model.config.ModelConfig.load") as mock_cfg:
+    with patch("talkops.model.pool.has_provider_credentials", side_effect=lambda p: p == "mistralai"):
+        with patch("talkops.model.config.ModelConfig.load") as mock_cfg:
             mock_cfg.return_value.default_model = None
             mock_cfg.return_value.recent_model = None
             assert pool_manager._resolve_provider() == "mistralai"
 
-    with patch("opscloud.model.pool.has_provider_credentials", side_effect=lambda p: p == "cohere"):
-        with patch("opscloud.model.config.ModelConfig.load") as mock_cfg:
+    with patch("talkops.model.pool.has_provider_credentials", side_effect=lambda p: p == "cohere"):
+        with patch("talkops.model.config.ModelConfig.load") as mock_cfg:
             mock_cfg.return_value.default_model = None
             mock_cfg.return_value.recent_model = None
             assert pool_manager._resolve_provider() == "cohere"
 
 
 def test_thinking_level_max_effort_prioritization(pool_manager):
+    """Verify thinking level max effort prioritization."""
     tiers_anthropic = pool_manager.discover_tiers(provider="anthropic")
     assert tiers_anthropic[2][1] == "max"
 
@@ -211,7 +254,9 @@ def test_thinking_level_max_effort_prioritization(pool_manager):
 
 
 @pytest.mark.asyncio
-async def test_official_model_router_custom_choices():
+async def test_official_model_router_custom_choices(monkeypatch: pytest.MonkeyPatch):
+    """Verify official model router custom choices."""
+    monkeypatch.setenv("TYPESAFE_API_KEY", "mock-test-key-typesafe")
     mock_fast = MagicMock(spec=BaseChatModel)
     mock_powerful = MagicMock(spec=BaseChatModel)
 
@@ -245,6 +290,7 @@ async def test_official_model_router_custom_choices():
         mock_req.state = res
 
         def fake_override(**kwargs):
+            """Provide fake override test helper or fixture."""
             r = MagicMock(spec=ModelRequest)
             r.model = kwargs.get("model")
             return r
@@ -254,6 +300,7 @@ async def test_official_model_router_custom_choices():
         routed_target = None
 
         async def handler(r):
+            """Provide handler test helper or fixture."""
             nonlocal routed_target
             routed_target = r.model
             return MagicMock(spec=ModelResponse)
@@ -264,6 +311,7 @@ async def test_official_model_router_custom_choices():
 
 @pytest.mark.asyncio
 async def test_middleware_bypasses_manual_and_auto_modes():
+    """Verify middleware bypasses manual and auto modes."""
     middleware = JevDynamicModelRouterMiddleware()
 
     # Manual mode context
@@ -280,6 +328,7 @@ async def test_middleware_bypasses_manual_and_auto_modes():
 
 @pytest.mark.asyncio
 async def test_middleware_activates_in_smart_mode_tier0():
+    """Verify middleware activates in smart mode tier0."""
     middleware = JevDynamicModelRouterMiddleware()
 
     smart_runtime = DummyRuntime(context={"approval_mode": "smart", "smart": True, "model": "google_genai:gemini-3.7-flash"})
@@ -292,7 +341,7 @@ async def test_middleware_activates_in_smart_mode_tier0():
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
 
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()) as mock_event:
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()) as mock_event:
                 result = await middleware.abefore_agent(state, smart_runtime)
 
                 assert result is not None
@@ -313,6 +362,7 @@ async def test_middleware_activates_in_smart_mode_tier0():
 
 @pytest.mark.asyncio
 async def test_middleware_activates_in_smart_mode_tier2():
+    """Verify middleware activates in smart mode tier2."""
     middleware = JevDynamicModelRouterMiddleware()
 
     smart_runtime = DummyRuntime(context={"approval_mode": "smart", "smart": True, "model": "google_genai:gemini-3.7-flash"})
@@ -325,7 +375,7 @@ async def test_middleware_activates_in_smart_mode_tier2():
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
 
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 result = await middleware.abefore_agent(state, smart_runtime)
 
                 assert result is not None
@@ -339,6 +389,7 @@ async def test_middleware_activates_in_smart_mode_tier2():
 
 @pytest.mark.asyncio
 async def test_awrap_model_call_overrides_model_and_settings_in_smart_mode():
+    """Verify awrap model call overrides model and settings in smart mode."""
     middleware = JevDynamicModelRouterMiddleware()
 
     mock_original_model = MagicMock()
@@ -360,6 +411,7 @@ async def test_awrap_model_call_overrides_model_and_settings_in_smart_mode():
     }
 
     def fake_override(**kwargs):
+        """Provide fake override test helper or fixture."""
         new_req = MagicMock(spec=ModelRequest)
         new_req.model = kwargs.get("model", mock_request.model)
         new_req.model_settings = kwargs.get("model_settings", mock_request.model_settings)
@@ -375,6 +427,7 @@ async def test_awrap_model_call_overrides_model_and_settings_in_smart_mode():
         handler_called_with = None
 
         async def fake_handler(req):
+            """Provide fake handler test helper or fixture."""
             nonlocal handler_called_with
             handler_called_with = req
             return MagicMock(spec=ModelResponse)
@@ -387,6 +440,7 @@ async def test_awrap_model_call_overrides_model_and_settings_in_smart_mode():
 
 @pytest.mark.asyncio
 async def test_fallback_on_classifier_failure():
+    """Verify fallback on classifier failure."""
     middleware = JevDynamicModelRouterMiddleware()
 
     smart_runtime = DummyRuntime(context={"approval_mode": "smart", "smart": True})
@@ -401,8 +455,9 @@ async def test_fallback_on_classifier_failure():
 
 
 def test_pool_manager_instantiates_tier0_with_effort_off(pool_manager):
-    with patch("opscloud.model.config.has_provider_credentials", return_value=True):
-        with patch("opscloud.model.factory.has_provider_credentials", return_value=True):
+    """Verify pool manager instantiates tier0 with effort off."""
+    with patch("talkops.model.config.has_provider_credentials", return_value=True):
+        with patch("talkops.model.factory.has_provider_credentials", return_value=True):
             model, spec, effort, settings = pool_manager.get_model_for_tier(
                 tier=0, base_spec="google_genai:gemini-3.7-flash"
             )
@@ -416,6 +471,7 @@ def test_pool_manager_instantiates_tier0_with_effort_off(pool_manager):
 
 @pytest.mark.asyncio
 async def test_middleware_activates_in_smart_mode_tier1_for_ops_execution(caplog):
+    """Verify middleware activates in smart mode tier1 for ops execution."""
     middleware = JevDynamicModelRouterMiddleware()
 
     smart_runtime = DummyRuntime(context={"approval_mode": "smart", "smart": True, "model": "google_genai:gemini-3.7-flash"})
@@ -429,7 +485,7 @@ async def test_middleware_activates_in_smart_mode_tier1_for_ops_execution(caplog
             with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
                 mock_inv.return_value = mock_response
 
-                with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+                with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                     result = await middleware.abefore_agent(state, smart_runtime)
 
                     assert result is not None
@@ -447,10 +503,13 @@ async def test_middleware_activates_in_smart_mode_tier1_for_ops_execution(caplog
 
 @pytest.mark.asyncio
 async def test_middleware_detects_smart_mode_from_configurable_or_store():
+    """Verify middleware detects smart mode from configurable or store."""
     middleware = JevDynamicModelRouterMiddleware()
 
     class ConfigRuntime:
+        """Test suite or helper class for config runtime."""
         def __init__(self):
+            """Initialize ConfigRuntime."""
             self.context = None
             self.config = {"configurable": {"approval_mode": "smart"}}
             self.store = None
@@ -464,7 +523,7 @@ async def test_middleware_detects_smart_mode_from_configurable_or_store():
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
 
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 result = await middleware.abefore_agent(state, ConfigRuntime())
                 assert result is not None
                 assert result["_dynamic_model_route"]["tier"] == 1
@@ -474,7 +533,8 @@ async def test_middleware_detects_smart_mode_from_configurable_or_store():
 
 @pytest.mark.asyncio
 async def test_message_extraction_helper():
-    from opscloud.middleware.jev_model_router import _extract_last_user_text
+    """Verify message extraction helper."""
+    from talkops.middleware.jev_model_router import _extract_last_user_text
 
     assert _extract_last_user_text({"messages": [{"role": "user", "content": "hello"}]}) == "hello"
 
@@ -493,7 +553,8 @@ async def test_message_extraction_helper():
 
 
 def test_user_configured_agent_pool_in_toml(tmp_path, pool_manager):
-    from opscloud.config.toml_config import (
+    """Verify user configured agent pool in toml."""
+    from talkops.config.toml_config import (
         clear_agent_pool,
         load_agent_pool,
         save_agent_pool,
@@ -519,7 +580,7 @@ def test_user_configured_agent_pool_in_toml(tmp_path, pool_manager):
     assert loaded["powerful"] == "google_genai:gemini-2.5-pro"
 
     # Pool manager respects user-configured pool
-    with patch("opscloud.config.toml_config.load_agent_pool", return_value=loaded):
+    with patch("talkops.config.toml_config.load_agent_pool", return_value=loaded):
         tiers = pool_manager.discover_tiers(provider="google_genai")
         assert tiers[0][0] == "google_genai:gemini-2.5-flash-lite"
         assert tiers[1][0] == "google_genai:gemini-2.5-flash"
@@ -544,8 +605,9 @@ def test_user_configured_agent_pool_in_toml(tmp_path, pool_manager):
 
 @pytest.mark.asyncio
 async def test_pool_command_handler(tmp_path):
-    from opscloud.commands._base import CommandContext
-    from opscloud.commands.core.pool import PoolHandler
+    """Verify pool command handler."""
+    from talkops.commands._base import CommandContext
+    from talkops.commands.core.pool import PoolHandler
 
     handler = PoolHandler()
     assert handler.name == "/pool"
@@ -561,7 +623,7 @@ async def test_pool_command_handler(tmp_path):
     assert res_status.message is not None and "Agent Model Pool Status" in res_status.message
 
     # 2. Set command
-    with patch("opscloud.commands.core.pool.save_agent_pool") as mock_save:
+    with patch("talkops.commands.core.pool.save_agent_pool") as mock_save:
         ctx_set = CommandContext(
             app=mock_app,
             raw_command="/pool set fast=gemini-3.6-flash standard=gemini-3.7-flash powerful=gemini-3.1-pro-preview",
@@ -576,7 +638,7 @@ async def test_pool_command_handler(tmp_path):
         assert saved_dict["powerful"] == "gemini-3.1-pro-preview"
 
     # 3. Clear command
-    with patch("opscloud.commands.core.pool.clear_agent_pool") as mock_clear:
+    with patch("talkops.commands.core.pool.clear_agent_pool") as mock_clear:
         ctx_clear = CommandContext(app=mock_app, raw_command="/pool clear", args="clear")
         res_clear = await handler.execute(ctx_clear)
         assert res_clear.success is True
@@ -590,7 +652,7 @@ async def test_pool_command_handler(tmp_path):
     mock_app._show_pool_selector.assert_called_once()
 
 
-# ── Benchmark Test Suite & Safeguard Tests (OPSCLOUD-JEV-09) ───────────────────
+# ── Benchmark Test Suite & Safeguard Tests (TALKOPS-JEV-09) ───────────────────
 
 
 @pytest.mark.parametrize(
@@ -666,7 +728,7 @@ async def test_operational_benchmark_classification(
     with patch.object(middleware, "is_available", return_value=True):
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 res = await middleware.abefore_agent(state, runtime)
                 assert res is not None
                 route_info = res["_dynamic_model_route"]
@@ -689,7 +751,7 @@ async def test_confidence_safeguard_escalates_incident_prompt():
     with patch.object(middleware, "is_available", return_value=True):
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 res = await middleware.abefore_agent(state, runtime)
                 assert res is not None
                 route_info = res["_dynamic_model_route"]
@@ -711,7 +773,7 @@ async def test_confidence_safeguard_for_subagent_escalates_to_standard():
     with patch.object(middleware, "is_available", return_value=True):
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 res = await middleware.abefore_agent(state, runtime)
                 assert res is not None
                 route_info = res["_dynamic_model_route"]
@@ -733,7 +795,7 @@ async def test_confidence_safeguard_promotes_ambiguous_fast_to_standard():
     with patch.object(middleware, "is_available", return_value=True):
         with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
             mock_inv.return_value = mock_response
-            with patch("opscloud.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
                 res = await middleware.abefore_agent(state, runtime)
                 assert res is not None
                 route_info = res["_dynamic_model_route"]
@@ -744,7 +806,7 @@ async def test_confidence_safeguard_promotes_ambiguous_fast_to_standard():
 @pytest.mark.asyncio
 async def test_enriched_routing_state_orchestrator_vs_subagent():
     """Verify enriched state payload has subagent_ecosystem on orchestrator and None (nil) on subagent."""
-    from opscloud.middleware.jev_model_router import _build_jev_routing_state
+    from talkops.middleware.jev_model_router import _build_jev_routing_state
 
     user_msg = HumanMessage(content="can you help me in optimizing my aws cost")
 
@@ -757,7 +819,7 @@ async def test_enriched_routing_state_orchestrator_vs_subagent():
     )
     assert orch_state["is_subagent"] is False
     assert orch_state["agent_role"] == "orchestrator"
-    assert orch_state["agent_name"] == "opscloud-supervisor"
+    assert orch_state["agent_name"] == "talkops-supervisor"
     assert isinstance(orch_state["subagent_ecosystem"], list)
     assert "software_and_devops_coding" in orch_state["agent_context"]["active_capabilities"]
     assert "multi_agent_delegation" in orch_state["agent_context"]["active_capabilities"]
@@ -780,4 +842,84 @@ async def test_enriched_routing_state_orchestrator_vs_subagent():
     assert "multi_agent_delegation" not in sub_state["agent_context"]["active_capabilities"]
     assert "cloud_financial_management" in sub_state["agent_context"]["active_capabilities"]
     assert "cost_and_usage_analysis" in sub_state["agent_context"]["active_capabilities"]
+
+
+def test_multi_provider_agent_pool_tier_discovery(tmp_path, pool_manager, monkeypatch):
+    """Verify that multi-provider agent pools resolve correctly across different providers and effort levels."""
+    monkeypatch.setenv("OPENAI_API_KEY", "mock-test-key-openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "mock-test-key-anthropic")
+    monkeypatch.setenv("GOOGLE_API_KEY", "mock-test-key-google")
+    from talkops.config.toml_config import (
+        clear_agent_pool,
+        load_agent_pool,
+        save_agent_pool,
+    )
+
+    tmp_config = tmp_path / "config.toml"
+    multi_pool = {
+        "fast": "openai:gpt-4o-mini",
+        "standard": "google_genai:gemini-2.5-flash",
+        "powerful": "anthropic:claude-sonnet-4-6",
+    }
+    assert save_agent_pool(multi_pool, provider="multi", config_path=tmp_config) is True
+
+    loaded = load_agent_pool(tmp_config)
+    assert loaded is not None
+    assert loaded["fast"] == "openai:gpt-4o-mini"
+    assert loaded["standard"] == "google_genai:gemini-2.5-flash"
+    assert loaded["powerful"] == "anthropic:claude-sonnet-4-6"
+    assert loaded["provider"] == "multi"
+
+    with patch("talkops.config.toml_config.load_agent_pool", return_value=loaded):
+        # 1. Resolves multi-provider pool regardless of passed provider
+        for prov in ("google_genai", "openai", "anthropic", None):
+            tiers = pool_manager.discover_tiers(provider=prov)
+            assert tiers[0][0] == "openai:gpt-4o-mini"
+            assert tiers[1][0] == "google_genai:gemini-2.5-flash"
+            assert tiers[2][0] == "anthropic:claude-sonnet-4-6"
+            assert tiers[0][1] == "off"
+            assert tiers[1][1] in ("off", "medium")
+            assert tiers[2][1] in ("high", "max")
+
+        # 2. Resolves multi-provider pool with base_spec
+        tiers_base = pool_manager.discover_tiers(base_spec="google_genai:gemini-2.5-flash")
+        assert tiers_base[0][0] == "openai:gpt-4o-mini"
+        assert tiers_base[1][0] == "google_genai:gemini-2.5-flash"
+        assert tiers_base[2][0] == "anthropic:claude-sonnet-4-6"
+
+        # 3. Model choices criteria reflect distinct providers
+        choices = pool_manager.get_model_choices(provider="google_genai")
+        assert "gpt-4o-mini" in choices["fast"].criteria
+        assert "gemini-2.5-flash" in choices["standard"].criteria
+        assert "claude-sonnet-4-6" in choices["powerful"].criteria
+
+
+def test_pool_manager_validate_pool(pool_manager):
+    """Verify validation of pool configurations and credential warning detection."""
+    # 1. Valid multi-provider pool
+    is_valid, warnings = pool_manager.validate_pool({
+        "fast": "openai:gpt-4o-mini",
+        "standard": "google_genai:gemini-2.5-flash",
+        "powerful": "anthropic:claude-sonnet-4-6",
+    })
+    assert is_valid is True
+    # warnings may be empty or contain missing credential notices depending on env
+    assert isinstance(warnings, list)
+
+    # 2. Incomplete pool (missing tier)
+    is_valid_incomplete, errs = pool_manager.validate_pool({
+        "fast": "openai:gpt-4o-mini",
+        "standard": "",
+    })
+    assert is_valid_incomplete is False
+    assert any("standard" in e for e in errs)
+
+    # 3. Unrecognized provider
+    is_valid_unknown, warn_unknown = pool_manager.validate_pool({
+        "fast": "invalid_provider:model-x",
+        "standard": "google_genai:gemini-2.5-flash",
+        "powerful": "anthropic:claude-sonnet-4-5",
+    })
+    assert is_valid_unknown is True
+    assert any("invalid_provider" in w for w in warn_unknown)
 

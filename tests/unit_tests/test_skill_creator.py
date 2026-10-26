@@ -1,15 +1,30 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for the skill-creator built-in skill, scripts, and slash command integration."""
 
 import importlib.util
 import os
 from pathlib import Path
+
 import pytest
 
-from opscloud.commands import CommandContext, CommandRouter
-from opscloud.commands.power.skill_creator import SkillCreatorHandler
-from opscloud.ui.command_registry import (
-    COMMANDS,
+from talkops.commands import CommandContext, CommandRouter
+from talkops.commands.power.skill_creator import SkillCreatorHandler
+from talkops.ui.command_registry import (
     _STATIC_SKILL_ALIASES,
+    COMMANDS,
     build_skill_commands,
     get_all_entries,
     get_command,
@@ -18,6 +33,8 @@ from opscloud.ui.command_registry import (
 
 def _load_script_module(script_path: Path, module_name: str):
     spec = importlib.util.spec_from_file_location(module_name, script_path)
+    assert spec is not None
+    assert spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -28,7 +45,7 @@ def test_skill_creator_built_in_files_exist():
     root_skill_dir = (
         Path(__file__).parent.parent.parent
         / "src"
-        / "opscloud"
+        / "talkops"
         / "built_in_skills"
         / "skill-creator"
     )
@@ -51,7 +68,7 @@ def test_quick_validate_on_skill_creator():
     root_skill_dir = (
         Path(__file__).parent.parent.parent
         / "src"
-        / "opscloud"
+        / "talkops"
         / "built_in_skills"
         / "skill-creator"
     )
@@ -68,7 +85,7 @@ def test_init_skill_and_quick_validate_lifecycle(tmp_path: Path):
     root_skill_dir = (
         Path(__file__).parent.parent.parent
         / "src"
-        / "opscloud"
+        / "talkops"
         / "built_in_skills"
         / "skill-creator"
     )
@@ -108,7 +125,7 @@ def test_quick_validate_catches_invalid_skills(tmp_path: Path):
     root_skill_dir = (
         Path(__file__).parent.parent.parent
         / "src"
-        / "opscloud"
+        / "talkops"
         / "built_in_skills"
         / "skill-creator"
     )
@@ -174,7 +191,9 @@ async def test_skill_creator_handler_delegation():
     handler = SkillCreatorHandler()
 
     class MockApp:
+        """Test suite or helper class for mock app."""
         def __init__(self):
+            """Initialize MockApp."""
             self.invoked_command = None
 
         async def _handle_skill_command(self, command: str) -> None:
@@ -198,32 +217,39 @@ async def test_skill_creator_handler_delegation():
 
 
 def test_build_skill_commands_autocomplete_entries():
-    """Verify build_skill_commands builds /skill:<name> entries and respects _STATIC_SKILL_ALIASES."""
+    """Verify build_skill_commands builds /<plugin>:<skill> and /<skill> entries and respects _STATIC_SKILL_ALIASES."""
     mock_skills = [
         {"name": "remember", "description": "Save memories", "source": "built-in"},
         {"name": "skill-creator", "description": "Create skills", "source": "built-in"},
         {"name": "aws-eks", "description": "Manage EKS", "source": "built-in"},
         {"name": "my-plugin:audit", "description": "Plugin audit", "source": "plugin"},
+        {"name": "aws-core@agent-toolkit-for-aws:signing-in-to-aws", "description": "Sign in to AWS", "source": "plugin"},
     ]
 
     entries = build_skill_commands(mock_skills)
     names = [e.name for e in entries]
 
     # remember and skill-creator should be excluded because they are in _STATIC_SKILL_ALIASES
-    assert "/skill:remember" not in names
-    assert "/skill:skill-creator" not in names
+    assert "/remember" not in names
+    assert "/skill-creator" not in names
 
-    # Other skills should be present
-    assert "/skill:aws-eks" in names
-    assert "/skill:my-plugin:audit" in names
+    # Non-plugin skills are registered as /<skill-name>, plugin skills as /<plugin>:<skill-name>
+    assert "/aws-eks" in names
+    assert "/my-plugin:audit" in names
+    assert "/aws-core:signing-in-to-aws" in names
 
-    # Plugin display name should be shortened
-    plugin_entry = next(e for e in entries if e.name == "/skill:my-plugin:audit")
-    assert plugin_entry.display_name == "/skill:audit"
-    assert "(my-plugin)" in plugin_entry.description
+    # Plugin display name is clean without @marketplace noise in description
+    plugin_entry = next(e for e in entries if e.name == "/my-plugin:audit")
+    assert plugin_entry.display_name == ""
+    assert plugin_entry.description == "Plugin audit"
+
+    aws_entry = next(e for e in entries if e.name == "/aws-core:signing-in-to-aws")
+    assert aws_entry.display_name == ""
+    assert aws_entry.description == "Sign in to AWS"
 
     all_entries = get_all_entries(entries)
     all_names = [e.name for e in all_entries]
     assert "/skill-creator" in all_names
     assert "/skill:skill-creator" in all_names
-    assert "/skill:aws-eks" in all_names
+    assert "/aws-eks" in all_names
+    assert "/my-plugin:audit" in all_names

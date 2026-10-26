@@ -1,4 +1,18 @@
-"""Comprehensive unit tests for OpsCloud Config Module.
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Comprehensive unit tests for TalkOps Config Module.
 
 Tests:
 1. Paths & directory helpers (AWS/IaC root detection)
@@ -14,15 +28,18 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+
 import pytest
 
-from opscloud.config.aws import (
+from talkops.config.adapters.sqlite import SqliteConfigAdapter
+from talkops.config.aws import (
     AWSIdentity,
     get_aws_credentials_dict,
     get_boto3_session,
     resolve_aws_identity,
 )
-from opscloud.config.manifest import (
+from talkops.config.langsmith import apply_tracing_settings, get_langsmith_project_name
+from talkops.config.manifest import (
     OptionKind,
     coerce_str_value,
     get_config_options,
@@ -32,23 +49,24 @@ from opscloud.config.manifest import (
     resolve_scalar,
     serialize_typed_value,
 )
-from opscloud.config.paths import (
+from talkops.config.paths import (
     AWS_PRESERVE_ENV_VARS,
     CONFIG_PATH,
     DATA_DIR,
     ENV_PREFIX,
     GLOBAL_ENV_PATH,
-    OPSCLOUD_HOME,
     SESSIONS_DB_PATH,
     STATE_DIR,
+    TALKOPS_HOME,
     agent_dir,
     find_project_root,
     user_agent_md,
     user_agents_dir,
     user_skills_dir,
 )
-from opscloud.config.settings import (
+from talkops.config.settings import (
     Settings,
+    _load_dotenv,
     get_glyphs,
     is_ascii_mode,
     newline_shortcut,
@@ -56,18 +74,16 @@ from opscloud.config.settings import (
     resolve_env_var,
     sync_aws_env_aliases,
 )
-from opscloud.config.store import ConfigCategory, ConfigStore
-from opscloud.config.adapters.sqlite import SqliteConfigAdapter
-from opscloud.config.langsmith import apply_tracing_settings, get_langsmith_project_name
-
+from talkops.config.store import ConfigCategory, ConfigStore
 
 # ── 1. Paths & Root Detection Tests ───────────────────────
 
 
 def test_paths_constants():
-    assert ENV_PREFIX == "OPSCLOUD_"
-    assert OPSCLOUD_HOME == DATA_DIR
-    assert DATA_DIR.name == ".opscloud"
+    """Verify paths constants."""
+    assert ENV_PREFIX == "TALKOPS_"
+    assert TALKOPS_HOME == DATA_DIR
+    assert DATA_DIR.name == ".talkops"
     assert STATE_DIR == DATA_DIR / ".state"
     assert CONFIG_PATH == DATA_DIR / "config.toml"
     assert GLOBAL_ENV_PATH == DATA_DIR / ".env"
@@ -75,6 +91,7 @@ def test_paths_constants():
 
 
 def test_aws_preserve_env_vars():
+    """Verify aws preserve env vars."""
     assert "AWS_REGION" in AWS_PRESERVE_ENV_VARS
     assert "AWS_DEFAULT_REGION" in AWS_PRESERVE_ENV_VARS
     assert "AWS_PROFILE" in AWS_PRESERVE_ENV_VARS
@@ -87,6 +104,7 @@ def test_aws_preserve_env_vars():
 
 def test_directory_helpers(tmp_path: Path):
     # Custom assistant
+    """Verify directory helpers."""
     skills_dir = user_skills_dir("aws-ops")
     assert skills_dir.name == "skills"
     agents_dir = user_agents_dir("aws-ops")
@@ -94,8 +112,8 @@ def test_directory_helpers(tmp_path: Path):
     agent_md = user_agent_md("aws-ops")
     assert agent_md.name == "AGENTS.md"
 
-    # Default assistant ('opscloud')
-    from opscloud.config.paths import DATA_DIR
+    # Default assistant ('talkops')
+    from talkops.config.paths import DATA_DIR
     assert user_skills_dir().resolve() == (DATA_DIR / "skills").resolve()
     assert user_agents_dir().resolve() == (DATA_DIR / "agents").resolve()
     assert user_agent_md().resolve() == (DATA_DIR / "AGENTS.md").resolve()
@@ -103,6 +121,7 @@ def test_directory_helpers(tmp_path: Path):
 
 
 def test_find_project_root_cdk(tmp_path: Path):
+    """Verify find project root cdk."""
     project_dir = tmp_path / "cdk-infra"
     project_dir.mkdir()
     (project_dir / "cdk.json").write_text('{"app": "npx ts-node bin/infra.ts"}')
@@ -115,6 +134,7 @@ def test_find_project_root_cdk(tmp_path: Path):
 
 
 def test_find_project_root_terraform(tmp_path: Path):
+    """Verify find project root terraform."""
     project_dir = tmp_path / "tf-infra"
     project_dir.mkdir()
     (project_dir / "main.tf").write_text('terraform { required_version = ">= 1.5.0" }')
@@ -127,6 +147,7 @@ def test_find_project_root_terraform(tmp_path: Path):
 
 
 def test_find_project_root_sam(tmp_path: Path):
+    """Verify find project root sam."""
     project_dir = tmp_path / "sam-app"
     project_dir.mkdir()
     (project_dir / "template.yaml").write_text("AWSTemplateFormatVersion: '2010-09-09'")
@@ -142,8 +163,9 @@ def test_find_project_root_sam(tmp_path: Path):
 
 
 def test_settings_defaults():
+    """Verify settings defaults."""
     s = Settings()
-    assert s.assistant_id == "opscloud"
+    assert s.assistant_id == "talkops"
     assert s.aws_region == "us-east-1"
     assert s.aws_profile == "default"
     assert s.model_name is None
@@ -155,6 +177,7 @@ def test_settings_defaults():
 
 
 def test_settings_model_property_alias():
+    """Verify settings model property alias."""
     s = Settings()
     s.model = "anthropic:claude-3-5-sonnet"
     assert s.model_name == "anthropic:claude-3-5-sonnet"
@@ -162,6 +185,7 @@ def test_settings_model_property_alias():
 
 
 def test_settings_set_and_reset_field(tmp_path: Path):
+    """Verify settings set and reset field."""
     s = Settings()
 
     # String field
@@ -200,6 +224,7 @@ def test_settings_set_and_reset_field(tmp_path: Path):
 
 
 def test_settings_to_display_dict():
+    """Verify settings to display dict."""
     s = Settings(model_name="openai:gpt-4o")
     disp = s.to_display_dict()
     assert "aws_region" in disp
@@ -210,6 +235,7 @@ def test_settings_to_display_dict():
 
 
 def test_parse_shell_allow_list():
+    """Verify parse shell allow list."""
     assert parse_shell_allow_list(None) is None
     assert parse_shell_allow_list("") == []
     assert parse_shell_allow_list("  ") == []
@@ -221,6 +247,7 @@ def test_parse_shell_allow_list():
 
 
 def test_sync_aws_env_aliases(monkeypatch):
+    """Verify sync aws env aliases."""
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
@@ -247,11 +274,12 @@ def test_sync_aws_env_aliases(monkeypatch):
 
 
 def test_resolve_env_var_priority(monkeypatch):
-    monkeypatch.setenv("OPSCLOUD_TEST_KEY", "prefixed_val")
+    """Verify resolve env var priority."""
+    monkeypatch.setenv("TALKOPS_TEST_KEY", "prefixed_val")
     monkeypatch.setenv("TEST_KEY", "plain_val")
     assert resolve_env_var("TEST_KEY") == "prefixed_val"
 
-    monkeypatch.delenv("OPSCLOUD_TEST_KEY", raising=False)
+    monkeypatch.delenv("TALKOPS_TEST_KEY", raising=False)
     assert resolve_env_var("TEST_KEY") == "plain_val"
 
 
@@ -259,6 +287,7 @@ def test_resolve_env_var_priority(monkeypatch):
 
 
 def test_manifest_options_and_groups():
+    """Verify manifest options and groups."""
     options = get_config_options()
     assert len(options) > 10
 
@@ -282,6 +311,7 @@ def test_manifest_options_and_groups():
 
 def test_coercion_and_serialization(tmp_path: Path):
     # Bool
+    """Verify coercion and serialization."""
     assert coerce_str_value(OptionKind.BOOL, "true") is True
     assert coerce_str_value(OptionKind.BOOL, "0") is False
     assert serialize_typed_value(OptionKind.BOOL, True) == "true"
@@ -303,13 +333,14 @@ def test_coercion_and_serialization(tmp_path: Path):
 
 
 def test_resolve_scalar_precedence(monkeypatch):
+    """Verify resolve scalar precedence."""
     opt = get_option("aws.region")
     assert opt is not None
 
     # Default fallback
-    monkeypatch.delenv("OPSCLOUD_AWS_REGION", raising=False)
+    monkeypatch.delenv("TALKOPS_AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_REGION", raising=False)
-    val, source = resolve_scalar(opt)
+    val, source = resolve_scalar(opt, toml_data={})
     assert val == "us-east-1"
     assert source == "default"
 
@@ -331,6 +362,7 @@ def test_resolve_scalar_precedence(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sqlite_config_store(tmp_path: Path):
+    """Verify sqlite config store."""
     db_file = tmp_path / "test_config.db"
     adapter = SqliteConfigAdapter(db_file)
     store = ConfigStore(adapter)
@@ -359,6 +391,7 @@ async def test_sqlite_config_store(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_settings_sync_to_store(tmp_path: Path):
+    """Verify settings sync to store."""
     db_file = tmp_path / "sync_config.db"
     adapter = SqliteConfigAdapter(db_file)
     store = ConfigStore(adapter)
@@ -376,6 +409,7 @@ async def test_settings_sync_to_store(tmp_path: Path):
 
 
 def test_aws_identity_dataclass():
+    """Verify aws identity dataclass."""
     ident = AWSIdentity(
         account_id="123456789012",
         region="us-west-2",
@@ -389,6 +423,7 @@ def test_aws_identity_dataclass():
 
 
 def test_get_boto3_session():
+    """Verify get boto3 session."""
     session = get_boto3_session(region="us-west-2")
     assert session is not None
     assert session.region_name == "us-west-2"
@@ -396,12 +431,14 @@ def test_get_boto3_session():
 
 def test_resolve_aws_identity_safe():
     # Calling in mock/local environment safely returns AWSIdentity without crashing
+    """Verify resolve aws identity safe."""
     ident = resolve_aws_identity(region="us-east-1")
     assert isinstance(ident, AWSIdentity)
     assert ident.region == "us-east-1"
 
 
 def test_get_aws_credentials_dict():
+    """Verify get aws credentials dict."""
     creds = get_aws_credentials_dict()
     assert isinstance(creds, dict)
 
@@ -410,36 +447,39 @@ def test_get_aws_credentials_dict():
 
 
 def test_langsmith_project_name(monkeypatch):
-    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
-    monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+    """Verify langsmith project name."""
+    monkeypatch.setenv("LANGSMITH_API_KEY", "")
+    monkeypatch.setenv("LANGCHAIN_API_KEY", "")
     assert get_langsmith_project_name() is None
 
     monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_pt_test")
     monkeypatch.setenv("LANGSMITH_TRACING", "true")
-    monkeypatch.setenv("OPSCLOUD_LANGSMITH_PROJECT", "opscloud-prod")
-    assert get_langsmith_project_name() == "opscloud-prod"
+    monkeypatch.setenv("TALKOPS_LANGSMITH_PROJECT", "talkops-prod")
+    assert get_langsmith_project_name() == "talkops-prod"
 
 
 def test_apply_tracing_settings(monkeypatch):
+    """Verify apply tracing settings."""
     monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
     monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
 
     s = Settings(
         langchain_api_key="lsv2_pt_test",
         langchain_tracing=True,
-        langchain_project="opscloud-tracing-test",
+        langchain_project="talkops-tracing-test",
     )
     applied = apply_tracing_settings(s)
     assert applied is True
     assert os.environ.get("LANGCHAIN_TRACING_V2") == "true"
     assert os.environ.get("LANGSMITH_TRACING") == "true"
-    assert os.environ.get("LANGCHAIN_PROJECT") == "opscloud-tracing-test"
+    assert os.environ.get("LANGCHAIN_PROJECT") == "talkops-tracing-test"
 
 
 # ── 8. UI Glyphs & Charset Mode Tests ─────────────────────
 
 
 def test_ui_glyphs():
+    """Verify ui glyphs."""
     glyphs = get_glyphs()
     assert glyphs is not None
     assert glyphs.checkmark in ("✓", "[OK]")
@@ -461,11 +501,12 @@ def test_project_cwd_not_in_persistent_manifest():
 
 
 def test_settings_cwd_and_server_context(monkeypatch, tmp_path: Path):
+    """Verify settings cwd and server context."""
     user_dir = tmp_path / "workspace_test"
     user_dir.mkdir()
 
-    from opscloud.project_utils import ProjectContext
-    from opscloud.server import SERVER_ENV_PREFIX, ServerConfig
+    from talkops.project_utils import ProjectContext
+    from talkops.server import SERVER_ENV_PREFIX, ServerConfig
 
     monkeypatch.setenv(f"{SERVER_ENV_PREFIX}CWD", str(user_dir))
     monkeypatch.setenv(f"{SERVER_ENV_PREFIX}PROJECT_ROOT", str(user_dir))
@@ -484,6 +525,7 @@ def test_settings_cwd_and_server_context(monkeypatch, tmp_path: Path):
 
 
 def test_find_project_root_excludes_home(monkeypatch, tmp_path: Path):
+    """Verify find project root excludes home."""
     home_dir = tmp_path / "fake_home"
     home_dir.mkdir()
     (home_dir / "package.json").write_text("{}")
@@ -494,7 +536,8 @@ def test_find_project_root_excludes_home(monkeypatch, tmp_path: Path):
 
 
 def test_resolve_model_context_limit():
-    from opscloud.model.config import resolve_model_context_limit
+    """Verify resolve model context limit."""
+    from talkops.model.config import resolve_model_context_limit
 
     # 1. Known model in MODEL_PROFILES / langchain
     claude_limit = resolve_model_context_limit("anthropic:claude-3-5-sonnet-20241022")
@@ -509,3 +552,256 @@ def test_resolve_model_context_limit():
 
     # 3. None falls back to settings
     assert resolve_model_context_limit(None) is not None
+
+
+# ── 10. Dotenv Precedence & Vertex AI Tests ────────────────
+
+
+def test_load_dotenv_global_overrides_project_env(tmp_path: Path, monkeypatch):
+    """Global ~/.talkops/.env credentials must override generic project .env."""
+    from talkops.config import paths
+
+    # Fake home & global env
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    global_talkops = fake_home / ".talkops"
+    global_talkops.mkdir()
+    global_env_file = global_talkops / ".env"
+    global_env_file.write_text(
+        "GOOGLE_API_KEY=AIzaSy_GLOBAL_VALID\n"
+        "GOOGLE_GENAI_USE_VERTEXAI=true\n"
+        "SHARED_KEY=from_global\n"
+    )
+
+    # Project directory with conflicting/stale project .env
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    (project_dir / "pyproject.toml").write_text("[project]\nname='test'\n")
+    (project_dir / ".env").write_text(
+        "GOOGLE_API_KEY=STALE_PROJECT_KEY\n"
+        "PROJECT_ONLY_KEY=proj_val\n"
+        "SHARED_KEY=from_project\n"
+    )
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.setattr(paths, "GLOBAL_ENV_PATH", global_env_file)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("PROJECT_ONLY_KEY", raising=False)
+    monkeypatch.delenv("SHARED_KEY", raising=False)
+
+    _load_dotenv(start_path=project_dir, refresh_loaded=True)
+
+    # Global must win over generic project .env
+    assert os.environ["GOOGLE_API_KEY"] == "AIzaSy_GLOBAL_VALID"
+    assert os.environ["GOOGLE_GENAI_USE_VERTEXAI"] == "true"
+    assert os.environ["SHARED_KEY"] == "from_global"
+    # Project-only key still loaded as baseline
+    assert os.environ["PROJECT_ONLY_KEY"] == "proj_val"
+
+
+def test_load_dotenv_project_talkops_env_overrides_global(tmp_path: Path, monkeypatch):
+    """Project-scoped {project_root}/.talkops/.env overrides global ~/.talkops/.env."""
+    from talkops.config import paths
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    global_talkops = fake_home / ".talkops"
+    global_talkops.mkdir()
+    (global_talkops / ".env").write_text("SHARED_VAR=from_global\nGLOBAL_ONLY=g\n")
+
+    project_dir = tmp_path / "special_proj"
+    project_dir.mkdir()
+    (project_dir / ".git").mkdir()
+    proj_talkops = project_dir / ".talkops"
+    proj_talkops.mkdir()
+    (proj_talkops / ".env").write_text("SHARED_VAR=from_project_talkops\n")
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.setattr(paths, "GLOBAL_ENV_PATH", global_talkops / ".env")
+    monkeypatch.delenv("SHARED_VAR", raising=False)
+    monkeypatch.delenv("GLOBAL_ONLY", raising=False)
+
+    _load_dotenv(start_path=project_dir, refresh_loaded=True)
+
+    assert os.environ["SHARED_VAR"] == "from_project_talkops"
+    assert os.environ["GLOBAL_ONLY"] == "g"
+
+
+def test_load_dotenv_bounded_by_project_root(tmp_path: Path, monkeypatch):
+    """Walk-up stops at project root and does not traverse higher outside the repository."""
+    parent_dir = tmp_path / "outer"
+    parent_dir.mkdir()
+    # Unrelated parent .env outside repo
+    (parent_dir / ".env").write_text("OUTSIDE_KEY=should_not_load\n")
+
+    repo_dir = parent_dir / "my_repo"
+    repo_dir.mkdir()
+    (repo_dir / "pyproject.toml").write_text("[project]\nname='repo'\n")
+    sub_dir = repo_dir / "src" / "pkg"
+    sub_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("OUTSIDE_KEY", raising=False)
+    _load_dotenv(start_path=sub_dir, refresh_loaded=True)
+
+    assert "OUTSIDE_KEY" not in os.environ
+
+
+def test_load_dotenv_denied_keys_filtered(tmp_path: Path, monkeypatch):
+    """Denied environment keys like PATH and HOME cannot be set by .env."""
+    project_dir = tmp_path / "denied_test"
+    project_dir.mkdir()
+    (project_dir / ".env").write_text("PATH=/dangerous/path\nHOME=/dangerous/home\nSAFE_KEY=safe\n")
+
+    orig_path = os.environ.get("PATH")
+    monkeypatch.delenv("SAFE_KEY", raising=False)
+
+    _load_dotenv(start_path=project_dir, refresh_loaded=True)
+
+    assert os.environ.get("PATH") == orig_path
+    assert os.environ.get("SAFE_KEY") == "safe"
+
+
+def test_apply_stored_credentials_vertex_ai(monkeypatch):
+    """apply_stored_credentials keeps google_vertexai and google_genai strictly separated."""
+    from talkops.config.settings import get_settings
+    from talkops.model.config import apply_stored_credentials
+
+    s = get_settings()
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-gcp-project")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(s, "google_api_key", None, raising=False)
+    monkeypatch.setattr("talkops.state.remote_session._can_use_disk_auth_session", lambda: False)
+
+    applied = apply_stored_credentials("google_genai")
+    assert applied is False
+    assert os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") != "true"
+
+    # google_vertexai applies GOOGLE_CLOUD_PROJECT without polluting GOOGLE_GENAI_USE_VERTEXAI
+    applied_vtx = apply_stored_credentials("google_vertexai")
+    assert applied_vtx is True
+    assert os.environ.get("GOOGLE_CLOUD_PROJECT") == "test-gcp-project"
+    assert os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") != "true"
+
+
+def test_load_dotenv_project_denied_security_keys(tmp_path: Path, monkeypatch):
+    """Project-level .env cannot inject operational security or trust-boundary settings."""
+    project_dir = tmp_path / "security_test"
+    project_dir.mkdir()
+    (project_dir / ".env").write_text(
+        "TALKOPS_APPROVAL_MODE=auto\n"
+        "APPROVAL_MODE=auto\n"
+        "TALKOPS_SHELL_ALLOW_LIST=rm,cat\n"
+        "SHELL_ALLOW_LIST=rm,cat\n"
+        "TALKOPS_READ_ONLY=false\n"
+        "READ_ONLY=false\n"
+        "TALKOPS_READ_PROJECT_DOTENV=false\n"
+        "READ_PROJECT_DOTENV=false\n"
+        "TALKOPS_CONFIG_DIR=/tmp/hijack\n"
+        "CONFIG_DIR=/tmp/hijack\n"
+        "TERM_PROGRAM=Apple_Terminal\n"
+        "PROJECT_SAFE_VAL=allowed_123\n"
+    )
+
+    for key in (
+        "TALKOPS_APPROVAL_MODE",
+        "APPROVAL_MODE",
+        "TALKOPS_SHELL_ALLOW_LIST",
+        "SHELL_ALLOW_LIST",
+        "TALKOPS_READ_ONLY",
+        "READ_ONLY",
+        "TALKOPS_READ_PROJECT_DOTENV",
+        "READ_PROJECT_DOTENV",
+        "TALKOPS_CONFIG_DIR",
+        "CONFIG_DIR",
+        "PROJECT_SAFE_VAL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    _load_dotenv(start_path=project_dir, refresh_loaded=True)
+
+    assert "TALKOPS_APPROVAL_MODE" not in os.environ
+    assert "APPROVAL_MODE" not in os.environ
+    assert "TALKOPS_SHELL_ALLOW_LIST" not in os.environ
+    assert "SHELL_ALLOW_LIST" not in os.environ
+    assert "TALKOPS_READ_ONLY" not in os.environ
+    assert "READ_ONLY" not in os.environ
+    assert "TALKOPS_READ_PROJECT_DOTENV" not in os.environ
+    assert "READ_PROJECT_DOTENV" not in os.environ
+    assert "TALKOPS_CONFIG_DIR" not in os.environ
+    assert "CONFIG_DIR" not in os.environ
+    assert os.environ.get("PROJECT_SAFE_VAL") == "allowed_123"
+
+
+def test_load_dotenv_read_project_dotenv_disabled(tmp_path: Path, monkeypatch):
+    """When read_project_dotenv is disabled, project .env is skipped while global .env is loaded."""
+    from talkops.config.settings import resolve_read_project_dotenv
+
+    project_dir = tmp_path / "opt_out_repo"
+    project_dir.mkdir()
+    (project_dir / "pyproject.toml").write_text("[project]\nname='test'\n")
+    (project_dir / ".env").write_text("FROM_PROJECT=should_be_skipped\n")
+
+    global_env = tmp_path / "global_home_env"
+    global_env.write_text("FROM_GLOBAL=trusted_val\n")
+    monkeypatch.setattr("talkops.config.paths.GLOBAL_ENV_PATH", global_env)
+
+    monkeypatch.delenv("FROM_PROJECT", raising=False)
+    monkeypatch.delenv("FROM_GLOBAL", raising=False)
+
+    # Opt-out via environment variable
+    monkeypatch.setenv("TALKOPS_READ_PROJECT_DOTENV", "false")
+    assert resolve_read_project_dotenv() is False
+
+    _load_dotenv(start_path=project_dir, refresh_loaded=True)
+
+    assert "FROM_PROJECT" not in os.environ
+    assert os.environ.get("FROM_GLOBAL") == "trusted_val"
+
+
+def test_strip_dotenv_loaded_values(tmp_path: Path, monkeypatch):
+    """_strip_dotenv_loaded_values cleans injected keys but retains modified or pre-existing values."""
+    from talkops.config.settings import (
+        _dotenv_loaded_values,
+        _strip_dotenv_loaded_values,
+    )
+
+    project_dir = tmp_path / "strip_test"
+    project_dir.mkdir()
+    (project_dir / ".env").write_text("INJECTED_A=val_a\nINJECTED_B=val_b\n")
+
+    monkeypatch.delenv("INJECTED_A", raising=False)
+    monkeypatch.delenv("INJECTED_B", raising=False)
+
+    _load_dotenv(start_path=project_dir, refresh_loaded=True)
+    assert os.environ.get("INJECTED_A") == "val_a"
+    assert os.environ.get("INJECTED_B") == "val_b"
+
+    # User code mutates INJECTED_B
+    os.environ["INJECTED_B"] = "mutated_by_user"
+
+    # Strip injected values
+    _strip_dotenv_loaded_values(os.environ)
+
+    # INJECTED_A matches what was injected -> stripped
+    assert "INJECTED_A" not in os.environ
+    # INJECTED_B was changed -> preserved
+    assert os.environ.get("INJECTED_B") == "mutated_by_user"
+
+
+def test_apply_stored_credentials_base_url(monkeypatch):
+    """apply_stored_credentials syncs primary base URL and its aliases."""
+    from talkops.model.config import apply_stored_credentials
+
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://custom.anthropic.proxy/v1")
+    monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+
+    applied = apply_stored_credentials("anthropic")
+    assert applied is True
+    assert os.environ.get("ANTHROPIC_BASE_URL") == "https://custom.anthropic.proxy/v1"
+    assert os.environ.get("ANTHROPIC_API_URL") == "https://custom.anthropic.proxy/v1"
+
+

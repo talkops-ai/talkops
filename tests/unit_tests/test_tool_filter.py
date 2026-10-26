@@ -1,21 +1,40 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for ToolFilterMiddleware and tool pattern matching."""
 
 from __future__ import annotations
 
-import pytest
+import logging
 from unittest.mock import MagicMock
+
+import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
-from opscloud.middleware.tool_filter import (
+from talkops.middleware.tool_filter import (
     ToolFilterMiddleware,
+    _entry_matches_tool,
     _expand_tool_patterns,
     _parse_mcp_pattern,
-    _entry_matches_tool,
 )
 
 
 def test_parse_mcp_pattern():
+    """Verify parse mcp pattern."""
     known = {"aws-mcp", "billing", "awspricing"}
     subagent = "aws-finops-agent"
 
@@ -52,6 +71,7 @@ def test_parse_mcp_pattern():
 
 
 def test_expand_tool_patterns():
+    """Verify expand tool patterns."""
     patterns = [
         "Read",
         "Bash",
@@ -80,6 +100,7 @@ def test_expand_tool_patterns():
 
 
 def test_tool_filter_middleware_allows_subagent_mcp_tools():
+    """Verify tool filter middleware allows subagent mcp tools."""
     allowed = [
         "Read",
         "Grep",
@@ -129,6 +150,7 @@ def test_tool_filter_middleware_allows_subagent_mcp_tools():
 
 
 def test_tool_filter_middleware_with_tool_objects():
+    """Verify tool filter middleware with tool objects."""
     mock_tool = MagicMock()
     mock_tool.name = "billing_cost-explorer"
     mock_tool.metadata = {
@@ -148,6 +170,7 @@ def test_tool_filter_middleware_with_tool_objects():
 
 
 def test_tool_filter_middleware_validates_request_and_rejects_unallowed():
+    """Verify tool filter middleware validates request and rejects unallowed."""
     allowed = ["read_file", "billing_cost-explorer"]
     mw = ToolFilterMiddleware(allowed_patterns=allowed)
 
@@ -172,3 +195,306 @@ def test_tool_filter_middleware_validates_request_and_rejects_unallowed():
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
     assert "tool `aws-mcp_aws___run_script` is restricted" in result.content
+
+
+def test_generic_open_source_mcp_matching_and_filtering():
+    """Verify arbitrary third-party open-source plugins work with various user-defined pattern styles."""
+    known_servers = ["postgres", "github", "datadog"]
+    mock_postgres_tool = MagicMock()
+    mock_postgres_tool.name = "postgres_query"
+    mock_postgres_tool.metadata = {
+        "_mcp_server": "postgres",
+        "_mcp_original_name": "query",
+    }
+
+    mock_github_tool = MagicMock()
+    mock_github_tool.name = "github_create_issue"
+    mock_github_tool.metadata = {
+        "_mcp_server": "github",
+        "_mcp_original_name": "create_issue",
+    }
+
+    mock_datadog_tool = MagicMock()
+    mock_datadog_tool.name = "datadog_get_metrics"
+    mock_datadog_tool.metadata = {
+        "_mcp_server": "datadog",
+        "_mcp_original_name": "get_metrics",
+    }
+
+    # Style 1: Server colon wildcard (postgres:*) and server underscore wildcard (github_*)
+    mw1 = ToolFilterMiddleware(
+        allowed_patterns=["postgres:*", "github_*", "Read", "Bash"],
+        subagent_name="custom-devops-subagent",
+        known_mcp_servers=known_servers,
+        mcp_tools=[mock_postgres_tool, mock_github_tool, mock_datadog_tool],
+    )
+    assert mw1.is_tool_allowed("postgres_query", tool_obj=mock_postgres_tool) is True
+    assert mw1.is_tool_allowed("postgres:query") is True
+    assert mw1.is_tool_allowed("mcp__postgres__query") is True
+    assert mw1.is_tool_allowed("github_create_issue", tool_obj=mock_github_tool) is True
+    assert mw1.is_tool_allowed("read_file") is True
+    assert mw1.is_tool_allowed("execute") is True
+    # datadog not in allowed_patterns
+    assert mw1.is_tool_allowed("datadog_get_metrics", tool_obj=mock_datadog_tool) is False
+
+    # Style 2: Bare server name ("postgres")
+    mw2 = ToolFilterMiddleware(
+        allowed_patterns=["postgres"],
+        subagent_name="custom-devops-subagent",
+        known_mcp_servers=known_servers,
+        mcp_tools=[mock_postgres_tool, mock_github_tool],
+    )
+    assert mw2.is_tool_allowed("postgres_query", tool_obj=mock_postgres_tool) is True
+    assert mw2.is_tool_allowed("github_create_issue", tool_obj=mock_github_tool) is False
+
+    # Style 3: Arbitrary third-party namespaced pattern (e.g. from open-source marketplace package)
+    mw3 = ToolFilterMiddleware(
+        allowed_patterns=["mcp__acme-corp_custom-agent_postgres__*"],
+        subagent_name="custom-agent",
+        known_mcp_servers=["postgres"],
+        mcp_tools=[mock_postgres_tool],
+    )
+    assert mw3.is_tool_allowed("postgres_query", tool_obj=mock_postgres_tool) is True
+    assert mw3.is_tool_allowed("mcp__postgres__query") is True
+
+
+def test_tool_filter_wrap_model_call():
+    """Verify wrap_model_call prunes disallowed tools before calling model."""
+    from langchain.agents.middleware.types import ModelRequest
+
+    @tool("read_file")
+    def mock_read(path: str) -> str:
+        """Read file."""
+        return "content"
+
+    @tool("bash")
+    def mock_bash(cmd: str) -> str:
+        """Execute command."""
+        return "out"
+
+    mw = ToolFilterMiddleware(allowed_patterns=["read"])
+    fake_llm = FakeListChatModel(responses=["ok"])
+    req = ModelRequest(
+        model=fake_llm,
+        messages=[],
+        tools=[mock_read, mock_bash],
+    )
+
+    captured_tools = []
+
+    def mock_handler(r):
+        """Provide mock handler test helper or fixture."""
+        captured_tools.extend(r.tools)
+        return fake_llm.invoke([])
+
+    mw.wrap_model_call(req, mock_handler)
+    assert len(captured_tools) == 1
+    assert captured_tools[0].name == "read_file"
+
+
+@pytest.mark.asyncio
+async def test_tool_filter_awrap_model_call():
+    """Verify awrap_model_call asynchronously prunes disallowed tools before calling model."""
+    from langchain.agents.middleware.types import ModelRequest
+
+    @tool("read_file")
+    def mock_read(path: str) -> str:
+        """Read file."""
+        return "content"
+
+    @tool("bash")
+    def mock_bash(cmd: str) -> str:
+        """Execute command."""
+        return "out"
+
+    mw = ToolFilterMiddleware(allowed_patterns=["read"])
+    fake_llm = FakeListChatModel(responses=["ok"])
+    req = ModelRequest(
+        model=fake_llm,
+        messages=[],
+        tools=[mock_read, mock_bash],
+    )
+
+    captured_tools = []
+
+    async def mock_handler(r):
+        """Provide mock handler test helper or fixture."""
+        captured_tools.extend(r.tools)
+        return await fake_llm.ainvoke([])
+
+    await mw.awrap_model_call(req, mock_handler)
+    assert len(captured_tools) == 1
+    assert captured_tools[0].name == "read_file"
+
+
+def test_subagent_scoped_mcp_tools_matching_and_model_pruning():
+    """Verify subagent-scoped MCP tools with hashed names and plugin patterns are allowed and not pruned."""
+    from langchain.agents.middleware.types import ModelRequest
+
+    mock_presigned_tool = MagicMock()
+    mock_presigned_tool.name = "subagent__aws-cloud-securit_aws___get_presigned_url_d5d22cc1a56b"
+    mock_presigned_tool.metadata = {
+        "_talkops_mcp": True,
+        "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__aws-mcp",
+        "_mcp_original_name": "aws___get_presigned_url",
+    }
+
+    mock_iam_tool = MagicMock()
+    mock_iam_tool.name = "subagent__aws-cloud-security-engineer_ta_list_users_77000c74ca84"
+    mock_iam_tool.metadata = {
+        "_talkops_mcp": True,
+        "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__iam",
+        "_mcp_original_name": "list_users",
+    }
+
+    mock_unrelated_tool = MagicMock()
+    mock_unrelated_tool.name = "subagent__other-subagent_other__unrelated_tool"
+    mock_unrelated_tool.metadata = {
+        "_talkops_mcp": True,
+        "_mcp_server": "subagent__other-subagent__other-mcp",
+        "_mcp_original_name": "unrelated_tool",
+    }
+
+    allowed_patterns = [
+        "Read",
+        "Bash",
+        "mcp__plugin_aws-cloud-security-engineer_aws-mcp__*",
+        "mcp__plugin_aws-cloud-security-engineer_iam__*",
+    ]
+    known_servers = [
+        "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__aws-mcp",
+        "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__iam",
+    ]
+
+    mw = ToolFilterMiddleware(
+        allowed_patterns=allowed_patterns,
+        subagent_name="aws-cloud-security-engineer@talkops-devops-plugins",
+        known_mcp_servers=known_servers,
+        mcp_tools=[mock_presigned_tool, mock_iam_tool, mock_unrelated_tool],
+    )
+
+    # Both plugin MCP tools should be allowed
+    assert mw.is_tool_allowed(mock_presigned_tool.name, tool_obj=mock_presigned_tool) is True
+    assert mw.is_tool_allowed(mock_iam_tool.name, tool_obj=mock_iam_tool) is True
+    assert mw.is_tool_allowed(mock_unrelated_tool.name, tool_obj=mock_unrelated_tool) is False
+
+    # Also test via wrap_model_call
+    fake_llm = FakeListChatModel(responses=["ok"])
+    req = ModelRequest(
+        model=fake_llm,
+        messages=[],
+        tools=[mock_presigned_tool, mock_iam_tool, mock_unrelated_tool],
+    )
+
+    captured = []
+    def handler(r):
+        """Provide handler test helper or fixture."""
+        captured.extend(r.tools)
+        return fake_llm.invoke([])
+
+    mw.wrap_model_call(req, handler)
+    assert len(captured) == 2
+    assert captured[0].name == mock_presigned_tool.name
+    assert captured[1].name == mock_iam_tool.name
+
+
+def test_subagent_scoped_mcp_tools_with_server_colon_and_bare_name_styles():
+    """Verify subagent MCP tools match across colon patterns, bare server names, and bare method names."""
+    mock_presigned_tool = MagicMock()
+    mock_presigned_tool.name = "subagent__aws-cloud-securit_aws___get_presigned_url_d5d22cc1a56b"
+    mock_presigned_tool.metadata = {
+        "_talkops_mcp": True,
+        "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__aws-mcp",
+        "_mcp_base_server": "aws-mcp",
+        "_mcp_original_name": "aws___get_presigned_url",
+        "_mcp_subagent_owner": "aws-cloud-security-engineer",
+    }
+
+    mock_iam_tool = MagicMock()
+    mock_iam_tool.name = "subagent__aws-cloud-security-engineer_ta_list_users_77000c74ca84"
+    mock_iam_tool.metadata = {
+        "_talkops_mcp": True,
+        "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__iam",
+        "_mcp_base_server": "iam",
+        "_mcp_original_name": "list_users",
+        "_mcp_subagent_owner": "aws-cloud-security-engineer",
+    }
+
+    # Style 1: Colon wildcard ("aws-mcp:*", "iam:*")
+    mw1 = ToolFilterMiddleware(
+        allowed_patterns=["aws-mcp:*", "iam:*"],
+        subagent_name="aws-cloud-security-engineer",
+        mcp_tools=[mock_presigned_tool, mock_iam_tool],
+    )
+    assert mw1.is_tool_allowed(mock_presigned_tool.name, tool_obj=mock_presigned_tool) is True
+    assert mw1.is_tool_allowed(mock_iam_tool.name, tool_obj=mock_iam_tool) is True
+
+    # Style 2: Bare server names ("aws-mcp", "iam")
+    mw2 = ToolFilterMiddleware(
+        allowed_patterns=["aws-mcp", "iam"],
+        subagent_name="aws-cloud-security-engineer",
+        mcp_tools=[mock_presigned_tool, mock_iam_tool],
+    )
+    assert mw2.is_tool_allowed(mock_presigned_tool.name, tool_obj=mock_presigned_tool) is True
+    assert mw2.is_tool_allowed(mock_iam_tool.name, tool_obj=mock_iam_tool) is True
+
+    # Style 3: Bare method names without prefix ("get_presigned_url", "list_users")
+    mw3 = ToolFilterMiddleware(
+        allowed_patterns=["get_presigned_url", "list_users"],
+        subagent_name="aws-cloud-security-engineer",
+        mcp_tools=[mock_presigned_tool, mock_iam_tool],
+    )
+    assert mw3.is_tool_allowed(mock_presigned_tool.name, tool_obj=mock_presigned_tool) is True
+    assert mw3.is_tool_allowed(mock_iam_tool.name, tool_obj=mock_iam_tool) is True
+
+    # Style 4: Wildcard glob on method names ("list_*")
+    mw4 = ToolFilterMiddleware(
+        allowed_patterns=["list_*"],
+        subagent_name="aws-cloud-security-engineer",
+        mcp_tools=[mock_presigned_tool, mock_iam_tool],
+    )
+    assert mw4.is_tool_allowed(mock_presigned_tool.name, tool_obj=mock_presigned_tool) is False
+    assert mw4.is_tool_allowed(mock_iam_tool.name, tool_obj=mock_iam_tool) is True
+
+    # Style 5: Wildcard "*"
+    mw5 = ToolFilterMiddleware(
+        allowed_patterns=["*"],
+        subagent_name="aws-cloud-security-engineer",
+        mcp_tools=[mock_presigned_tool, mock_iam_tool],
+    )
+    assert mw5.is_tool_allowed(mock_presigned_tool.name, tool_obj=mock_presigned_tool) is True
+    assert mw5.is_tool_allowed(mock_iam_tool.name, tool_obj=mock_iam_tool) is True
+
+
+def test_tool_filter_fail_loud_diagnostic_logging(caplog):
+    """Verify ToolFilterMiddleware logs error when all MCP tools in request are pruned."""
+    from langchain.agents.middleware.types import ModelRequest
+
+    mock_presigned_tool = MagicMock()
+    mock_presigned_tool.name = "subagent__aws-cloud-securit_aws___get_presigned_url_d5d22cc1a56b"
+    mock_presigned_tool.metadata = {
+        "_talkops_mcp": True,
+        "_mcp_server": "subagent__aws-cloud-security-engineer_talkops-devops-plugi_ca4dbdbf__aws-mcp",
+        "_mcp_base_server": "aws-mcp",
+        "_mcp_original_name": "aws___get_presigned_url",
+    }
+
+    # Only allow "read_file", effectively pruning the MCP tool
+    mw = ToolFilterMiddleware(
+        allowed_patterns=["read_file"],
+        subagent_name="aws-cloud-security-engineer",
+        mcp_tools=[mock_presigned_tool],
+    )
+
+    fake_llm = FakeListChatModel(responses=["ok"])
+    req = ModelRequest(
+        model=fake_llm,
+        messages=[],
+        tools=[mock_presigned_tool],
+    )
+
+    with caplog.at_level(logging.ERROR):
+        mw.wrap_model_call(req, lambda r: fake_llm.invoke([]))
+
+    assert any("pruned ALL 1 MCP tools from model call!" in rec.message for rec in caplog.records)
+

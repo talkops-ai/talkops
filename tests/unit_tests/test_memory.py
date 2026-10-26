@@ -1,4 +1,18 @@
-"""Unit tests for OpsCloud memory registry, branch memory store, and guard middleware."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for TalkOps memory registry, branch memory store, and guard middleware."""
 
 from __future__ import annotations
 
@@ -11,12 +25,13 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.store.memory import InMemoryStore
 
-from opscloud.memory.branch import BranchMemoryStore
-from opscloud.memory.guard import ManagedMemoryGuardMiddleware
-from opscloud.memory.registry import MemoryRegistry
+from talkops.memory.branch import BranchMemoryStore
+from talkops.memory.guard import ManagedMemoryGuardMiddleware
+from talkops.memory.registry import MemoryRegistry
 
 
 def test_branch_memory_store(tmp_path: Path):
+    """Verify branch memory store."""
     store = BranchMemoryStore("eks-diagnostics", run_id="run-1234", project_root=tmp_path)
     assert store.subagent_name == "eks-diagnostics"
     assert store.run_id == "run-1234"
@@ -30,6 +45,7 @@ def test_branch_memory_store(tmp_path: Path):
 
 
 def test_memory_registry_scopes(tmp_path: Path):
+    """Verify memory registry scopes."""
     registry = MemoryRegistry.get_instance()
     paths = registry.get_memory_paths_for_scope("auto", project_root=tmp_path)
     assert len(paths) >= 1
@@ -40,19 +56,20 @@ def test_memory_registry_scopes(tmp_path: Path):
 
 
 def test_managed_memory_guard(tmp_path: Path):
+    """Verify managed memory guard."""
     guarded_file = tmp_path / "AGENTS.md"
     guarded_file.touch()
 
     guard = ManagedMemoryGuardMiddleware(guarded_paths=[guarded_file])
 
     # Attempt to write to guarded file
-    bad_req = SimpleNamespace(
+    bad_req: Any = SimpleNamespace(
         tool_call={"name": "write_file", "args": {"file_path": str(guarded_file)}}
     )
     assert guard._guarded_path(bad_req) == guarded_file.resolve()
 
     # Attempt to write to non-guarded file
-    safe_req = SimpleNamespace(
+    safe_req: Any = SimpleNamespace(
         tool_call={"name": "write_file", "args": {"file_path": str(tmp_path / "normal.txt")}}
     )
     assert guard._guarded_path(safe_req) is None
@@ -82,9 +99,9 @@ async def test_memory_registry_store_operations() -> None:
 def test_memory_guard_middleware(tmp_path: Path) -> None:
     """Verify ManagedMemoryGuardMiddleware protects managed blocks and deletion while allowing user edits."""
     managed_block = (
-        "<!-- opscloud:onboarding-name:start -->\n"
+        "<!-- talkops:onboarding-name:start -->\n"
         "- The user's preferred name is \"Alex\".\n"
-        "<!-- opscloud:onboarding-name:end -->\n"
+        "<!-- talkops:onboarding-name:end -->\n"
     )
     initial_content = f"# Protected Memory\n\n{managed_block}\n- Primary region: us-west-2\n"
     guarded_file = tmp_path / "AGENTS.md"
@@ -119,6 +136,7 @@ def test_memory_guard_middleware(tmp_path: Path) -> None:
     }
 
     def simulate_add_memory(req: Any) -> ToolMessage:
+        """Provide simulate add memory test helper or fixture."""
         content = guarded_file.read_text(encoding="utf-8")
         updated = content.replace(
             "- Primary region: us-west-2",
@@ -144,6 +162,7 @@ def test_memory_guard_middleware(tmp_path: Path) -> None:
     }
 
     def simulate_clobber(req: Any) -> ToolMessage:
+        """Provide simulate clobber test helper or fixture."""
         guarded_file.write_text("completely replaced memory", encoding="utf-8")
         return ToolMessage(content="Wrote 25 bytes", tool_call_id=req.tool_call["id"])
 
@@ -173,19 +192,19 @@ def test_memory_guard_middleware(tmp_path: Path) -> None:
 
 
 def test_ensure_user_agent_md_and_discovery(tmp_path: Path, monkeypatch) -> None:
-    """Verify that ~/.opscloud/AGENTS.md is automatically created and discovered."""
+    """Verify that ~/.talkops/AGENTS.md is automatically created and discovered."""
     fake_home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
-    from opscloud.config import paths as app_paths
+    from talkops.config import paths as app_paths
 
     # Re-evaluate DATA_DIR with fake_home
-    monkeypatch.setattr(app_paths, "DATA_DIR", fake_home / ".opscloud")
+    monkeypatch.setattr(app_paths, "DATA_DIR", fake_home / ".talkops")
 
     # Initial state: fake_home does not exist
     primary_file = app_paths.ensure_user_agent_md()
     assert primary_file.exists()
-    assert primary_file == fake_home / ".opscloud" / "AGENTS.md"
+    assert primary_file == fake_home / ".talkops" / "AGENTS.md"
 
     # Verify discovery in MemoryRegistry
     registry = MemoryRegistry.get_instance()

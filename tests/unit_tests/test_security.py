@@ -1,24 +1,44 @@
-"""Unit tests for OpsCloud security module: unicode security, shell safety, and approval modes."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for TalkOps security module: unicode security, shell safety, and approval modes."""
+import asyncio
+import logging
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock
-from opscloud.approval_mode import ApprovalMode
-from opscloud.security.unicode_security import (
-    check_url_safety,
-    detect_dangerous_unicode,
-    sanitize_control_chars,
-    strip_dangerous_unicode,
-)
-from opscloud.security.shell_safety import (
+from langchain_core.messages import AIMessage, HumanMessage
+
+from talkops.approval_mode import ApprovalMode
+from talkops.security.shell_safety import (
     classify_command,
     contains_dangerous_patterns,
     is_safe_command,
     is_shell_command_allowed,
 )
+from talkops.security.unicode_security import (
+    check_url_safety,
+    detect_dangerous_unicode,
+    sanitize_control_chars,
+    strip_dangerous_unicode,
+)
 
 
 def test_strip_dangerous_unicode():
     # Zero width space \u200B and RTL override \u202E
+    """Verify strip dangerous unicode."""
     malicious = "aws\u200B ec2\u202E describe-instances"
     cleaned = strip_dangerous_unicode(malicious)
     assert "\u200B" not in cleaned
@@ -30,6 +50,7 @@ def test_strip_dangerous_unicode():
 
 
 def test_sanitize_control_chars():
+    """Verify sanitize control chars."""
     text_with_null = "echo 'hello\x00world'\x07"
     sanitized = sanitize_control_chars(text_with_null)
     assert "\x00" not in sanitized
@@ -38,7 +59,8 @@ def test_sanitize_control_chars():
 
 
 def test_check_url_safety_and_ssrf():
-    from opscloud.security.url_validation import _validate_url, UrlValidationError
+    """Verify check url safety and ssrf."""
+    from talkops.security.url_validation import UrlValidationError, _validate_url
 
     # Unicode deceptive URL
     result_deceptive = check_url_safety("http://exam\u200Bple.com/path")
@@ -58,6 +80,7 @@ def test_check_url_safety_and_ssrf():
 
 def test_shell_safety_dangerous_patterns():
     # Destructive operations
+    """Verify shell safety dangerous patterns."""
     assert contains_dangerous_patterns("rm -rf /") is True
     assert contains_dangerous_patterns("aws ec2 terminate-instances --instance-ids i-012345") is True
     assert contains_dangerous_patterns("curl http://169.254.169.254/") is True
@@ -71,6 +94,7 @@ def test_shell_safety_dangerous_patterns():
 
 
 def test_shell_safety_is_safe_command():
+    """Verify shell safety is safe command."""
     assert is_safe_command("aws ec2 describe-instances") is True
     assert is_safe_command("kubectl get pods") is True
     assert is_safe_command("git status") is True
@@ -80,18 +104,23 @@ def test_shell_safety_is_safe_command():
 
 
 def test_approval_mode_parsing():
+    """Verify approval mode parsing."""
     assert ApprovalMode.from_str("auto") == ApprovalMode.AUTO
     assert ApprovalMode.from_str("manual") == ApprovalMode.MANUAL
     assert ApprovalMode.from_str("smart") == ApprovalMode.SMART
     assert ApprovalMode.from_str("jev") == ApprovalMode.SMART
     assert ApprovalMode.from_str("s") == ApprovalMode.SMART
     assert ApprovalMode.from_str("always") == ApprovalMode.ALWAYS
-    # Deprecated/removed modes fail-closed to MANUAL
-    assert ApprovalMode.from_str("yolo") == ApprovalMode.MANUAL
+    assert ApprovalMode.from_str("yolo") == ApprovalMode.YOLO
+    # Interactive flows pass allow_yolo=False so yolo fails closed to MANUAL
+    assert ApprovalMode.from_str("yolo", allow_yolo=False) == ApprovalMode.MANUAL
+    # Removed/unrecognized modes fail-closed to MANUAL
+    assert ApprovalMode.from_str("autonomous") == ApprovalMode.MANUAL
 
 
 def test_next_approval_mode_cycle():
-    from opscloud.security.approval_mode import next_approval_mode
+    """Verify next approval mode cycle."""
+    from talkops.security.approval_mode import next_approval_mode
 
     assert next_approval_mode(ApprovalMode.MANUAL) == ApprovalMode.AUTO
     assert next_approval_mode(ApprovalMode.AUTO) == ApprovalMode.SMART
@@ -100,6 +129,7 @@ def test_next_approval_mode_cycle():
 
 def test_shell_safety_multicloud_dangerous_patterns():
     # Azure dangerous patterns
+    """Verify shell safety multicloud dangerous patterns."""
     assert contains_dangerous_patterns("az vm delete -g mygroup -n myvm") is True
     assert contains_dangerous_patterns("az group delete -n mygroup") is True
     assert contains_dangerous_patterns("az aks delete --resource-group rg --name cluster") is True
@@ -115,6 +145,7 @@ def test_shell_safety_multicloud_dangerous_patterns():
 
 
 def test_shell_safety_multicloud_safe_commands():
+    """Verify shell safety multicloud safe commands."""
     assert is_safe_command("az vm list -o table") is True
     assert is_safe_command("az account show") is True
     assert is_safe_command("az group list") is True
@@ -124,7 +155,8 @@ def test_shell_safety_multicloud_safe_commands():
 
 
 def test_cli_ast_multicloud_destructive_detection():
-    from opscloud.security.cli_ast_evaluator import CliAstEvaluator, evaluate_cli_safety
+    """Verify cli ast multicloud destructive detection."""
+    from talkops.security.cli_ast_evaluator import CliAstEvaluator, evaluate_cli_safety
 
     evaluator = CliAstEvaluator()
 
@@ -160,8 +192,8 @@ def test_cli_ast_multicloud_destructive_detection():
 
 
 def test_approval_mode_payload():
-    from opscloud.approval_mode import approval_mode_payload
-    import pytest
+    """Verify approval mode payload."""
+    from talkops.approval_mode import approval_mode_payload
 
     assert approval_mode_payload(mode=ApprovalMode.AUTO) == {"mode": "auto"}
     assert approval_mode_payload(mode="manual") == {"mode": "manual"}
@@ -178,7 +210,8 @@ def test_approval_mode_payload():
 
 
 async def test_awrite_and_read_approval_mode():
-    from opscloud.approval_mode import (
+    """Verify awrite and read approval mode."""
+    from talkops.approval_mode import (
         APPROVAL_MODE_NAMESPACE,
         aread_approval_mode_from_store,
         awrite_approval_mode,
@@ -188,13 +221,17 @@ async def test_awrite_and_read_approval_mode():
     store: dict[tuple[Any, ...], Any] = {}
 
     class MockAgent:
+        """Test suite or helper class for mock agent."""
         async def aput_store_item(self, namespace, key, value):
+            """Provide aput store item test helper or fixture."""
             store[(namespace, key)] = {"value": value}
 
         async def aget(self, namespace, key):
+            """Provide aget test helper or fixture."""
             return store.get((namespace, key))
 
         def get(self, namespace, key):
+            """Provide get test helper or fixture."""
             return store.get((namespace, key))
 
     agent = MockAgent()
@@ -209,7 +246,8 @@ async def test_awrite_and_read_approval_mode():
 
 
 def test_auto_mode_notice(tmp_path):
-    from opscloud.approval_mode import (
+    """Verify auto mode notice."""
+    from talkops.approval_mode import (
         has_auto_mode_notice,
         save_auto_mode_notice,
     )
@@ -223,14 +261,15 @@ def test_auto_mode_notice(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resolve_approval_mode_signatures():
-    from opscloud.security.approval_mode_source import (
-        _aresolve_approval_mode,
-        _resolve_approval_mode,
+    """Verify resolve approval mode signatures."""
+    from talkops.approval_mode import ApprovalMode
+    from talkops.security.approval_mode_source import (
         ApprovalPolicyResolver,
+        _aresolve_approval_mode,
         _DecidedMode,
         _LiveLookup,
+        _resolve_approval_mode,
     )
-    from opscloud.approval_mode import ApprovalMode
 
     # 1. 0 positional arguments
     assert _resolve_approval_mode() in {ApprovalMode.MANUAL, ApprovalMode.AUTO, ApprovalMode.SMART}
@@ -256,7 +295,8 @@ async def test_resolve_approval_mode_signatures():
 
 
 def test_web_search_unconfigured_error():
-    from opscloud.tools.web_search import web_search
+    """Verify web search unconfigured error."""
+    from talkops.tools.web_search import web_search
 
     # Calling web_search without api key should return helpful dict error, not raise
     result = web_search.invoke({"query": "test query"})
@@ -268,14 +308,13 @@ def test_web_search_unconfigured_error():
 
 @pytest.mark.asyncio
 async def test_batched_store_event_loop_safety(caplog):
-    import asyncio
-    import logging
-    from opscloud.approval_mode import (
+    """Verify batched store event loop safety."""
+    from talkops.approval_mode import (
         ApprovalMode,
         aread_approval_mode_from_store,
         read_approval_mode_from_store,
     )
-    from opscloud.security.approval_mode_source import (
+    from talkops.security.approval_mode_source import (
         _aresolve_approval_mode,
         _resolve_approval_mode,
     )
@@ -284,16 +323,19 @@ async def test_batched_store_event_loop_safety(caplog):
 
     # Simulate LangGraph BatchedStore that rejects sync get() inside event loop
     class FakeBatchedStore:
+        """Test suite or helper class for fake batched store."""
         def __init__(self):
+            """Initialize FakeBatchedStore."""
             self._loop = current_loop
             self.data = {
-                ("opscloud", "approval_mode"): {
+                ("talkops", "approval_mode"): {
                     "thread:test-loop-1:mode": {"mode": "auto"}
                 }
             }
 
         def get(self, namespace, key):
             # Same check as langgraph.store.base.batch._check_loop
+            """Provide get test helper or fixture."""
             if asyncio.get_running_loop() is self._loop:
                 raise asyncio.InvalidStateError(
                     "Synchronous calls to BatchedStore detected in the main event loop."
@@ -301,6 +343,7 @@ async def test_batched_store_event_loop_safety(caplog):
             return self.data.get(namespace, {}).get(key)
 
         async def aget(self, namespace, key):
+            """Provide aget test helper or fixture."""
             val = self.data.get(namespace, {}).get(key)
             if val:
                 mock_item = MagicMock()
@@ -334,22 +377,21 @@ async def test_batched_store_event_loop_safety(caplog):
 
 @pytest.mark.asyncio
 async def test_auto_mode_hitl_aafter_model():
-    from unittest.mock import MagicMock
-    from opscloud.middleware.auto_mode_hitl import (
-        AutoModeHITLMiddleware,
+    """Verify auto mode hitl aafter model."""
+    from talkops.approval_mode import ApprovalMode
+    from talkops.middleware.auto_mode_hitl import (
         _ASYNC_APPROVAL_ROUTING_KEY,
-        _RoutingDecision,
+        AutoModeHITLMiddleware,
         _async_routing_mode,
+        _RoutingDecision,
     )
-    from opscloud.approval_mode import ApprovalMode
-    from langchain_core.messages import AIMessage, HumanMessage
 
     mw = AutoModeHITLMiddleware()
     runtime = MagicMock()
     runtime.context = {"approval_mode": "auto"}
     runtime.store = None
 
-    state = {
+    state: Any = {
         "messages": [
             HumanMessage(content="test"),
             AIMessage(content="test reply", tool_calls=[]),

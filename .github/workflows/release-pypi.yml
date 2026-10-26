@@ -1,0 +1,193 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# TalkOps — PyPI Release Pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+# Trigger: Push a tag like `v0.3.0b5` or manual workflow_dispatch
+# Result:  Test ➔ Build ➔ Asset Verification ➔ Publish to PyPI
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: "📦 Release to PyPI"
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (e.g., v0.3.0b5)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write        # PyPI Trusted Publishing (OIDC)
+
+jobs:
+  # ── Step 1: Validate Version & Metadata ─────────────────────────────────────
+  meta:
+    name: "🏷️ Validate Release Tag"
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      tag: ${{ steps.parse.outputs.tag }}
+      pypi_name: ${{ steps.parse.outputs.pypi_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse tag and metadata
+        id: parse
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Strip leading 'v' if present (e.g. v0.1.0 -> 0.1.0)
+          VERSION="${TAG#v}"
+
+          PKG_NAME=$(grep '^name' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          [ -z "$PKG_NAME" ] && PKG_NAME="talkops-ai"
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "pypi_name=${PKG_NAME}" >> "$GITHUB_OUTPUT"
+
+          echo "🏷️  Release Tag: ${TAG}"
+          echo "📦 Version: ${VERSION}"
+          echo "🐍 PyPI Package: ${PKG_NAME}"
+
+      - name: Validate version matches pyproject.toml
+        run: |
+          TOML_VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          TAG_VERSION="${{ steps.parse.outputs.version }}"
+          if [ "$TOML_VERSION" != "$TAG_VERSION" ]; then
+            echo "❌ Version mismatch! pyproject.toml=${TOML_VERSION} tag=${TAG_VERSION}"
+            exit 1
+          fi
+          echo "✅ Version match: ${TAG_VERSION}"
+
+  # ── Step 2: Run Unit Tests ──────────────────────────────────────────────────
+  test:
+    name: "🧪 Run Tests"
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run unit tests
+        run: uv run pytest tests/ -m unit -v --tb=short
+
+  # ── Step 3: Build & Package Verification ────────────────────────────────────
+  build:
+    name: "🔨 Build Package"
+    needs: [meta, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Verify built artifacts
+        run: |
+          echo "📦 Built artifacts:"
+          ls -lh dist/
+
+          VERSION="${{ needs.meta.outputs.version }}"
+          if ! ls dist/*${VERSION}* 1>/dev/null 2>&1; then
+            echo "❌ No artifacts found with version ${VERSION}"
+            exit 1
+          fi
+
+          WHEEL=$(ls dist/*.whl | head -1)
+
+          # 1. Verify Entry Point Binary Script
+          if ! unzip -l "$WHEEL" | grep -q "talkops/cli/main.py"; then
+            echo "❌ Critical Error: Missing talkops/cli/main.py in wheel!"
+            exit 1
+          fi
+
+          # 2. Verify Built-in Skills
+          for skill in remember skill-creator; do
+            if ! unzip -l "$WHEEL" | grep -q "talkops/built_in_skills/${skill}/SKILL.md"; then
+              echo "❌ Critical Error: Missing skill '${skill}' in wheel!"
+              exit 1
+            fi
+          done
+
+          # 3. Verify Prompt Templates and TUI Stylesheet
+          for asset in "talkops/prompts/templates/system_prompt.md" "talkops/ui/app.tcss"; do
+            if ! unzip -l "$WHEEL" | grep -q "$asset"; then
+              echo "❌ Critical Error: Missing asset '${asset}' in wheel!"
+              exit 1
+            fi
+          done
+
+          # 4. Verify Entry Point in wheel metadata
+          if ! unzip -p "$WHEEL" "*.dist-info/entry_points.txt" | grep -q "talkops = talkops.cli.main:cli_main"; then
+            echo "❌ Critical Error: 'talkops' console script entry point not registered in wheel metadata!"
+            exit 1
+          fi
+          if ! unzip -p "$WHEEL" "*.dist-info/entry_points.txt" | grep -q "ops = talkops.cli.main:cli_main"; then
+            echo "❌ Critical Error: 'ops' console script alias not registered in wheel metadata!"
+            exit 1
+          fi
+
+          echo "✅ TalkOps package integrity verified."
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-talkops
+          path: dist/
+          retention-days: 7
+
+  # ── Step 4: Publish to PyPI ─────────────────────────────────────────────────
+  publish-pypi:
+    name: "🚀 Publish to PyPI"
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/${{ needs.meta.outputs.pypi_name }}/${{ needs.meta.outputs.version }}/
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-talkops
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          verbose: true
+          print-hash: true
+

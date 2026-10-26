@@ -1,0 +1,897 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Status, system, skill, error, turn summary, and rubric message widgets.
+
+Extracted from `talkops.ui.widgets.messages` (Phase 5 UI modularization).
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from rich.console import Console
+from rich.segment import Segment
+from rich.styled import Styled
+from rich.table import Table
+from rich.text import Text
+from rich.theme import Theme
+from textual import on
+from textual.containers import Vertical, VerticalScroll
+from textual.content import Content, Span
+from textual.events import Click
+from textual.message import Message
+from textual.reactive import var
+from textual.style import Style
+from textual.widgets import Static
+
+from talkops.config.settings import get_glyphs, is_ascii_mode
+from talkops.ui import theme
+from talkops.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from rich.console import Console as RichConsole
+    from rich.console import ConsoleOptions, RenderResult
+    from textual.app import ComposeResult
+
+logger = get_logger(__name__)
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Remove YAML frontmatter delimited by `---` markers."""
+    stripped = text.lstrip()
+    if not stripped.startswith("---"):
+        return text
+    end = stripped.find("\n---", 3)
+    if end == -1:
+        return text
+    after = end + 4  # len("\n---")
+    return stripped[after:].lstrip("\n")
+
+
+class _RichMarkdownWrapper:
+    """Render Rich markdown for both muted system base and vibrant command output cards."""
+
+    _MUTED_THEME_OVERRIDES: ClassVar[dict[str, str]] = {
+        "markdown.h1": "bold underline",
+        "markdown.h2": "bold underline",
+        "markdown.h3": "bold",
+        "markdown.h4": "italic",
+        "markdown.table.header": "bold",
+        "markdown.table.border": "",
+        "markdown.code": "bold",
+        "markdown.code_inline": "bold",
+    }
+
+    _COMMAND_THEME_OVERRIDES: ClassVar[dict[str, str]] = {
+        "markdown.h1": f"bold {theme.DC_TEAL} underline",
+        "markdown.h2": f"bold {theme.DC_CYAN}",
+        "markdown.h3": f"bold {theme.DC_TEAL}",
+        "markdown.h4": f"bold {theme.DC_PURPLE}",
+        "markdown.table.header": f"bold {theme.DC_TEAL}",
+        "markdown.table.border": theme.DC_BORDER_LT,
+        "markdown.code": f"bold {theme.DC_PURPLE}",
+        "markdown.code_inline": f"bold {theme.DC_TEAL}",
+        "markdown.bullet": f"bold {theme.DC_TEAL}",
+        "markdown.link": f"underline {theme.DC_CYAN}",
+        "markdown.hr": theme.DC_BORDER_LT,
+    }
+
+    def __init__(self, markup: str, *, is_command: bool = False) -> None:
+        """Initialize _RichMarkdownWrapper."""
+        from rich.markdown import (
+            Markdown as RichMarkdown,
+        )
+        from rich.markdown import (
+            MarkdownElement,
+            TableElement,
+        )
+
+        class _FoldingTableElement(TableElement):
+            """Render long Markdown table cells by folding instead of eliding."""
+
+            def __rich_console__(  # noqa: PLW3201
+                self, console: RichConsole, options: ConsoleOptions
+            ) -> RenderResult:
+                """Execute rich console on _FoldingTableElement."""
+                for renderable in super().__rich_console__(console, options):
+                    if isinstance(renderable, Table):
+                        for column in renderable.columns:
+                            column.overflow = "fold"
+                    yield renderable
+
+        class _FoldingMarkdown(RichMarkdown):
+            """Rich Markdown variant that never ellipsizes table cells."""
+
+            elements: ClassVar[dict[str, type[MarkdownElement]]] = {
+                **RichMarkdown.elements,
+                "table_open": _FoldingTableElement,
+            }
+
+        self._markdown = _FoldingMarkdown(markup)
+        self._markup = markup
+        self._is_command = is_command
+
+    def __rich_console__(  # noqa: PLW3201
+        self, console: RichConsole, options: ConsoleOptions
+    ) -> RenderResult:
+        """Execute rich console on _RichMarkdownWrapper."""
+        if self._is_command:
+            c = theme.get_theme_colors()
+            border = theme.blend_hex(c.foreground, c.background, 0.25)
+            overrides = {
+                "markdown.h1": f"bold {c.primary} underline",
+                "markdown.h2": f"bold {c.secondary}",
+                "markdown.h3": f"bold {c.primary}",
+                "markdown.h4": f"bold {c.accent}",
+                "markdown.table.header": f"bold {c.primary}",
+                "markdown.table.border": border,
+                "markdown.code": f"bold {c.accent}",
+                "markdown.code_inline": f"bold {c.primary}",
+                "markdown.bullet": f"bold {c.primary}",
+                "markdown.link": f"underline {c.secondary}",
+                "markdown.hr": border,
+            }
+        else:
+            overrides = self._MUTED_THEME_OVERRIDES
+        md_theme = Theme(overrides, inherit=True)
+        try:
+            with console.use_theme(md_theme):
+                yield from self._markdown.__rich_console__(console, options)
+        except Exception:
+            logger.warning(
+                "Rich markdown rendering failed; falling back to plain text",
+                exc_info=True,
+            )
+            yield from Styled(self._markup, "").__rich_console__(console, options)
+
+
+_MutedRichMarkdown = _RichMarkdownWrapper
+
+_MARKDOWN_MIN_RENDER_WIDTH = 20
+_markdown_style_conversion_warned = [False]
+
+
+def _markdown_to_content(
+    markup: str,
+    width: int,
+    console: RichConsole | None = None,
+    *,
+    is_command: bool = False,
+) -> Content:
+    """Render markdown to selectable `Content` at a fixed width."""
+    render_width = max(width, 1)
+    if console is None:
+        console = Console(width=render_width)
+    segments = console.render(
+        _RichMarkdownWrapper(markup, is_command=is_command),
+        console.options.update_width(render_width),
+    )
+    content_lines: list[Content] = []
+    for line in Segment.split_lines(segments):
+        text = "".join(segment.text for segment in line)
+        stripped = text.rstrip()
+        spans: list[Span] = []
+        position = 0
+        for segment in line:
+            start = position
+            position += len(segment.text)
+            if start >= len(stripped):
+                break
+            end = min(position, len(stripped))
+            if segment.style is not None and end > start:
+                try:
+                    style = Style.from_rich_style(segment.style)
+                except Exception:
+                    if not _markdown_style_conversion_warned[0]:
+                        _markdown_style_conversion_warned[0] = True
+                        logger.warning(
+                            "Failed to convert a markdown style; markdown will "
+                            "render without some styling (later occurrences log "
+                            "at debug)",
+                            exc_info=True,
+                        )
+                    else:
+                        logger.debug(
+                            "Skipping unconvertible markdown style", exc_info=True
+                        )
+                else:
+                    spans.append(Span(start, end, style))
+        content_lines.append(Content(stripped, spans))
+    while content_lines and not content_lines[-1].plain:
+        content_lines.pop()
+    return Content("\n").join(content_lines)
+
+
+class _SkillToggle(Static):
+    """Clickable header/hint area for toggling skill body expansion."""
+
+
+class SkillMessage(Vertical):
+    """Widget displaying a skill invocation with collapsible body."""
+
+    DEFAULT_CSS = """
+    SkillMessage {
+        height: auto;
+        padding: 0 1 0 0;
+        margin: 1 0 1 0;
+        background: transparent;
+        border-left: wide $skill;
+    }
+
+    SkillMessage .skill-header {
+        height: auto;
+    }
+
+    SkillMessage .skill-description {
+        color: $text-muted;
+        margin-left: 3;
+    }
+
+    SkillMessage .skill-args {
+        margin-left: 3;
+        margin-top: 0;
+    }
+
+    SkillMessage #skill-md {
+        margin-left: 3;
+        margin-top: 0;
+        padding: 0;
+        display: none;
+    }
+
+    SkillMessage .skill-hint {
+        margin-left: 3;
+        color: $text-muted;
+    }
+
+    SkillMessage.-expanded #skill-md {
+        display: block;
+    }
+
+    SkillMessage:hover {
+        border-left: wide $skill-hover;
+    }
+    """
+
+    _PREVIEW_LINES = 4
+    _PREVIEW_CHARS = 300
+
+    _expanded: var[bool] = var(False, toggle_class="-expanded")
+
+    def __init__(
+        self,
+        skill_name: str = "",
+        description: str = "",
+        source: str = "",
+        body: str = "",
+        args: str = "",
+        *,
+        name: str = "",
+        content: str = "",
+        **kwargs: Any,
+    ) -> None:
+        """Initialize SkillMessage."""
+        super().__init__(**kwargs)
+        self._skill_name = skill_name or name or "skill"
+        self._description = description
+        self._source = source
+        self._body = body or content
+        self._stripped_body = _strip_frontmatter(self._body)
+        self._args = args
+        self._md_widget: Static | None = None
+        self._hint_widget: _SkillToggle | None = None
+        self._deferred_expanded: bool = False
+        self._md_rendered: bool = False
+
+    def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
+        from talkops.skills.invocation import format_skill_slash_name
+
+        colors = theme.get_theme_colors(self)
+        source_tag = f" [{self._source}]" if self._source else ""
+        clean_name = format_skill_slash_name(self._skill_name) or self._skill_name
+        yield _SkillToggle(
+            Content.styled(
+                f"/{clean_name}{source_tag}",
+                f"bold {colors.skill}",
+            ),
+            classes="skill-header",
+        )
+        if self._description:
+            yield _SkillToggle(
+                Content.styled(self._description, "dim"),
+                classes="skill-description",
+            )
+        if self._args:
+            yield Static(
+                Content.assemble(
+                    ("User request: ", "bold"),
+                    self._args,
+                ),
+                classes="skill-args",
+            )
+        yield Static("", id="skill-md")
+        yield _SkillToggle("", classes="skill-hint", id="skill-hint")
+
+    def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
+        if is_ascii_mode():
+            colors = theme.get_theme_colors(self)
+            self.styles.border_left = ("ascii", colors.skill)
+
+        self._md_widget = self.query_one("#skill-md", Static)
+        self._hint_widget = self.query_one("#skill-hint", _SkillToggle)
+
+        body = self._stripped_body.strip()
+        if body:
+            self._prepare_body(body)
+
+        if self._deferred_expanded:
+            self._expanded = self._deferred_expanded
+            self._deferred_expanded = False
+
+    def _prepare_body(self, body: str) -> None:
+        lines = body.split("\n")
+        total_lines = len(lines)
+        needs_truncation = (
+            total_lines > self._PREVIEW_LINES or len(body) > self._PREVIEW_CHARS
+        )
+
+        if needs_truncation:
+            remaining = total_lines - self._PREVIEW_LINES
+            ellipsis = get_glyphs().ellipsis
+            if self._hint_widget:
+                self._hint_widget.update(
+                    Content.styled(
+                        f"{ellipsis} {remaining} more lines"
+                        " — click or Ctrl+O to expand",
+                        "dim italic",
+                    )
+                )
+        else:
+            self._ensure_md_rendered(body)
+            self._expanded = True
+
+    def _ensure_md_rendered(self, body: str) -> None:
+        if self._md_rendered or not self._md_widget:
+            return
+        try:
+            from rich.markdown import Markdown as RichMarkdown
+
+            self._md_widget.update(RichMarkdown(body))
+        except Exception:
+            logger.warning(
+                "Failed to render skill body as markdown; falling back to plain text",
+                exc_info=True,
+            )
+            self._md_widget.update(body)
+        self._md_rendered = True
+
+    def toggle_body(self) -> None:
+        """Toggle body."""
+        if not self._stripped_body.strip():
+            return
+        self._expanded = not self._expanded
+
+    def watch__expanded(self, expanded: bool) -> None:
+        """React to changes in the expanded reactive attribute."""
+        body = self._stripped_body.strip()
+        if not body:
+            return
+
+        if expanded:
+            self._ensure_md_rendered(body)
+
+        if not self._hint_widget:
+            return
+
+        lines = body.split("\n")
+        total_lines = len(lines)
+        needs_truncation = (
+            total_lines > self._PREVIEW_LINES or len(body) > self._PREVIEW_CHARS
+        )
+
+        if not needs_truncation:
+            self._hint_widget.display = False
+            return
+
+        if expanded:
+            self._hint_widget.update(
+                Content.styled("click or Ctrl+O to collapse", "dim italic")
+            )
+        else:
+            remaining = total_lines - self._PREVIEW_LINES
+            ellipsis = get_glyphs().ellipsis
+            self._hint_widget.update(
+                Content.styled(
+                    f"{ellipsis} {remaining} more lines — click or Ctrl+O to expand",
+                    "dim italic",
+                )
+            )
+
+    @on(Click, "_SkillToggle")
+    def _on_toggle_click(self, event: Click) -> None:
+        if getattr(event, "chain", 1) > 1 or bool(
+            getattr(self.screen, "selections", None)
+        ):
+            return
+        event.stop()
+        if self._stripped_body.strip():
+            self.toggle_body()
+
+
+class ErrorMessage(Static):
+    """An error message widget."""
+
+    DEFAULT_CSS = """
+    ErrorMessage {
+        height: auto;
+        padding: 0 1;
+        margin: 0 0 1 0;
+        background: $error-muted;
+        color: $text;
+        border-left: wide $error;
+        pointer: text;
+    }
+    """
+
+    def __init__(self, content: str, **kwargs: Any) -> None:
+        """Initialize ErrorMessage."""
+        self._raw_content = content
+        text = Text()
+        text.append("Error: ", style="bold red")
+        text.append(content, style="default")
+        super().__init__(text, **kwargs)
+
+
+class SystemMessage(Static):
+    """A system/command-response info message."""
+
+    DEFAULT_CSS = """
+    SystemMessage {
+        padding: 0 1;
+        margin: 1 0 0 0;
+        height: auto;
+        color: $text;
+        pointer: text;
+    }
+
+    SystemMessage.-card,
+    SystemMessage.-command-output,
+    CommandOutputMessage {
+        height: auto;
+        padding: 1 2;
+        margin: 1 0 1 0;
+        background: $surface 45%;
+        border-left: wide $primary;
+        color: $foreground;
+        pointer: text;
+    }
+    """
+
+    def __init__(self, content: str, *, command: str | None = None) -> None:
+        """Initialize SystemMessage."""
+        self._raw_content = content
+        self._timestamp = time.strftime("%H:%M:%S")
+        self._show_timestamp = False
+        self._markdown_cache: tuple[tuple[int, str], Content] | None = None
+        self.command = command
+        super().__init__("")
+        self.auto_links = False
+
+        is_multiline = "\n" in content
+        is_markdown = any(
+            tok in content
+            for tok in ("```", "**", "__", "#", "- ", "* ", "|", "•", "✓", "⚠", "✗", "1. ")
+        )
+        if is_multiline or is_markdown or command:
+            self.add_class("-card")
+            self.add_class("-command-output")
+
+    def _is_command_mode(self) -> bool:
+        return self.has_class("-command-output") or self.has_class("-card") or bool(self.command)
+
+    def set_timestamp_visible(self, visible: bool) -> None:
+        """Set timestamp visible."""
+        self._show_timestamp = visible
+        self._markdown_cache = None
+        self.refresh(layout=True)
+
+    def _build_display_text(self) -> str:
+        content = self._raw_content
+        if self._show_timestamp:
+            content = f"{content}  *[{self._timestamp}]*"
+
+        is_multiline = "\n" in content
+        is_markdown = any(
+            tok in content
+            for tok in ("```", "**", "__", "#", "- ", "* ", "|", "•", "✓", "⚠", "✗", "1. ")
+        )
+        already_bulleted = content.startswith("● ") or content.startswith("• ")
+        if not already_bulleted and not is_multiline and not is_markdown and not self._is_command_mode():
+            content = f"● {content}"
+
+        is_structured_markdown = any(
+            line.lstrip().startswith(("#", "-", "*", "1.", "|", ">", "•", "✓", "⚠", "✗"))
+            for line in content.splitlines()
+        )
+        if "```" not in content and "\n" in content and not is_structured_markdown:
+            content = "\n".join(
+                line if line.endswith("  ") or not line else f"{line}  "
+                for line in content.splitlines()
+            )
+        return content
+
+    def render(self) -> Content:
+        """Render the widget content."""
+        width = self.content_size.width
+        if width <= 0:
+            width = self.container_size.width
+            if width <= 0:
+                try:
+                    width = self.app.size.width
+                except Exception:
+                    width = 80
+        text = self._build_display_text()
+        try:
+            theme_name = str(getattr(self.app, "theme", ""))
+        except Exception:
+            theme_name = ""
+        cache_key = (width, theme_name)
+        if self._markdown_cache is None or self._markdown_cache[0] != cache_key:
+            try:
+                console = self.app.console
+            except Exception:
+                console = None
+            is_cmd = self._is_command_mode()
+            content = _markdown_to_content(text, width, console, is_command=is_cmd)
+            self._markdown_cache = (cache_key, content)
+        return self._markdown_cache[1]
+
+
+class CommandOutputMessage(SystemMessage):
+    """A formatted command execution result widget matching TalkOps TUI aesthetics."""
+
+    DEFAULT_CSS = """
+    CommandOutputMessage {
+        height: auto;
+        padding: 1 2;
+        margin: 1 0 1 0;
+        background: $surface 45%;
+        border-left: wide $primary;
+        color: $foreground;
+        pointer: text;
+    }
+    """
+
+    def __init__(self, content: str, *, command: str | None = None) -> None:
+        """Initialize CommandOutputMessage."""
+        super().__init__(content, command=command)
+        self.add_class("-card")
+        self.add_class("-command-output")
+
+    def _is_command_mode(self) -> bool:
+        return True
+
+
+AppMessage = SystemMessage
+
+
+def _format_turn_duration(seconds: float) -> str:
+    """Format a turn's wall time compactly (``4.2s``, ``2m 05s``, ``1h 02m``)."""
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    total = int(round(seconds))
+    if total < 3600:
+        minutes, secs = divmod(total, 60)
+        return f"{minutes}m {secs:02d}s"
+    hours, rem = divmod(total, 3600)
+    return f"{hours}h {rem // 60:02d}m"
+
+
+_SLASH_CMD_TIP_RE = __import__("re").compile(r"(?<!\w)(/[a-zA-Z][a-zA-Z0-9_-]*)")
+
+
+class TurnSummary(Static):
+    """One-line footer under a completed agent turn, with optional contextual tip."""
+
+    ALLOW_SELECT = False
+
+    DEFAULT_CSS = """
+    TurnSummary {
+        height: auto;
+        padding: 0 1;
+        margin: 1 0 0 0;
+        background: transparent;
+    }
+    """
+
+    def __init__(
+        self,
+        *,
+        elapsed_seconds: float,
+        tool_count: int = 0,
+        tokens: int = 0,
+        cost_usd: float = 0.0,
+        tip: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize TurnSummary."""
+        super().__init__(**kwargs)
+        self.elapsed_seconds = max(0.0, elapsed_seconds)
+        self.tool_count = max(0, tool_count)
+        self.tokens = max(0, tokens)
+        self.cost_usd = max(0.0, cost_usd)
+        cleaned_tip = (tip or "").strip()
+        for prefix in ("└ Tip: ", "L Tip: ", "Tip: "):
+            if cleaned_tip.startswith(prefix):
+                cleaned_tip = cleaned_tip[len(prefix) :].strip()
+                break
+        self.tip: str | None = cleaned_tip or None
+
+    def summary_text(self) -> str:
+        """Execute summary text on TurnSummary."""
+        from talkops.utils.session_stats import format_cost, format_token_count
+
+        glyphs = get_glyphs()
+        parts = [f"Done in {_format_turn_duration(self.elapsed_seconds)}"]
+        if self.tool_count:
+            parts.append(f"{self.tool_count} tool{'s' if self.tool_count != 1 else ''}")
+        if self.tokens:
+            parts.append(f"{format_token_count(self.tokens)} tokens")
+        if self.cost_usd > 0:
+            parts.append(format_cost(self.cost_usd))
+        return f" {glyphs.separator} ".join(parts)
+
+    def render(self) -> Content:
+        """Render the widget content."""
+        glyphs = get_glyphs()
+        parts: list[tuple[str, str] | str] = [
+            (f"{glyphs.checkmark} ", "bold $success"),
+            (self.summary_text(), "dim"),
+        ]
+        if self.tip:
+            branch = "L" if is_ascii_mode() else "└"
+            parts.append((f"\n  {branch} Tip: ", "dim"))
+            last_idx = 0
+            for match in _SLASH_CMD_TIP_RE.finditer(self.tip):
+                if match.start() > last_idx:
+                    parts.append((self.tip[last_idx : match.start()], "dim"))
+                parts.append((match.group(1), "bold $primary"))
+                last_idx = match.end()
+            if last_idx < len(self.tip):
+                parts.append((self.tip[last_idx:], "dim"))
+        return Content.assemble(*parts)
+
+
+class CompactionMessage(Static):
+    """Inline divider banner rendered when conversation history is compacted.
+
+    Format:
+    Line 1: ``──────────────────── Conversation compacted ────────────────────``
+    Line 2: ``    18 steps summarized · context 172.4K → ~26.8K (4.2K summary) · took 3.1s``
+    """
+
+    ALLOW_SELECT = False
+
+    DEFAULT_CSS = """
+    CompactionMessage {
+        height: auto;
+        padding: 0 1;
+        margin: 1 0 1 0;
+        background: transparent;
+        color: $text-muted;
+    }
+    """
+
+    def __init__(
+        self,
+        *,
+        steps_summarized: int = 0,
+        pre_tokens: int = 0,
+        post_tokens: int = 0,
+        summary_tokens: int = 0,
+        duration_seconds: float = 0.0,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize CompactionMessage."""
+        super().__init__(**kwargs)
+        self.steps_summarized = max(0, int(steps_summarized))
+        self.pre_tokens = max(0, int(pre_tokens))
+        self.post_tokens = max(0, int(post_tokens))
+        self.summary_tokens = max(0, int(summary_tokens))
+        self.duration_seconds = max(0.0, float(duration_seconds))
+
+    def header_text(self, width: int = 80) -> str:
+        """Build the centered horizontal rule line for the given width."""
+        effective_width = max(20, width)
+        label = "Conversation compacted" if effective_width >= 28 else "Compacted"
+        dash = "-" if is_ascii_mode() else "─"
+        remaining = max(4, effective_width - len(label) - 2)
+        left = remaining // 2
+        right = remaining - left
+        return f"{dash * left} {label} {dash * right}"
+
+    def stats_text(self) -> str:
+        """Build the compact statistics subtitle (unpadded)."""
+        from talkops.utils.session_stats import format_token_count
+
+        glyphs = get_glyphs()
+        arrow = "->" if is_ascii_mode() else "→"
+        parts: list[str] = []
+        if self.steps_summarized > 0:
+            noun = "step" if self.steps_summarized == 1 else "steps"
+            parts.append(f"{self.steps_summarized} {noun} summarized")
+        if self.pre_tokens > 0 and self.post_tokens > 0:
+            ctx = (
+                f"context {format_token_count(self.pre_tokens)} "
+                f"{arrow} ~{format_token_count(self.post_tokens)}"
+            )
+            if self.summary_tokens > 0:
+                ctx += f" ({format_token_count(self.summary_tokens)} summary)"
+            parts.append(ctx)
+        elif self.summary_tokens > 0:
+            parts.append(f"{format_token_count(self.summary_tokens)}-token summary")
+        if self.duration_seconds > 0:
+            parts.append(f"took {_format_turn_duration(self.duration_seconds)}")
+        return f" {glyphs.separator} ".join(parts)
+
+    def render(self) -> Content:
+        """Render the widget content."""
+        width = self.content_size.width
+        if width <= 0:
+            width = self.container_size.width
+            if width <= 0:
+                try:
+                    width = self.app.size.width
+                except Exception:
+                    width = 80
+        width = max(20, width)
+        header = self.header_text(width)
+        stats = self.stats_text()
+        if not stats:
+            return Content.styled(header, "dim")
+        pad = max(0, (width - len(stats)) // 2)
+        padded_stats = (" " * pad) + stats
+        return Content.assemble(
+            (header, "dim"),
+            ("\n", ""),
+            (padded_stats, "dim"),
+        )
+
+
+class _RubricResultToggle(Static):
+    """Clickable element inside a rubric result widget."""
+
+    can_focus = False
+
+
+class RubricResultMessage(Vertical):
+    """Compact grader result with complete, scrollable details on demand."""
+
+    class ExpansionChanged(Message):
+        """Posted when the grader-details expansion state changes."""
+
+        def __init__(self, widget: RubricResultMessage, expanded: bool) -> None:
+            """Initialize ExpansionChanged."""
+            super().__init__()
+            self.widget = widget
+            self.expanded = expanded
+
+    DEFAULT_CSS = """
+    RubricResultMessage {
+        height: auto;
+        padding: 0 1;
+        margin: 0 0 1 0;
+        color: $text-muted;
+        border-left: wide $warning;
+    }
+
+    RubricResultMessage .rubric-result-summary {
+        height: auto;
+    }
+
+    RubricResultMessage .rubric-result-details-scroll {
+        display: none;
+        height: auto;
+        max-height: 16;
+        margin: 1 0 0 2;
+        overflow-y: auto;
+        scrollbar-size-vertical: 1;
+    }
+
+    RubricResultMessage .rubric-result-details {
+        height: auto;
+        padding: 0;
+    }
+
+    RubricResultMessage .rubric-result-hint {
+        height: auto;
+        margin-left: 2;
+        color: $text-muted;
+    }
+
+    RubricResultMessage.-expanded .rubric-result-details-scroll {
+        display: block;
+    }
+    """
+
+    _expanded: var[bool] = var(False, toggle_class="-expanded")
+
+    def __init__(
+        self,
+        summary: str,
+        details: str,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize RubricResultMessage."""
+        super().__init__(**kwargs)
+        self._summary = summary
+        self._details = details
+        self._hint_widget: _RubricResultToggle | None = None
+
+    def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
+        yield _RubricResultToggle(
+            Content.styled(self._summary, "dim italic"),
+            classes="rubric-result-summary",
+        )
+        with VerticalScroll(classes="rubric-result-details-scroll"):
+            yield Static(
+                Content(self._details),
+                classes="rubric-result-details",
+            )
+        yield _RubricResultToggle("", classes="rubric-result-hint")
+
+    def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
+        self._hint_widget = self.query_one(
+            ".rubric-result-hint",
+            _RubricResultToggle,
+        )
+        if not self._details:
+            self._hint_widget.display = False
+            return
+        self._update_hint()
+
+    def toggle_details(self) -> None:
+        """Toggle details."""
+        if self._details:
+            self._expanded = not self._expanded
+
+    def watch__expanded(self, expanded: bool) -> None:
+        """React to changes in the expanded reactive attribute."""
+        self._update_hint()
+        if self.is_attached:
+            self.post_message(self.ExpansionChanged(self, expanded))
+
+    def _update_hint(self) -> None:
+        if self._hint_widget is None or not self._details:
+            return
+        action = "hide" if self._expanded else "show"
+        self._hint_widget.update(
+            Content.styled(f"click or Ctrl+O to {action} details", "dim italic")
+        )
+
+    @on(Click, "_RubricResultToggle")
+    def _on_toggle_click(self, event: Click) -> None:
+        if getattr(event, "chain", 1) > 1 or bool(
+            getattr(self.screen, "selections", None)
+        ):
+            return
+        event.stop()
+        self.toggle_details()

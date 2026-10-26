@@ -1,21 +1,37 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for MCPViewerScreen, /mcp command handler, and app metadata lifecycle."""
 
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.screen import Screen
 
-from opscloud.commands._base import CommandContext
-from opscloud.commands.core.mcp import McpHandler
-from opscloud.mcp.mcp_info import MCPServerInfo, MCPToolInfo
-from opscloud.mcp.preload import (
+from talkops.commands._base import CommandContext
+from talkops.commands.core.mcp import McpHandler
+from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+from talkops.mcp.preload import (
     clear_cached_mcp_server_infos,
     set_cached_mcp_server_info,
 )
-from opscloud.ui.widgets.mcp_viewer import (
+from talkops.ui.widgets.mcp_viewer import (
     MCPServerHeaderItem,
     MCPToolDetailScreen,
     MCPToolItem,
@@ -25,17 +41,20 @@ from opscloud.ui.widgets.mcp_viewer import (
 )
 
 
-class DummyViewerApp(App):
-    """Minimal textual app to mount and test MCPViewerScreen."""
+class DummyViewerApp(App[None]):
+    """Minimal textual app to mount and test MCP screens."""
 
-    def __init__(self, screen_instance: MCPViewerScreen) -> None:
+    def __init__(self, screen_instance: Screen[Any]) -> None:
+        """Initialize DummyViewerApp."""
         super().__init__()
         self._test_screen = screen_instance
 
     def compose(self) -> ComposeResult:
+        """Compose and yield child widgets for this component."""
         yield from ()
 
     async def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
         await self.push_screen(self._test_screen)
 
 
@@ -204,16 +223,17 @@ async def test_mcp_command_status() -> None:
 
     res = await handler.execute(ctx)
     assert res.success is True
+    assert res.message is not None
     assert "prod-aws" in res.message
     assert "2 tools" in res.message
 
 
 @pytest.mark.asyncio
-async def test_opscloud_app_preload_metadata_background() -> None:
-    """Verify OpsCloudApp._preload_mcp_metadata_background loads servers and refreshes viewer."""
-    from opscloud.ui.app import OpsCloudApp
+async def test_talkops_app_preload_metadata_background() -> None:
+    """Verify TalkOpsApp._preload_mcp_metadata_background loads servers and refreshes viewer."""
+    from talkops.ui.app import TalkOpsApp
 
-    app = OpsCloudApp(defer_server_start=True, mcp_preload_kwargs={"no_mcp": False})
+    app = TalkOpsApp(defer_server_start=True, mcp_preload_kwargs={"no_mcp": False})
     assert app._mcp_server_info == []
 
     mock_infos = [
@@ -225,7 +245,7 @@ async def test_opscloud_app_preload_metadata_background() -> None:
         )
     ]
 
-    with patch("opscloud.mcp.preload.preload_mcp_server_info", AsyncMock(return_value=mock_infos)):
+    with patch("talkops.mcp.preload.preload_mcp_server_info", AsyncMock(return_value=mock_infos)):
         await app._preload_mcp_metadata_background()
         assert app._mcp_server_info == mock_infos
         assert app.get_mcp_servers() == mock_infos

@@ -1,9 +1,24 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for ServerHooksMiddleware, Hooks v2 models, wire tools, and interrupt transport."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -11,18 +26,18 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
-from opscloud.hooks.env import (
+from talkops.hooks.env import (
     is_secret_env_var,
     sanitize_hook_environ,
 )
-from opscloud.hooks.interrupt import (
+from talkops.hooks.interrupt import (
     build_hook_interrupt_payload,
     build_hook_resume_value,
     is_hook_interrupt_payload,
     parse_hook_interrupt_payload,
     parse_hook_resume_value,
 )
-from opscloud.hooks.models import (
+from talkops.hooks.models import (
     AgentIdentity,
     CommandHandlerSpec,
     CompactTrigger,
@@ -35,8 +50,6 @@ from opscloud.hooks.models import (
     MatcherGroup,
     NotificationDecision,
     NotificationEvent,
-    OpscloudNotification,
-    OpscloudNotificationKind,
     PermissionEffect,
     PermissionRequestDecision,
     PermissionRequestEvent,
@@ -60,33 +73,35 @@ from opscloud.hooks.models import (
     SubagentStartEvent,
     SubagentStopDecision,
     SubagentStopEvent,
+    TalkOpsNotification,
+    TalkOpsNotificationKind,
     ToolCallData,
     UserPromptSubmitDecision,
     UserPromptSubmitEvent,
 )
-from opscloud.hooks.models.adapters import (
+from talkops.hooks.models.adapters import (
     HOOK_DECISION_ADAPTER,
     HOOK_DOMAIN_EVENT_ADAPTER,
     HOOK_INVOCATION_ADAPTER,
 )
-from opscloud.hooks.models.transport import (
+from talkops.hooks.models.transport import (
     HookInvocationRequest,
     HookInvocationResponse,
 )
-from opscloud.hooks.tools import (
+from talkops.hooks.tools import (
     format_mcp_wire_name,
     to_wire_call,
     to_wire_tool_input,
     to_wire_tool_name,
 )
-from opscloud.middleware.server_hooks import (
+from talkops.middleware.server_hooks import (
     ServerHooksMiddleware,
     ServerHooksState,
     _event_enabled,
     _session_gate,
     hook_decided_permission,
 )
-from opscloud.security.approval_mode import ApprovalMode
+from talkops.security.approval_mode import ApprovalMode
 
 
 class TestHooksWireTools:
@@ -357,14 +372,14 @@ class TestHookDomainModels:
         assert event.event == HookEvent.POST_TOOL_USE
         assert event.duration_ms == 10
 
-    def test_opscloud_notification_models(self) -> None:
-        """Verify OpscloudNotification and OpscloudNotificationKind function as expected."""
-        assert OpscloudNotificationKind.PERMISSION_REQUIRED == "permission_required"
-        assert OpscloudNotificationKind.AGENT_NEEDS_INPUT == "agent_needs_input"
-        assert OpscloudNotificationKind.AGENT_COMPLETED == "agent_completed"
+    def test_talkops_notification_models(self) -> None:
+        """Verify TalkOpsNotification and TalkOpsNotificationKind function as expected."""
+        assert TalkOpsNotificationKind.PERMISSION_REQUIRED == "permission_required"
+        assert TalkOpsNotificationKind.AGENT_NEEDS_INPUT == "agent_needs_input"
+        assert TalkOpsNotificationKind.AGENT_COMPLETED == "agent_completed"
 
-        notification = OpscloudNotification(
-            type=OpscloudNotificationKind.AGENT_COMPLETED,
+        notification = TalkOpsNotification(
+            type=TalkOpsNotificationKind.AGENT_COMPLETED,
             message="Cluster provisioned.",
             title="Success",
         )
@@ -408,13 +423,14 @@ class TestHooksConfigModels:
 
     def test_command_handler_spec_validation(self) -> None:
         """Verify CommandHandlerSpec parses command, argv, and timeout."""
-        spec = CommandHandlerSpec(
-            type="command",
-            command="audit_aws.sh",
-            argv=["audit_aws.sh", "--verbose"],
-            timeout=10.0,
-            status_message="Running AWS audit hook",
-        )
+        spec_kwargs: dict[str, Any] = {
+            "type": "command",
+            "command": "audit_aws.sh",
+            "argv": ["audit_aws.sh", "--verbose"],
+            "timeout": 10.0,
+            "status_message": "Running AWS audit hook",
+        }
+        spec = CommandHandlerSpec(**spec_kwargs)
         assert spec.type == "command"
         assert spec.command == "audit_aws.sh"
         assert spec.argv == ["audit_aws.sh", "--verbose"]

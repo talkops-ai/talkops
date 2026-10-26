@@ -1,0 +1,257 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for ChatInput responsiveness, mode prefixes, and autocomplete."""
+import asyncio
+from unittest.mock import MagicMock
+
+import pytest
+from textual.events import Click, Key
+
+from talkops.ui.command_registry import get_all_entries
+from talkops.ui.widgets.autocomplete import (
+    CompletionResult,
+    MultiCompletionManager,
+    SlashCommandController,
+)
+from talkops.ui.widgets.chat_input import (
+    ChatInput,
+    CompletionPopup,
+    _CompletionViewAdapter,
+)
+
+
+class DummyApp:
+    """Test suite or helper class for dummy app."""
+    def __init__(self):
+        """Initialize DummyApp."""
+        self._pending_approval_widget = None
+        self._pending_ask_user_widget = None
+        self._pending_goal_review_widget = None
+
+
+@pytest.fixture
+def chat_input():
+    """Provide chat input test helper or fixture."""
+    widget = ChatInput()
+    widget._app = DummyApp()
+    widget._completion_view = _CompletionViewAdapter(widget)
+    widget._slash_controller = SlashCommandController(get_all_entries(), widget._completion_view)
+    widget._completion_manager = MultiCompletionManager([widget._slash_controller])
+    return widget
+
+
+def test_mode_prefix_keystroke_consumption(chat_input):
+    """Typing '/' at start of empty input enters command mode without inserting '/' into TextArea."""
+    assert chat_input.mode == "normal"
+    assert "❯" in str(chat_input._prompt_widget.render())
+
+    consumed = chat_input.handle_mode_prefix_keystroke("/")
+    assert consumed is True
+    assert chat_input.mode == "command"
+    assert "/" in str(chat_input._prompt_widget.render())
+    assert chat_input.text == ""
+
+    # Virtual completion text should be "/"
+    vtext, vcursor = chat_input._completion_text_and_cursor()
+    assert vtext == "/"
+    assert vcursor == 1
+
+
+def test_backspace_exits_command_mode(chat_input):
+    """Pressing backspace on empty input in command mode exits back to normal mode."""
+    chat_input.handle_mode_prefix_keystroke("/")
+    assert chat_input.mode == "command"
+    assert "/" in str(chat_input._prompt_widget.render())
+
+    event = Key(key="backspace", character=None)
+    # Simulate _handle_key_event
+    handled = asyncio.run(chat_input._handle_key_event(event))
+    assert handled is True
+    assert chat_input.mode == "normal"
+    assert "❯" in str(chat_input._prompt_widget.render())
+    assert chat_input.text == ""
+
+
+def test_space_completes_with_trailing_space_and_argument_hint(chat_input):
+    """Selecting /pool via space appends a trailing space and immediately renders argument hint."""
+    chat_input.handle_mode_prefix_keystroke("/")
+    chat_input._text_area.text = "poo"
+    chat_input._text_area.cursor_location = (0, 3)
+
+    vtext, vcursor = chat_input._completion_text_and_cursor()
+    assert vtext == "/poo"
+    assert vcursor == 4
+
+    chat_input._completion_manager.on_text_changed(vtext, vcursor)
+    assert len(chat_input._current_suggestions) > 0
+    # First suggestion is /pool
+    assert chat_input._current_suggestions[0][0] in ("/pool", "pool")
+
+    # Press space on the completion
+    space_event = Key(key="space", character=" ")
+    handled = asyncio.run(chat_input._handle_key_event(space_event))
+    assert handled is True
+
+    # The text area should now have "pool " (with trailing space)
+    assert chat_input.text == "pool "
+    # The cursor should be after the space
+    assert chat_input._text_area.cursor_location == (0, 5)
+    # The argument hint should immediately be populated
+    assert chat_input._text_area.argument_hint == "[status | clear]"
+
+
+def test_mouse_click_on_completion_option(chat_input):
+    """Clicking an autocomplete popup option applies the completion and adds a trailing space."""
+    chat_input.handle_mode_prefix_keystroke("/")
+    chat_input._text_area.text = "poo"
+    chat_input._text_area.cursor_location = (0, 3)
+
+    vtext, vcursor = chat_input._completion_text_and_cursor()
+    chat_input._completion_manager.on_text_changed(vtext, vcursor)
+
+    # Click first suggestion
+    option_event = CompletionPopup.OptionClicked(0)
+    chat_input.on_completion_popup_option_clicked(option_event)
+
+    assert chat_input.text == "pool "
+    assert chat_input._text_area.cursor_location == (0, 5)
+    assert chat_input._text_area.argument_hint == "[status | clear]"
+
+
+def test_submit_value_prepends_mode_prefix(chat_input):
+    """Submitting 'pool status' in command mode posts '/pool status'."""
+    chat_input.mode = "command"
+    chat_input._text_area.text = "pool status"
+
+    posted_messages = []
+    chat_input.post_message = lambda msg: posted_messages.append(msg)
+
+    chat_input._submit_value()
+
+    submitted = next((m for m in posted_messages if isinstance(m, ChatInput.Submitted)), None)
+    assert submitted is not None
+    assert submitted.value == "/pool status"
+    assert submitted.mode == "command"
+    # Mode should reset to normal
+    assert chat_input.mode == "normal"
+    assert chat_input.text == ""
+
+
+def test_click_on_chat_input_focuses_text_area(chat_input):
+    """Clicking anywhere on ChatInput focuses the internal text area."""
+    focused = False
+
+    def mock_focus(*args, **kwargs):
+        """Provide mock focus test helper or fixture."""
+        nonlocal focused
+        focused = True
+
+    chat_input._text_area.focus = mock_focus
+    event = MagicMock(spec=Click)
+    chat_input.on_click(event)
+    assert focused is True
+
+
+def test_submit_command_clears_argument_hint(chat_input):
+    """Submitting a command like /cloud clears the argument hint ghost text."""
+    chat_input.mode = "command"
+    chat_input._text_area.text = "cloud "
+    chat_input._text_area.argument_hint = "[profile-name | status | list]"
+
+    chat_input._submit_value()
+
+    assert chat_input.mode == "normal"
+    assert chat_input.text == ""
+    assert chat_input._text_area.argument_hint == ""
+
+
+def test_clear_clears_argument_hint(chat_input):
+    """Calling clear() resets argument_hint on the internal text area."""
+    chat_input.mode = "command"
+    chat_input._text_area.argument_hint = "[profile-name | status | list]"
+
+    chat_input.clear()
+
+    assert chat_input.mode == "normal"
+    assert chat_input._text_area.argument_hint == ""
+
+
+def test_exit_mode_clears_argument_hint(chat_input):
+    """Exiting command mode resets argument_hint."""
+    chat_input.mode = "command"
+    chat_input._text_area.argument_hint = "[profile-name | status | list]"
+
+    chat_input.exit_mode()
+
+    assert chat_input.mode == "normal"
+    assert chat_input._text_area.argument_hint == ""
+
+
+@pytest.mark.asyncio
+async def test_chat_text_area_render_line_ignores_hint_when_line_empty():
+    """render_line does not draw ghost text if the document line is empty."""
+    from tests.unit_tests.test_chat_input_chrome import _ThemedApp
+
+    app = _ThemedApp()
+    async with app.run_test():
+        ci = app.query_one(ChatInput)
+        ci._text_area.text = ""
+        ci._text_area.argument_hint = "[profile-name | status | list]"
+
+        strip = ci._text_area.render_line(0)
+        rendered_plain = strip.text
+        assert "[profile-name | status | list]" not in rendered_plain
+
+
+@pytest.mark.asyncio
+async def test_up_and_down_arrow_history_navigation_places_cursor_at_end():
+    """Pressing Up/Down arrows recalls previous prompts and positions cursor at the end."""
+    from tests.unit_tests.test_chat_input_chrome import _ThemedApp
+
+    app = _ThemedApp()
+    async with app.run_test(size=(100, 12)) as pilot:
+        ci = app.query_one(ChatInput)
+        ci.focus()
+
+        # Submit two prompts
+        ci.text = "first prompt"
+        ci._submit_value()
+        ci.text = "second prompt"
+        ci._submit_value()
+        assert ci.text == ""
+
+        # Press Up arrow -> should autofill "second prompt" with cursor at end
+        await pilot.press("up")
+        await pilot.pause()
+        assert ci.text == "second prompt"
+        assert ci._text_area.cursor_location == (0, len("second prompt"))
+
+        # Press Up arrow again -> should autofill "first prompt" with cursor at end
+        await pilot.press("up")
+        await pilot.pause()
+        assert ci.text == "first prompt"
+        assert ci._text_area.cursor_location == (0, len("first prompt"))
+
+        # Press Down arrow -> back to "second prompt"
+        await pilot.press("down")
+        await pilot.pause()
+        assert ci.text == "second prompt"
+        assert ci._text_area.cursor_location == (0, len("second prompt"))
+
+        # Press Down arrow again -> back to empty draft
+        await pilot.press("down")
+        await pilot.pause()
+        assert ci.text == ""
+        assert ci._text_area.cursor_location == (0, 0)

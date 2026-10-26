@@ -1,4 +1,18 @@
-"""Unit tests for OpsCloud enhanced CLI capabilities.
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for TalkOps enhanced CLI capabilities.
 
 Covers:
 - Positional prompt auto-detection and subcommand disambiguation
@@ -16,13 +30,14 @@ import asyncio
 import io
 import json
 import sys
+import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from opscloud.approval_mode import ApprovalMode
-from opscloud.cli.main import (
+from talkops.approval_mode import ApprovalMode
+from talkops.cli.main import (
     _apply_stdin_pipe,
     _resolve_approval_mode,
     _validate_args,
@@ -32,18 +47,19 @@ from opscloud.cli.main import (
     positive_int,
     shell_allow_list_arg,
 )
-from opscloud.cli.non_interactive import run_non_interactive
-
+from talkops.cli.non_interactive import run_non_interactive
 
 # ── 1. Argument Types & Validators ───────────────────────
 
 
 def test_positive_int_valid():
+    """Verify positive int valid."""
     assert positive_int("1") == 1
     assert positive_int("100") == 100
 
 
 def test_positive_int_invalid():
+    """Verify positive int invalid."""
     with pytest.raises(argparse.ArgumentTypeError, match="must be greater than 0"):
         positive_int("0")
     with pytest.raises(argparse.ArgumentTypeError, match="must be greater than 0"):
@@ -53,16 +69,19 @@ def test_positive_int_invalid():
 
 
 def test_non_negative_int_valid():
+    """Verify non negative int valid."""
     assert non_negative_int("0") == 0
     assert non_negative_int("10") == 10
 
 
 def test_non_negative_int_invalid():
+    """Verify non negative int invalid."""
     with pytest.raises(argparse.ArgumentTypeError, match="must be non-negative"):
         non_negative_int("-1")
 
 
 def test_shell_allow_list_arg():
+    """Verify shell allow list arg."""
     parsed = shell_allow_list_arg("aws, kubectl, terraform ")
     assert parsed == ["aws", "kubectl", "terraform"]
 
@@ -73,7 +92,7 @@ def test_shell_allow_list_arg():
 def test_positional_prompt_detected(monkeypatch):
     """Positional prompt without -p flag should be recognized as non-interactive prompt."""
     mock_run = MagicMock(return_value=0)
-    monkeypatch.setattr("opscloud.cli.main.run_non_interactive", mock_run)
+    monkeypatch.setattr("talkops.cli.main.run_non_interactive", mock_run)
 
     ret = main(["Audit VPC peering connections"])
     assert ret == 0
@@ -84,7 +103,7 @@ def test_positional_prompt_detected(monkeypatch):
 def test_positional_prompt_with_flags(monkeypatch):
     """Positional prompt mixed with options should be parsed correctly."""
     mock_run = MagicMock(return_value=0)
-    monkeypatch.setattr("opscloud.cli.main.run_non_interactive", mock_run)
+    monkeypatch.setattr("talkops.cli.main.run_non_interactive", mock_run)
 
     ret = main(["Inspect EKS nodes", "--timeout", "120", "--read-only"])
     assert ret == 0
@@ -98,7 +117,7 @@ def test_positional_prompt_with_flags(monkeypatch):
 def test_flags_before_positional_prompt(monkeypatch):
     """Flags placed before positional prompt should parse correctly."""
     mock_run = MagicMock(return_value=0)
-    monkeypatch.setattr("opscloud.cli.main.run_non_interactive", mock_run)
+    monkeypatch.setattr("talkops.cli.main.run_non_interactive", mock_run)
 
     ret = main(["--aws-region", "us-west-2", "Check CloudWatch alarms", "--max-turns", "5"])
     assert ret == 0
@@ -112,7 +131,7 @@ def test_flags_before_positional_prompt(monkeypatch):
 def test_subcommand_not_treated_as_positional_prompt(monkeypatch):
     """Registered subcommands like doctor or auth must not be converted into prompts."""
     mock_doctor = MagicMock(return_value=0)
-    monkeypatch.setattr("opscloud.cli.main.run_doctor_command", mock_doctor)
+    monkeypatch.setattr("talkops.cli.main.run_doctor_command", mock_doctor)
 
     ret = main(["doctor"])
     assert ret == 0
@@ -166,6 +185,7 @@ def test_stdin_piping_oversized_exits(capsys):
 
 
 def test_quiet_requires_prompt(capsys):
+    """Verify quiet requires prompt."""
     ret = main(["--quiet"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -174,6 +194,7 @@ def test_quiet_requires_prompt(capsys):
 
 
 def test_no_stream_requires_prompt(capsys):
+    """Verify no stream requires prompt."""
     ret = main(["--no-stream"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -182,6 +203,7 @@ def test_no_stream_requires_prompt(capsys):
 
 
 def test_max_turns_requires_prompt(capsys):
+    """Verify max turns requires prompt."""
     ret = main(["--max-turns", "5"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -189,6 +211,7 @@ def test_max_turns_requires_prompt(capsys):
 
 
 def test_timeout_requires_prompt(capsys):
+    """Verify timeout requires prompt."""
     ret = main(["--timeout", "60"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -196,6 +219,7 @@ def test_timeout_requires_prompt(capsys):
 
 
 def test_no_mcp_and_mcp_config_conflict(capsys):
+    """Verify no mcp and mcp config conflict."""
     ret = main(["-p", "test", "--no-mcp", "--mcp-config", "mcp.json"])
     assert ret == 2
     captured = capsys.readouterr()
@@ -203,6 +227,7 @@ def test_no_mcp_and_mcp_config_conflict(capsys):
 
 
 def test_goal_with_prompt_conflict(capsys):
+    """Verify goal with prompt conflict."""
     ret = main(["-p", "test prompt", "--goal", "interactive goal"])
     assert ret == 1
     captured = capsys.readouterr()
@@ -213,6 +238,7 @@ def test_goal_with_prompt_conflict(capsys):
 
 
 def test_cloud_flags_parsed():
+    """Verify cloud flags parsed."""
     parser = build_parser()
     args = parser.parse_args([
         "-p", "Audit AWS infrastructure",
@@ -228,6 +254,7 @@ def test_cloud_flags_parsed():
 
 
 def test_approval_mode_resolution():
+    """Verify approval mode resolution."""
     args_smart = argparse.Namespace(smart=True, approval_mode=None, prompt="test")
     assert _resolve_approval_mode(args_smart) == ApprovalMode.SMART
 
@@ -250,8 +277,9 @@ def test_approval_mode_resolution():
 
 
 def test_model_params_json_valid(monkeypatch):
+    """Verify model params json valid."""
     mock_run = MagicMock(return_value=0)
-    monkeypatch.setattr("opscloud.cli.main.run_non_interactive", mock_run)
+    monkeypatch.setattr("talkops.cli.main.run_non_interactive", mock_run)
 
     ret = main(["-p", "hello", "--model-params", '{"temperature": 0.2, "max_tokens": 2048}'])
     assert ret == 0
@@ -261,6 +289,7 @@ def test_model_params_json_valid(monkeypatch):
 
 
 def test_model_params_json_invalid(capsys):
+    """Verify model params json invalid."""
     ret = main(["-p", "hello", "--model-params", "{invalid-json}"])
     assert ret == 1
     captured = capsys.readouterr()
@@ -272,9 +301,10 @@ def test_model_params_json_invalid(capsys):
 
 def test_run_non_interactive_timeout():
     """Wall-clock timeout in run_non_interactive should return exit code 124."""
-    with patch("opscloud.cli.non_interactive._run_headless") as mock_headless:
+    with patch("talkops.cli.non_interactive._run_headless") as mock_headless:
         # Simulate long-running coro that wait_for will cancel
         async def slow_headless(*args: Any, **kwargs: Any) -> int:
+            """Provide slow headless test helper or fixture."""
             await asyncio.sleep(10.0)
             return 0
 
@@ -285,7 +315,7 @@ def test_run_non_interactive_timeout():
 
 def test_run_non_interactive_keyboard_interrupt():
     """KeyboardInterrupt in run_non_interactive should return exit code 130."""
-    with patch("opscloud.cli.non_interactive._run_headless") as mock_headless:
+    with patch("talkops.cli.non_interactive._run_headless") as mock_headless:
         mock_headless.side_effect = KeyboardInterrupt
         ret = run_non_interactive("Task cancelled by user", quiet=True)
         assert ret == 130
@@ -294,12 +324,13 @@ def test_run_non_interactive_keyboard_interrupt():
 @pytest.mark.asyncio
 async def test_run_headless_quiet_mode_and_turn_limit():
     """Quiet mode should direct diagnostics away from stdout and turn limits return 124."""
-    from opscloud.cli.non_interactive import _run_headless
+    from talkops.cli.non_interactive import _run_headless
 
     # Create a mock agent that yields more turns than max_turns
     mock_agent = MagicMock()
 
     async def mock_astream(*args: Any, **kwargs: Any):
+        """Provide mock astream test helper or fixture."""
         yield ((), "messages", ("Analyzing logs...", {}))
         yield ((), "updates", {"messages": [MagicMock(name="aws ec2 describe-instances")]})
         yield ((), "updates", {"messages": [MagicMock(name="aws ec2 describe-instances")]})
@@ -307,7 +338,7 @@ async def test_run_headless_quiet_mode_and_turn_limit():
 
     mock_agent.astream = mock_astream
 
-    with patch("opscloud.cli.non_interactive.server_session") as mock_session:
+    with patch("talkops.cli.non_interactive.server_session") as mock_session:
         mock_session.return_value.__enter__.return_value = mock_agent
 
         # Run with max_turns=2
@@ -322,16 +353,17 @@ async def test_run_headless_quiet_mode_and_turn_limit():
 @pytest.mark.asyncio
 async def test_run_headless_json_output(capsys):
     """JSON output mode emits machine-readable envelope with metrics."""
-    from opscloud.cli.non_interactive import _run_headless
+    from talkops.cli.non_interactive import _run_headless
 
     mock_agent = MagicMock()
 
     async def mock_astream(*args: Any, **kwargs: Any):
+        """Provide mock astream test helper or fixture."""
         yield ((), "messages", ("All 12 instances are healthy.", {}))
 
     mock_agent.astream = mock_astream
 
-    with patch("opscloud.cli.non_interactive.server_session") as mock_session:
+    with patch("talkops.cli.non_interactive.server_session") as mock_session:
         mock_session.return_value.__enter__.return_value = mock_agent
 
         exit_code = await _run_headless(
@@ -352,7 +384,7 @@ async def test_run_headless_json_output(capsys):
 
 
 def test_auth_json_envelope(capsys, monkeypatch):
-    """auth command with --json flag emits structured envelope."""
+    """Auth command with --json flag emits structured envelope."""
     fake_ctx = MagicMock(
         is_authenticated=True,
         account_id="123456789012",
@@ -362,7 +394,7 @@ def test_auth_json_envelope(capsys, monkeypatch):
         profile="default",
         error=None,
     )
-    monkeypatch.setattr("opscloud.cli.commands.auth.get_aws_context", lambda: fake_ctx)
+    monkeypatch.setattr("talkops.cli.commands.auth.get_aws_context", lambda: fake_ctx)
 
     ret = main(["auth", "--json"])
     assert ret == 0
@@ -375,7 +407,7 @@ def test_auth_json_envelope(capsys, monkeypatch):
 
 
 def test_doctor_json_envelope(capsys, monkeypatch):
-    """doctor command with --json flag emits structured environment metrics."""
+    """Doctor command with --json flag emits structured environment metrics."""
     fake_ctx = MagicMock(
         is_authenticated=True,
         account_id="123456789012",
@@ -383,7 +415,7 @@ def test_doctor_json_envelope(capsys, monkeypatch):
         profile="default",
         error=None,
     )
-    monkeypatch.setattr("opscloud.cli.commands.doctor.get_aws_context", lambda: fake_ctx)
+    monkeypatch.setattr("talkops.cli.commands.doctor.get_aws_context", lambda: fake_ctx)
 
     ret = main(["doctor", "--json"])
     assert ret == 0
@@ -397,8 +429,9 @@ def test_doctor_json_envelope(capsys, monkeypatch):
 
 
 def test_threads_list_json_envelope(capsys, monkeypatch):
-    """threads list --json emits list of thread metadata."""
+    """Threads list --json emits list of thread metadata."""
     async def fake_list_threads(**kwargs):
+        """Provide fake list threads test helper or fixture."""
         return [
             {
                 "thread_id": "thread_abc123",
@@ -409,7 +442,7 @@ def test_threads_list_json_envelope(capsys, monkeypatch):
             }
         ]
 
-    monkeypatch.setattr("opscloud.cli.commands.threads.list_threads", fake_list_threads)
+    monkeypatch.setattr("talkops.cli.commands.threads.list_threads", fake_list_threads)
 
     ret = main(["threads", "list", "--json"])
     assert ret == 0
@@ -422,9 +455,9 @@ def test_threads_list_json_envelope(capsys, monkeypatch):
 
 
 def test_threads_delete_command(capsys, monkeypatch):
-    """threads delete command deletes target thread and outputs envelope."""
+    """Threads delete command deletes target thread and outputs envelope."""
     mock_del = AsyncMock(return_value=True)
-    monkeypatch.setattr("opscloud.state.session.delete_thread", mock_del)
+    monkeypatch.setattr("talkops.state.session.delete_thread", mock_del)
 
     ret = main(["threads", "delete", "thread_to_delete_123", "--json"])
     assert ret == 0
@@ -441,8 +474,8 @@ def test_threads_delete_command(capsys, monkeypatch):
 
 
 def test_normalize_thread_id():
-    import uuid
-    from opscloud.ui.remote_client import normalize_thread_id
+    """Verify normalize thread id."""
+    from talkops.ui.remote_client import normalize_thread_id
 
     # 1. Valid UUID string remains unchanged
     valid_uuid = str(uuid.uuid4())
@@ -464,20 +497,20 @@ def test_normalize_thread_id():
 @pytest.mark.asyncio
 async def test_run_headless_valid_uuid_passed_to_agent():
     """Headless runner must ensure effective_thread is a valid UUID string."""
-    import uuid
-    from opscloud.cli.non_interactive import _run_headless
+    from talkops.cli.non_interactive import _run_headless
 
     mock_agent = MagicMock()
     captured_config = {}
 
     async def mock_astream(*args: Any, **kwargs: Any):
+        """Provide mock astream test helper or fixture."""
         nonlocal captured_config
         captured_config = kwargs.get("config", {})
         yield ((), "messages", ("pong", {}))
 
     mock_agent.astream = mock_astream
 
-    with patch("opscloud.cli.non_interactive.server_session") as mock_session:
+    with patch("talkops.cli.non_interactive.server_session") as mock_session:
         mock_session.return_value.__enter__.return_value = mock_agent
 
         # Call with no thread_id specified
@@ -487,3 +520,248 @@ async def test_run_headless_valid_uuid_passed_to_agent():
         # Must be valid UUID (does not raise ValueError)
         uuid_obj = uuid.UUID(tid)
         assert str(uuid_obj) == tid
+
+
+# ── 10. Regression Tests for CLI Audit Fixes (BUG-01 .. BUG-13) ──
+
+
+@pytest.mark.asyncio
+async def test_max_turns_ignores_middleware_updates_and_counts_model_turns():
+    """BUG-01: Middleware updates (e.g. TodoListMiddleware) must not increment turn_count."""
+    from talkops.cli.non_interactive import _run_headless
+
+    mock_agent = MagicMock()
+
+    async def mock_astream(*args: Any, **kwargs: Any):
+        # Middleware pre-model steps
+        """Provide mock astream test helper or fixture."""
+        yield ((), "updates", {"TodoListMiddleware.before_model": None})
+        yield ((), "updates", {"SummarizationMiddleware.before_model": None})
+        # Streamed AI message chunk
+        chunk = MagicMock()
+        chunk.content = "PONG"
+        chunk.tool_call_chunks = []
+        yield ((), "messages", (chunk, {}))
+        # Model turn completion update
+        ai_msg = MagicMock()
+        ai_msg.content = "PONG"
+        yield ((), "updates", {"model": {"messages": [ai_msg]}})
+        # Post-model middleware update
+        yield ((), "updates", {"TodoListMiddleware.after_model": {"messages": []}})
+
+    mock_agent.astream = mock_astream
+
+    with patch("talkops.cli.non_interactive.server_session") as mock_session:
+        mock_session.return_value.__enter__.return_value = mock_agent
+
+        exit_code = await _run_headless(
+            "Reply with PONG",
+            max_turns=1,
+            quiet=True,
+        )
+        assert exit_code == 0
+
+
+def test_mcp_json_output_not_wrapped_and_supports_flags(capsys, monkeypatch, tmp_path):
+    """BUG-02 & BUG-09: talkops mcp --json outputs unwrapped JSON and honors --no-mcp / --mcp-config."""
+    ret = main(["mcp", "list", "--no-mcp", "--json"])
+    assert ret == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["mcp_servers"] == []
+
+    # Custom --mcp-config with a very long command string should not be line-wrapped in JSON
+    long_path = "/very/long/path/" + ("segment_" * 20) + "server.py"
+    cfg_file = tmp_path / "custom_mcp.json"
+    cfg_file.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "custom-long-server": {
+                        "command": "python3",
+                        "args": [long_path],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    ret2 = main(["mcp", "list", "--mcp-config", str(cfg_file), "--json"])
+    assert ret2 == 0
+    captured2 = capsys.readouterr()
+    payload2 = json.loads(captured2.out)
+    custom_entries = [
+        s for s in payload2["mcp_servers"] if s["name"] == "custom-long-server"
+    ]
+    assert len(custom_entries) == 1
+    assert long_path in custom_entries[0]["args"]
+
+
+def test_default_model_space_separated_argument(monkeypatch):
+    """BUG-03: talkops --default-model <MODEL> space-separated value is not rewritten to -p."""
+    saved = []
+    monkeypatch.setattr(
+        "talkops.model.config.save_default_model",
+        lambda spec: (saved.append(spec), True)[1],
+    )
+    assert main(["--default-model", "anthropic:claude-sonnet-4-5"]) == 0
+    assert saved == ["anthropic:claude-sonnet-4-5"]
+
+
+
+def test_plugin_subcommands_accept_json_flag(capsys):
+    """BUG-04: talkops plugin list --json and marketplace list --json succeed."""
+    ret = main(["plugin", "list", "--json"])
+    assert ret == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "plugins" in payload
+
+    ret_mp = main(["plugin", "marketplace", "list", "--json"])
+    assert ret_mp == 0
+    payload_mp = json.loads(capsys.readouterr().out)
+    assert "marketplaces" in payload_mp
+
+
+def test_threads_delete_nonexistent_json_returns_nonzero(capsys, monkeypatch):
+    """BUG-04: threads delete <nonexistent> --json returns exit code 1."""
+    monkeypatch.setattr("talkops.state.session.delete_thread", AsyncMock(return_value=False))
+    ret = main(["threads", "delete", "missing_thread_xyz", "--json"])
+    assert ret == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"]["deleted"] is False
+
+
+def test_help_subcommand_and_topics(capsys):
+    """BUG-05: talkops help and talkops help <subcmd> exit with 0."""
+    assert main(["help"]) == 0
+    assert main(["help", "skills"]) == 0
+    assert main(["help", "mcp"]) == 0
+
+
+def test_short_v_version_vs_verbose_flag(capsys, monkeypatch):
+    """BUG-06: standalone -v prints version; -v with subcommand acts as --verbose."""
+    assert main(["-v"]) == 0
+    assert "talkops" in capsys.readouterr().out
+
+    monkeypatch.setattr("talkops.cli.main.run_doctor_command", lambda fmt: 0)
+    assert main(["doctor", "-v"]) == 0
+    assert main(["doctor", "-V"]) == 0
+
+
+def test_skills_list_project_excludes_plugin_skills(capsys, tmp_path):
+    """BUG-07: skills list --project --json only returns project skills."""
+    ret = main(["skills", "list", "--project", "--json"])
+    assert ret == 0
+    payload = json.loads(capsys.readouterr().out)
+    for skill in payload["data"]:
+        assert skill.get("source") == "project"
+
+
+def test_auth_and_doctor_forward_aws_profile_and_region(monkeypatch):
+    """BUG-08: auth and doctor accept --aws-profile and --aws-region and forward them."""
+    captured_auth = {}
+    captured_doc = {}
+
+    def fake_auth(fmt, aws_profile=None, aws_region=None):
+        """Provide fake auth test helper or fixture."""
+        captured_auth["profile"] = aws_profile
+        captured_auth["region"] = aws_region
+        return 0
+
+    def fake_doc(fmt, aws_profile=None, aws_region=None):
+        """Provide fake doc test helper or fixture."""
+        captured_doc["profile"] = aws_profile
+        captured_doc["region"] = aws_region
+        return 0
+
+    monkeypatch.setattr("talkops.cli.main.run_auth_command", fake_auth)
+    monkeypatch.setattr("talkops.cli.main.run_doctor_command", fake_doc)
+
+    assert main(["auth", "--aws-profile", "my-prof", "--aws-region", "eu-west-1"]) == 0
+    assert captured_auth == {"profile": "my-prof", "region": "eu-west-1"}
+
+    assert main(["doctor", "--aws-profile", "my-prof", "--aws-region", "ap-south-1"]) == 0
+    assert captured_doc == {"profile": "my-prof", "region": "ap-south-1"}
+
+
+def test_plugin_enable_disable_nonexistent_returns_error(capsys):
+    """BUG-10: plugin enable/disable on a nonexistent plugin returns exit code 1."""
+    assert main(["plugin", "enable", "definitely-not-installed-xyz"]) == 1
+    assert main(["plugin", "disable", "definitely-not-installed-xyz"]) == 1
+
+
+def test_empty_rubric_string_rejected(capsys):
+    """BUG-11: --rubric '' is rejected with exit code 1."""
+    ret = main(["-p", "hello", "--rubric", ""])
+    assert ret == 1
+    captured = capsys.readouterr()
+    assert "--rubric must not be empty" in (captured.err + captured.out)
+
+
+def test_serve_conflicting_flags_rejected():
+    """BUG-12: serve rejects conflicting approval flags and --no-mcp with --mcp-config."""
+    with pytest.raises(SystemExit) as exc1:
+        main(["serve", "--yolo", "--smart"])
+    assert exc1.value.code == 2
+
+    assert main(["serve", "--no-mcp", "--mcp-config", "foo.json"]) == 2
+
+
+def test_agents_subcommand_text_and_json(capsys, tmp_path, monkeypatch):
+    """Verify `talkops agents` and `talkops agent list --json` output discovered agents."""
+    dot_agents = tmp_path / ".agents"
+    dot_agents.mkdir()
+    (dot_agents / "net-debugger.md").write_text(
+        "---\nname: net-debugger\ndescription: VPC and DNS troubleshooting specialist\n---\nDebug networks.",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "talkops.plugins.adapters.agents.discover_plugin_subagents",
+        lambda project_root=None: [],
+    )
+    monkeypatch.setattr(
+        "talkops.config.paths.user_agents_dir",
+        lambda *a, **kw: tmp_path / "no_user_agents",
+    )
+    monkeypatch.setattr("talkops.config.paths.AGENTS_SHARED_DIR", tmp_path / "no_shared_agents")
+
+    # 1. Text output via `talkops agents`
+    rc_text = main(["agents", "--cwd", str(tmp_path)])
+    assert rc_text == 0
+    out_text = capsys.readouterr().out
+    assert "Available Agents (1):" in out_text
+    assert "net-debugger" in out_text
+    assert "VPC and DNS troubleshooting specialist" in out_text
+
+    # 2. JSON output via `talkops agent list --json`
+    rc_json = main(["agent", "list", "--cwd", str(tmp_path), "--json"])
+    assert rc_json == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "agents"
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["agents"][0]["name"] == "net-debugger"
+    assert payload["data"]["agents"][0]["source"] == "project"
+
+
+def test_cli_agent_flag_headless_and_interactive(monkeypatch):
+    """Verify `-a / --agent` forwards agent name to headless and interactive runners."""
+    mock_non_interactive = MagicMock(return_value=0)
+    mock_interactive = MagicMock(return_value=0)
+    monkeypatch.setattr("talkops.cli.main.run_non_interactive", mock_non_interactive)
+    monkeypatch.setattr("talkops.cli.main.run_interactive", mock_interactive)
+    monkeypatch.setattr("talkops.cli.main._ensure_cli_authenticated", lambda *a, **kw: 0)
+
+    # Headless with -a
+    rc1 = main(["-a", "aws-compute", "-p", "Check EC2 instances"])
+    assert rc1 == 0
+    assert mock_non_interactive.called
+    assert mock_non_interactive.call_args[1]["agent"] == "aws-compute"
+
+    # Interactive with --agent
+    rc2 = main(["--agent", "k8s-operator"])
+    assert rc2 == 0
+    assert mock_interactive.called
+    assert mock_interactive.call_args[1]["agent"] == "k8s-operator"
+
+
+

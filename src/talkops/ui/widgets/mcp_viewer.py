@@ -1,0 +1,1349 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Interactive MCP server & tool viewer modal screen for TalkOps.
+
+Two-pane layout: left pane lists MCP servers and their tools with ↑/↓ navigation
+and hover support, right pane shows rich live details for the selected tool or server.
+
+Styled consistently with SkillsViewerScreen, AuthManagerScreen, and ThreadSelectorScreen.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from textual import events
+from textual.binding import Binding, BindingType
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
+from textual.screen import ModalScreen
+from textual.widgets import Input, Static
+
+from talkops.config.settings import get_glyphs
+from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.ui.widgets.modal_base import escape_markup as escape
+from talkops.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from textual.app import ComposeResult
+
+    from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
+
+logger = get_logger(__name__)
+
+MCP_VIEWER_RECONNECT_REQUEST = "\x00__mcp_reconnect__"
+"""Sentinel returned by dismiss to request a reconnect."""
+
+
+# ── Identifier cleaning helpers ──────────────────────────
+
+
+def clean_server_name(raw_name: str) -> tuple[str, str | None]:
+    """Parse a potentially mangled or scoped MCP server name into (display_name, scope).
+
+    Examples:
+        'plugin__aws-compute_talkops-devops-plugins_35da5a75__aws-mcp' -> ('aws-mcp', 'aws-compute')
+        'subagent__helm-operator__helm-mcp' -> ('helm-mcp', 'helm-operator')
+        'github' -> ('github', None)
+    """
+    if not raw_name:
+        return ("unnamed", None)
+
+    # 1. Plugin scoped server: plugin__<plugin_id_sanitized>__<server_name>
+    if raw_name.startswith("plugin__"):
+        parts = raw_name[len("plugin__") :].split("__", 1)
+        if len(parts) == 2:
+            plugin_part, server_part = parts
+            scope = plugin_part.split("_")[0] if "_" in plugin_part else plugin_part
+            clean_server = re.sub(r"_[0-9a-f]{8,16}$", "", server_part)
+            return (clean_server or server_part, scope)
+
+    # 2. Subagent scoped server: subagent__<subagent_name>__<server_name>
+    if raw_name.startswith("subagent__"):
+        parts = raw_name[len("subagent__") :].split("__", 1)
+        if len(parts) == 2:
+            sub_part, server_part = parts
+            clean_server = re.sub(r"_[0-9a-f]{8,16}$", "", server_part)
+            return (clean_server or server_part, sub_part)
+
+    # 3. Plain server name
+    clean_plain = re.sub(r"_[0-9a-f]{8,16}$", "", raw_name)
+    return (clean_plain or raw_name, None)
+
+
+def clean_tool_name(tool_name: str, original_name: str | None = None) -> str:
+    """Return a concise, human-friendly display name for an MCP tool."""
+    raw = original_name if (original_name and original_name != "None") else tool_name
+    if not raw:
+        return "unnamed_tool"
+
+    # If original_name is e.g. "aws___get_tasks" or "server___tool"
+    if "___" in raw:
+        raw = raw.split("___")[-1]
+    elif "__" in raw:
+        raw = raw.split("__")[-1]
+
+    # Strip any trailing hash suffix like _9badd4f791c6
+    clean = re.sub(r"_[0-9a-f]{8,16}$", "", raw)
+    return clean or raw
+
+
+# ── Status helpers ───────────────────────────────────────
+
+
+def _status_glyph(server: MCPServerInfo) -> str:
+    """Return a status glyph for a server."""
+    status = server.status
+    if status == "ok":
+        return "●"
+    if status == "unauthenticated":
+        return "▲"
+    if status == "error":
+        return "✗"
+    if status == "disabled":
+        return "○"
+    return "·"
+
+
+def _format_prop_type(prop_type: Any) -> str:
+    """Render a JSON Schema type field for display."""
+    if prop_type is None:
+        return "any"
+    if isinstance(prop_type, list):
+        parts = [str(t) for t in prop_type if t]
+        return "|".join(parts) if parts else "any"
+    return str(prop_type) or "any"
+
+
+# ── Tool Detail Screen (Full Modal on Enter) ─────────────
+
+
+class MCPToolDetailScreen(OpsModalScreen[None]):
+    """Full-screen modal showing comprehensive MCP tool schema and documentation."""
+
+    DIALOG_CLASSES: ClassVar[str] = "-compact"
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "close_dialog", "Close", show=False, priority=True),
+        Binding("q", "close_dialog", "Close", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    MCPToolDetailScreen .mcp-tool-detail-title {
+        display: none;
+    }
+
+    MCPToolDetailScreen .mcp-tool-detail-help {
+        display: none;
+    }
+
+    MCPToolDetailScreen .mcp-tool-detail-body {
+        height: 1fr;
+        min-height: 5;
+        scrollbar-gutter: stable;
+        background: transparent;
+        padding: 1 2;
+    }
+
+    MCPToolDetailScreen .detail-label {
+        color: $text-muted;
+        margin-top: 1;
+    }
+
+    MCPToolDetailScreen .detail-value {
+        margin-bottom: 0;
+    }
+    """
+
+    def __init__(self, tool_info: MCPToolInfo, server_name: str = "") -> None:
+        """Initialize MCPToolDetailScreen."""
+        self.tool_info = tool_info
+        self.server_name = server_name
+        self.display_name = clean_tool_name(tool_info.name, tool_info.original_name)
+        super().__init__()
+
+    def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on MCPToolDetailScreen."""
+        yield Static(f"MCP Tool: {self.display_name}", classes="mcp-tool-detail-title")
+        with VerticalScroll(classes="mcp-tool-detail-body"):
+            yield Vertical(id="mcp-tool-detail-content")
+        yield Static("Esc or 'q' to close", classes="mcp-tool-detail-help")
+
+    def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
+        super().on_mount()
+        self.set_modal_title("MCP Tool", counter=self.display_name)
+        self.set_modal_subtitle([("esc", "close")])
+        content = self.query_one("#mcp-tool-detail-content", Vertical)
+        content.mount(Static("Tool Name", classes="detail-label"))
+        content.mount(Static(Content.styled(self.display_name, "bold $secondary"), classes="detail-value"))
+
+        if self.server_name:
+            srv_disp, srv_scope = clean_server_name(self.server_name)
+            pieces: list[Any] = [(srv_disp, "bold $foreground")]
+            if srv_scope:
+                pieces.append((f" [{srv_scope}]", "$secondary"))
+            pieces.append((f" ({self.server_name})", "dim"))
+            content.mount(Static("Server", classes="detail-label"))
+            content.mount(Static(Content.assemble(*pieces), classes="detail-value"))
+
+        content.mount(Static("Full Identifier", classes="detail-label"))
+        content.mount(Static(Content.styled(self.tool_info.name, "dim"), classes="detail-value"))
+
+        content.mount(Static("Description", classes="detail-label"))
+        if self.tool_info.description:
+            content.mount(Static(Content(self.tool_info.description), classes="detail-value"))
+        else:
+            content.mount(Static(Content.styled("No description provided.", "dim"), classes="detail-value"))
+
+        schema = self.tool_info.input_schema
+        content.mount(Static("Input Schema (JSON Schema)", classes="detail-label"))
+        if schema:
+            schema_json = json.dumps(schema, indent=2)
+            content.mount(Static(Content(schema_json), classes="detail-value"))
+        else:
+            content.mount(Static(Content.styled("No input parameters specified.", "dim"), classes="detail-value"))
+
+    def action_close_dialog(self) -> None:
+        """Execute the close dialog action."""
+        self.dismiss(None)
+
+
+# ── Server Error Sub-modal ───────────────────────────────
+
+
+class MCPServerErrorScreen(OpsModalScreen[None]):
+    """Read-only modal for a failed MCP server's error details."""
+
+    DIALOG_CLASSES: ClassVar[str] = "-compact"
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "Close", show=False, priority=True),
+        Binding("q", "cancel", "Close", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    MCPServerErrorScreen .ops-modal-dialog {
+        border: solid $error;
+    }
+
+    MCPServerErrorScreen .mcp-error-title {
+        display: none;
+    }
+
+    MCPServerErrorScreen .mcp-error-help {
+        display: none;
+    }
+
+    MCPServerErrorScreen .mcp-error-body {
+        height: 1fr;
+        background: transparent;
+        scrollbar-gutter: stable;
+        padding: 0 1;
+    }
+
+    MCPServerErrorScreen .mcp-error-text {
+        color: $text;
+    }
+    """
+
+    def __init__(self, server: MCPServerInfo) -> None:
+        """Initialize MCPServerErrorScreen."""
+        self._server = server
+        self._error = server.error or "No error details were reported."
+        super().__init__()
+
+    def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on MCPServerErrorScreen."""
+        name = self._server.name
+        yield Static(f"MCP Server Error: {name}", classes="mcp-error-title")
+        with VerticalScroll(classes="mcp-error-body"):
+            yield Static(Content(self._error), classes="mcp-error-text")
+        yield Static("Esc close", classes="mcp-error-help")
+
+    def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
+        super().on_mount()
+        self.set_modal_title(f"MCP Server Error: {self._server.name}")
+        self.set_modal_subtitle([("esc", "close")])
+
+    def action_cancel(self) -> None:
+        """Execute the cancel action."""
+        self.dismiss(None)
+
+
+# ── Tool Item Widget ─────────────────────────────────────
+
+
+class MCPToolItem(Static):
+    """A selectable tool row in the left pane of the MCP viewer."""
+
+    def __init__(
+        self,
+        tool_info: MCPToolInfo,
+        index: int,
+        *,
+        server_name: str = "",
+        server_info: MCPServerInfo | None = None,
+        classes: str = "",
+    ) -> None:
+        """Initialize MCPToolItem."""
+        self.tool_info = tool_info
+        self.tool_name = tool_info.name
+        self.tool_description = tool_info.description
+        self.server_name = server_name
+        self.server_info = server_info
+        self.index = index
+        self._input_schema = tool_info.input_schema
+        self._expanded = False
+        self._selected = "mcp-tool-selected" in classes
+        self.display_name = clean_tool_name(tool_info.name, tool_info.original_name)
+        super().__init__(classes=classes)
+
+    def _desc_style(self) -> str:
+        return "" if self._selected else "dim"
+
+    def _format_collapsed(self) -> str:
+        cursor = "›" if self._selected else " "
+        desc = self.tool_description
+        if desc and len(desc) > 30:
+            desc = desc[:27] + "..."
+
+        safe_display = escape(self.display_name)
+        safe_desc = escape(desc) if desc else ""
+        safe_tool_name = escape(self.tool_name)
+
+        # Retain raw identifier in dim markup for diagnostic & test verification
+        raw_dim = f" [dim]({safe_tool_name})[/dim]" if self.tool_name != self.display_name else ""
+
+        if self._selected:
+            if desc:
+                return f"  {cursor} [bold]{safe_display}[/bold]  {safe_desc}{raw_dim}"
+            return f"  {cursor} [bold]{safe_display}[/bold]{raw_dim}"
+        else:
+            if desc:
+                return f"  {cursor} {safe_display}  [dim]{safe_desc}{raw_dim}[/dim]"
+            return f"  {cursor} {safe_display}{raw_dim}"
+
+    def _format_expanded(self) -> str:
+        # Kept for direct toggle_expand callers / existing test assertions
+        safe_display = escape(self.display_name)
+        safe_tool_name = escape(self.tool_name)
+        lines = [f"  [bold]{safe_display}[/bold] [dim]({safe_tool_name})[/dim]"]
+        if self.tool_description:
+            style = self._desc_style()
+            safe_desc = escape(self.tool_description)
+            if style:
+                lines.append(f"    [{style}]{safe_desc}[/{style}]")
+            else:
+                lines.append(f"    {safe_desc}")
+
+        # Parameter schema
+        schema = self._input_schema
+        if schema and isinstance(schema, dict):
+            properties = schema.get("properties")
+            if isinstance(properties, dict) and properties:
+                required = set(schema.get("required") or [])
+                style = self._desc_style()
+                if style:
+                    lines.append(f"    [{style}]Parameters:[/{style}]")
+                else:
+                    lines.append("    Parameters:")
+                for prop_name, prop_schema in properties.items():
+                    prop_type = _format_prop_type(
+                        prop_schema.get("type") if isinstance(prop_schema, dict) else None
+                    )
+                    star = " *" if prop_name in required else ""
+                    safe_name = escape(str(prop_name).replace("\n", " ")[:80])
+                    safe_type = escape(str(prop_type))
+                    if style:
+                        lines.append(f"      [{style}]{safe_name}: {safe_type}{star}[/{style}]")
+                    else:
+                        lines.append(f"      {safe_name}: {safe_type}{star}")
+        return "\n".join(lines)
+
+    def _rerender(self) -> None:
+        if self._expanded:
+            self.update(self._format_expanded())
+        else:
+            self.update(self._format_collapsed())
+
+    def set_selected(self, selected: bool) -> None:
+        """Set selected."""
+        if self._selected == selected:
+            return
+        self._selected = selected
+        if selected:
+            self.add_class("mcp-tool-selected")
+        else:
+            self.remove_class("mcp-tool-selected")
+        self._rerender()
+
+    def toggle_expand(self) -> None:
+        """Toggle expand."""
+        self.set_expanded(not self._expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        """Set expanded."""
+        self._expanded = expanded
+        self.styles.height = "auto" if expanded else 1
+        self._rerender()
+
+    def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
+        self.call_after_refresh(self._rerender)
+
+    def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
+        if not self._expanded:
+            self.update(self._format_collapsed())
+
+    def on_enter(self, event: events.Enter) -> None:
+        """Handle enter events."""
+        screen = self.screen
+        if isinstance(screen, MCPViewerScreen):
+            screen._move_to(self.index)
+
+    def on_click(self, event: events.Click) -> None:
+        """Handle mouse click events."""
+        event.stop()
+        screen = self.screen
+        if isinstance(screen, MCPViewerScreen):
+            screen._move_to(self.index)
+
+
+# ── Server Header Widget ─────────────────────────────────
+
+
+class MCPServerHeaderItem(Static):
+    """A selectable server-header row in the MCP viewer."""
+
+    def __init__(
+        self,
+        server: MCPServerInfo,
+        visible_tool_count: int,
+        index: int,
+        *,
+        classes: str = "",
+    ) -> None:
+        """Initialize MCPServerHeaderItem."""
+        self._server = server
+        self._visible_tool_count = visible_tool_count
+        self.index = index
+        self._selected = "mcp-header-selected" in classes
+        self.display_name, self.scope = clean_server_name(server.name)
+        content = self._render_header()
+        super().__init__(content, classes=classes, markup=True)
+
+    @property
+    def server(self) -> MCPServerInfo:
+        """Return the server property."""
+        return self._server
+
+    def _render_header(self) -> str:
+        server = self._server
+        status = server.status
+        if status == "ok":
+            glyph = "[bold $success]●[/bold $success]"
+        elif status == "unauthenticated":
+            glyph = "[bold $warning]●[/bold $warning]"
+        elif status == "error":
+            glyph = "[bold $error]●[/bold $error]"
+        elif status == "disabled":
+            glyph = "[dim]○[/dim]"
+        else:
+            glyph = "[dim]●[/dim]"
+
+        transport = escape(server.transport)
+        tool_count = self._visible_tool_count
+        t_label = "tool" if tool_count == 1 else "tools"
+
+        cursor = "›" if self._selected else " "
+        safe_name = escape(self.display_name)
+        safe_scope = escape(self.scope) if self.scope else ""
+        scope_badge = rf" \[{safe_scope}]" if self.scope else ""
+
+        # Retain raw identifier in dim markup for diagnostic & test verification
+        raw_dim = f" [dim]({escape(server.name)})[/dim]" if server.name != self.display_name else ""
+
+        if self._selected:
+            if status == "ok":
+                return f"{cursor} {glyph} [bold]{safe_name}[/bold]{scope_badge}  {transport} · {tool_count} {t_label}{raw_dim}"
+            if status == "unauthenticated":
+                return f"{cursor} {glyph} [bold]{safe_name}[/bold]{scope_badge}  {transport} · {status} (Enter to log in){raw_dim}"
+            if status == "error":
+                return f"{cursor} {glyph} [bold]{safe_name}[/bold]{scope_badge}  {transport} · {status} (Enter for error){raw_dim}"
+            return f"{cursor} {glyph} [bold]{safe_name}[/bold]{scope_badge}  {transport} · {status}{raw_dim}"
+        else:
+            if status == "ok":
+                return f"{cursor} {glyph} [bold]{safe_name}[/bold][$secondary]{scope_badge}[/$secondary]  [dim]{transport} · {tool_count} {t_label}{raw_dim}[/dim]"
+            if status == "unauthenticated":
+                return f"{cursor} {glyph} [bold]{safe_name}[/bold][$secondary]{scope_badge}[/$secondary]  [$warning]{status}[/$warning] [dim]— Enter to log in{raw_dim}[/dim]"
+            if status == "error":
+                return f"{cursor} {glyph} [bold]{safe_name}[/bold][$secondary]{scope_badge}[/$secondary]  [$error]{status}[/$error] [dim]— Enter for details{raw_dim}[/dim]"
+            return f"{cursor} {glyph} [bold]{safe_name}[/bold][$secondary]{scope_badge}[/$secondary]  [dim]{transport} · {status}{raw_dim}[/dim]"
+
+    def set_selected(self, selected: bool) -> None:
+        """Set selected."""
+        if self._selected == selected:
+            return
+        self._selected = selected
+        if selected:
+            self.add_class("mcp-header-selected")
+        else:
+            self.remove_class("mcp-header-selected")
+        self.update(self._render_header())
+
+    def on_enter(self, event: events.Enter) -> None:
+        """Handle enter events."""
+        screen = self.screen
+        if isinstance(screen, MCPViewerScreen):
+            screen._move_to(self.index)
+
+    def on_click(self, event: events.Click) -> None:
+        """Handle mouse click events."""
+        event.stop()
+        screen = self.screen
+        if not isinstance(screen, MCPViewerScreen):
+            return
+        if self._selected and self._server.status == "unauthenticated":
+            screen.dismiss(self._server.name)
+            return
+        if self._selected and self._server.status == "error":
+            screen.show_server_error(self._server)
+            return
+        screen._move_to(self.index)
+
+
+# ── Filter helper ────────────────────────────────────────
+
+
+def _visible_tools_for(
+    server: MCPServerInfo, tokens: list[str]
+) -> tuple[MCPToolInfo, ...] | None:
+    """Return tools matching the filter, or None if nothing matches."""
+    tools = server.tools
+    if not tokens:
+        return tools or ()
+
+    srv_clean, srv_scope = clean_server_name(server.name)
+    srv_search = f"{server.name} {srv_clean} {srv_scope or ''}".lower()
+    if all(tok in srv_search for tok in tokens):
+        return tools or None
+
+    matching: list[MCPToolInfo] = []
+    for t in tools:
+        t_clean = clean_tool_name(t.name, t.original_name)
+        search_blob = f"{t.name} {t_clean} {t.original_name or ''} {t.description}".lower()
+        if all(tok in search_blob for tok in tokens):
+            matching.append(t)
+
+    return tuple(matching) or None
+
+
+# ── Main MCP Viewer Screen ───────────────────────────────
+
+
+class MCPViewerScreen(OpsModalScreen[str | None]):
+    """Two-pane modal viewer for active MCP servers and their tools.
+
+    Left pane lists MCP servers and their tools with keyboard and mouse hover support.
+    Right pane displays real-time metadata, parameter schemas, and error diagnostics.
+    """
+
+    DIALOG_CLASSES: ClassVar[str] = "-workspace"
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("up", "move_up", "Up", show=False, priority=True),
+        Binding("down", "move_down", "Down", show=False, priority=True),
+        Binding("tab", "jump_down", "Next server", show=False, priority=True),
+        Binding("shift+tab", "jump_up", "Prev server", show=False, priority=True),
+        Binding("enter", "select_item", "Details/Login", show=False, priority=True),
+        Binding("ctrl+e", "toggle_all", "Toggle all", show=False, priority=True),
+        Binding("ctrl+r", "reconnect", "Reconnect", show=False, priority=True),
+        Binding("f2", "toggle_disable", "Disable/Enable", show=False, priority=True),
+        Binding("pageup", "page_up", "Page up", show=False, priority=True),
+        Binding("pagedown", "page_down", "Page down", show=False, priority=True),
+        Binding("escape", "cancel", "Close", show=False, priority=True),
+        Binding("slash", "focus_filter", "Filter", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    MCPViewerScreen #mcp-container {
+        height: 1fr;
+        width: 100%;
+    }
+
+    /* ── Title (Rendered in dialog border) ─── */
+    MCPViewerScreen .mcp-viewer-title {
+        display: none;
+    }
+
+    /* ── Filter ────────────────────────── */
+    MCPViewerScreen #mcp-filter {
+        margin-bottom: 1;
+        border: solid $primary 40%;
+    }
+
+    MCPViewerScreen #mcp-filter:focus {
+        border: solid $primary;
+    }
+
+    /* ── Two-pane body ─────────────────── */
+    MCPViewerScreen .mcp-body {
+        height: 1fr;
+        width: 100%;
+    }
+
+    /* ── Left pane: server & tool list ─── */
+    MCPViewerScreen .mcp-list-pane {
+        width: 2fr;
+        min-width: 28;
+        height: 1fr;
+    }
+
+    MCPViewerScreen .mcp-list {
+        height: 1fr;
+        min-height: 5;
+        scrollbar-gutter: stable;
+        background: transparent;
+    }
+
+    /* ── Server headers ────────────────── */
+    MCPViewerScreen .mcp-server-header {
+        height: 1;
+        width: 100%;
+        padding: 0 1;
+        color: $primary;
+        text-style: bold;
+        margin-top: 1;
+    }
+
+    MCPViewerScreen .mcp-server-header:hover {
+        background: $surface-lighten-1;
+    }
+
+    MCPViewerScreen .mcp-list > .mcp-server-header:first-child {
+        margin-top: 0;
+    }
+
+    MCPViewerScreen .mcp-header-selected {
+        background: $primary 18%;
+        color: $text;
+        text-style: bold;
+        border-left: wide $primary;
+        padding-left: 0;
+    }
+
+    MCPViewerScreen .mcp-header-selected:hover {
+        background: $primary 25%;
+    }
+
+    /* ── Tool items ────────────────────── */
+    MCPViewerScreen .mcp-tool-item {
+        height: 1;
+        width: 100%;
+        padding: 0 1 0 2;
+    }
+
+    MCPViewerScreen .mcp-tool-item:hover {
+        background: $surface-lighten-1;
+    }
+
+    MCPViewerScreen .mcp-tool-selected {
+        background: $primary 14%;
+        color: $text;
+        text-style: bold;
+        border-left: wide $primary;
+        padding-left: 1;
+    }
+
+    MCPViewerScreen .mcp-tool-selected:hover {
+        background: $primary 20%;
+    }
+
+    /* ── Right pane: detail panel ──────── */
+    MCPViewerScreen .mcp-detail-pane {
+        width: 3fr;
+        min-width: 32;
+        height: 1fr;
+        margin-left: 1;
+        padding-left: 1;
+        border-left: solid $primary 25%;
+    }
+
+    /* Narrow terminals: list first, Enter opens details. */
+    MCPViewerScreen.-narrow .mcp-list-pane {
+        width: 1fr;
+        min-width: 0;
+    }
+
+    MCPViewerScreen.-narrow .mcp-detail-pane {
+        display: none;
+    }
+
+    MCPViewerScreen .mcp-detail-title {
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 1;
+    }
+
+    MCPViewerScreen .mcp-detail-content {
+        height: 1fr;
+        min-height: 1;
+        scrollbar-gutter: stable;
+        background: transparent;
+        padding: 1;
+    }
+
+    MCPViewerScreen .detail-label {
+        color: $text-muted;
+        margin-top: 1;
+    }
+
+    MCPViewerScreen .detail-value {
+        margin-bottom: 0;
+    }
+
+    /* ── Empty state ───────────────────── */
+    MCPViewerScreen .mcp-empty {
+        color: $text-muted;
+        text-style: italic;
+        text-align: center;
+        margin-top: 2;
+    }
+
+    /* ── Help footer (Rendered in dialog border) ─── */
+    MCPViewerScreen .mcp-viewer-help {
+        display: none;
+    }
+    """
+
+    def __init__(
+        self,
+        server_info: list[MCPServerInfo],
+        *,
+        connecting: bool = False,
+        pending_reconnect: bool = False,
+        on_toggle_disable: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        """Initialize MCPViewerScreen."""
+        super().__init__()
+        self._server_info = server_info
+        self._connecting = connecting
+        self._pending_reconnect = pending_reconnect
+        self._on_toggle_disable = on_toggle_disable
+        self._row_widgets: list[MCPToolItem | MCPServerHeaderItem] = []
+        self._selected_index = 0
+        self._query: str = ""
+
+    @property
+    def _tool_widgets(self) -> list[MCPToolItem]:
+        return [w for w in self._row_widgets if isinstance(w, MCPToolItem)]
+
+    # ── Compose / Mount ──────────────────────────────────
+
+    def compose_modal(self) -> ComposeResult:
+        """Execute compose modal on MCPViewerScreen."""
+        yield Vertical(id="mcp-container")
+
+    def on_mount(self) -> None:
+        """Initialize component state when mounted into the DOM."""
+        super().on_mount()
+        is_narrow = self.app.size.width < 90
+        self.set_class(is_narrow, "-narrow")
+        container = self.query_one("#mcp-container", Vertical)
+        self._mount_body(container)
+
+    def on_resize(self) -> None:
+        """Handle terminal or container resize events."""
+        is_narrow = self.app.size.width < 90
+        if is_narrow != self.has_class("-narrow"):
+            self.set_class(is_narrow, "-narrow")
+
+    def _update_modal_chrome(self) -> None:
+        glyphs = get_glyphs()
+        total_servers = len(self._server_info)
+        total_tools = sum(s.tool_count for s in self._server_info)
+
+        if total_servers:
+            s_label = "server" if total_servers == 1 else "servers"
+            t_label = "tool" if total_tools == 1 else "tools"
+            counter = f"{total_servers} {s_label} · {total_tools} {t_label}"
+        else:
+            counter = "0 servers"
+
+        self.set_modal_title("MCP Servers", counter=counter)
+
+        subtitles: list[tuple[str, str]] = [
+            (f"{glyphs.arrow_up}{glyphs.arrow_down}", "navigate"),
+            (glyphs.newline, "details"),
+            ("f2", "disable/enable"),
+        ]
+        if self._pending_reconnect:
+            subtitles.append(("ctrl+r", "reconnect"))
+        subtitles.extend([
+            ("/", "filter"),
+            ("esc", "close"),
+        ])
+        self.set_modal_subtitle(subtitles)
+
+    def _mount_body(self, container: Vertical) -> None:
+        total_servers = len(self._server_info)
+        total_tools = sum(s.tool_count for s in self._server_info)
+
+        if total_servers:
+            s_label = "server" if total_servers == 1 else "servers"
+            t_label = "tool" if total_tools == 1 else "tools"
+            title = f"MCP Servers ({total_servers} {s_label}, {total_tools} {t_label})"
+        else:
+            title = "MCP Servers"
+
+        self._update_modal_chrome()
+
+        container.mount(Static(title, classes="mcp-viewer-title"))
+
+        if self._server_info:
+            container.mount(
+                Input(
+                    id="mcp-filter",
+                    placeholder="Filter tools...",
+                    value=self._query,
+                )
+            )
+
+        # Two-pane body matching Skills UI
+        body = Horizontal(classes="mcp-body")
+        container.mount(body)
+
+        # Left pane: MCP servers & tools list
+        list_pane = Vertical(classes="mcp-list-pane")
+        body.mount(list_pane)
+        scroll = VerticalScroll(classes="mcp-list")
+        list_pane.mount(scroll)
+
+        # Right pane: Detail panel
+        detail_pane = Vertical(classes="mcp-detail-pane")
+        body.mount(detail_pane)
+        detail_pane.mount(Static("Details", classes="mcp-detail-title"))
+        detail_scroll = VerticalScroll(classes="mcp-detail-content")
+        detail_pane.mount(detail_scroll)
+        detail_scroll.mount(Vertical(id="mcp-detail-body"))
+
+        # Populate scroll items
+        self._populate_scroll(scroll, self._query)
+
+        # Help footer
+        container.mount(
+            Static(self._build_help_text(), classes="mcp-viewer-help")
+        )
+
+        # Update initial detail panel state
+        self._update_detail_panel()
+
+        # Focus filter input if available
+        def _focus() -> None:
+            if self._server_info:
+                try:
+                    self.query_one("#mcp-filter", Input).focus()
+                except Exception:
+                    pass
+
+        self.call_after_refresh(_focus)
+
+    def _build_help_text(self) -> str:
+        parts = [
+            "↑/↓ navigate",
+            "Enter details/schema",
+            "F2 disable/enable",
+        ]
+        if self._pending_reconnect:
+            parts.append("Ctrl+R reconnect")
+        parts.extend(["type to filter", "Esc close"])
+        return "  │  ".join(parts)
+
+    # ── Populate scroll ──────────────────────────────────
+
+    def _populate_scroll(self, scroll: VerticalScroll, query: str) -> None:
+        if not self._server_info:
+            placeholder = (
+                "Loading MCP tools..."
+                if self._connecting
+                else "No MCP servers configured.\nUse `--mcp-config` to load servers."
+            )
+            scroll.mount(Static(placeholder, classes="mcp-empty"))
+            return
+
+        tokens = [tok for tok in query.lower().split() if tok]
+        flat_index = 0
+
+        # Sort: attention-needed servers first
+        sorted_servers = sorted(
+            self._server_info,
+            key=lambda s: 0 if s.status in ("unauthenticated", "error") else 1,
+        )
+
+        for server in sorted_servers:
+            visible_tools = _visible_tools_for(server, tokens)
+            if visible_tools is None:
+                continue
+
+            header_classes = "mcp-server-header"
+            if flat_index == 0:
+                header_classes += " mcp-header-selected"
+
+            header = MCPServerHeaderItem(
+                server=server,
+                visible_tool_count=len(visible_tools),
+                index=flat_index,
+                classes=header_classes,
+            )
+            self._row_widgets.append(header)
+            scroll.mount(header)
+            flat_index += 1
+
+            for tool_info in visible_tools:
+                widget = MCPToolItem(
+                    tool_info=tool_info,
+                    index=flat_index,
+                    server_name=server.name,
+                    server_info=server,
+                    classes="mcp-tool-item",
+                )
+                self._row_widgets.append(widget)
+                scroll.mount(widget)
+                flat_index += 1
+
+        if not self._row_widgets:
+            msg = "No matching tools." if tokens else "No tools available."
+            scroll.mount(Static(msg, classes="mcp-empty"))
+
+    # ── Detail Panel Live Update ─────────────────────────
+
+    def _update_detail_panel(self) -> None:
+        """Refresh the right-pane detail view for the currently selected item."""
+        try:
+            detail_body = self.query_one("#mcp-detail-body", Vertical)
+        except Exception:
+            return
+
+        detail_body.remove_children()
+
+        if not self._row_widgets or not (0 <= self._selected_index < len(self._row_widgets)):
+            detail_body.mount(
+                Static("[dim]Select a tool or server to view details[/dim]", classes="mcp-empty")
+            )
+            return
+
+        item = self._row_widgets[self._selected_index]
+        if isinstance(item, MCPToolItem):
+            self._render_tool_details(detail_body, item)
+        elif isinstance(item, MCPServerHeaderItem):
+            self._render_server_details(detail_body, item)
+
+    def _render_tool_details(self, detail_body: Vertical, item: MCPToolItem) -> None:
+        """Mount formatted metadata and parameter schemas for a tool."""
+        detail_body.mount(Static("Tool", classes="detail-label"))
+        detail_body.mount(Static(Content.styled(item.display_name, "bold $secondary"), classes="detail-value"))
+
+        detail_body.mount(Static("MCP Server", classes="detail-label"))
+        if item.server_info:
+            srv_disp, srv_scope = clean_server_name(item.server_info.name)
+            status_glyph = _status_glyph(item.server_info)
+            pieces: list[Any] = [(srv_disp, "bold $foreground")]
+            if srv_scope:
+                pieces.append((f" [{srv_scope}]", "$secondary"))
+            pieces.append((f" ({status_glyph} {item.server_info.transport})", "dim"))
+            detail_body.mount(Static(Content.assemble(*pieces), classes="detail-value"))
+        else:
+            detail_body.mount(Static(Content(item.server_name), classes="detail-value"))
+
+        detail_body.mount(Static("Description", classes="detail-label"))
+        desc = item.tool_description
+        if desc:
+            detail_body.mount(Static(Content(desc), classes="detail-value"))
+        else:
+            detail_body.mount(Static(Content.styled("No description provided.", "dim"), classes="detail-value"))
+
+        schema = item._input_schema
+        detail_body.mount(Static("Parameters", classes="detail-label"))
+        if schema and isinstance(schema, dict):
+            properties = schema.get("properties")
+            if isinstance(properties, dict) and properties:
+                required = set(schema.get("required") or [])
+                count = len(properties)
+                detail_body.mount(
+                    Static(Content.styled(f"{count} parameter{'s' if count != 1 else ''}", "dim"), classes="detail-value")
+                )
+                for prop_name, prop_schema in properties.items():
+                    is_req = prop_name in required
+                    p_type = _format_prop_type(
+                        prop_schema.get("type") if isinstance(prop_schema, dict) else None
+                    )
+                    param_line: list[Any] = [
+                        ("• ", "dim"),
+                        (str(prop_name), "bold $secondary"),
+                        (f" ({p_type})  ", "dim"),
+                    ]
+                    if is_req:
+                        param_line.append(("* required", "bold $error"))
+                    else:
+                        param_line.append(("optional", "dim"))
+                    detail_body.mount(Static(Content.assemble(*param_line), classes="detail-value"))
+
+                    if isinstance(prop_schema, dict):
+                        p_desc = prop_schema.get("description", "").strip()
+                        if p_desc:
+                            detail_body.mount(Static(Content.styled(f"    {p_desc}", "dim"), classes="detail-value"))
+                        enum_vals = prop_schema.get("enum")
+                        if enum_vals:
+                            enum_str = ", ".join(repr(v) for v in enum_vals[:6])
+                            if len(enum_vals) > 6:
+                                enum_str += ", …"
+                            detail_body.mount(Static(Content.styled(f"    Options: [{enum_str}]", "dim"), classes="detail-value"))
+                        default_val = prop_schema.get("default")
+                        if default_val is not None:
+                            detail_body.mount(Static(Content.styled(f"    Default: {default_val}", "dim"), classes="detail-value"))
+            else:
+                detail_body.mount(Static(Content.styled("No parameters required", "dim"), classes="detail-value"))
+        else:
+            detail_body.mount(Static(Content.styled("No parameters required", "dim"), classes="detail-value"))
+
+        detail_body.mount(Static("Identifier", classes="detail-label"))
+        detail_body.mount(Static(Content.styled(item.tool_name, "dim"), classes="detail-value"))
+
+        detail_body.mount(
+            Static(
+                Content.assemble(
+                    ("\nPress ", "dim"),
+                    ("Enter", "bold $foreground"),
+                    (" to inspect full JSON schema", "dim"),
+                ),
+                classes="detail-label",
+            )
+        )
+
+    def _render_server_details(self, detail_body: Vertical, item: MCPServerHeaderItem) -> None:
+        """Mount formatted configuration, status, and tools list for a server."""
+        server = item.server
+        srv_display, srv_scope = clean_server_name(server.name)
+
+        detail_body.mount(Static("Server", classes="detail-label"))
+        pieces: list[Any] = [(srv_display, "bold $secondary")]
+        if srv_scope:
+            pieces.append((f" [{srv_scope}]", "$secondary"))
+        detail_body.mount(Static(Content.assemble(*pieces), classes="detail-value"))
+
+        detail_body.mount(Static("Status", classes="detail-label"))
+        glyph = _status_glyph(server)
+        if server.status == "ok":
+            detail_body.mount(
+                Static(Content.styled(f"{glyph} Connected / Active", "bold $success"), classes="detail-value")
+            )
+        elif server.status == "unauthenticated":
+            detail_body.mount(
+                Static(
+                    Content.assemble(
+                        (f"{glyph} Unauthenticated ", "bold $warning"),
+                        ("(Press Enter to log in)", "dim"),
+                    ),
+                    classes="detail-value",
+                )
+            )
+        elif server.status == "error":
+            detail_body.mount(
+                Static(
+                    Content.assemble(
+                        (f"{glyph} Error ", "bold $error"),
+                        ("(Press Enter for details)", "dim"),
+                    ),
+                    classes="detail-value",
+                )
+            )
+        elif server.status == "disabled":
+            detail_body.mount(
+                Static(Content.styled(f"{glyph} Disabled (Press F2 to enable)", "dim"), classes="detail-value")
+            )
+        else:
+            detail_body.mount(Static(Content(f"{glyph} {server.status}"), classes="detail-value"))
+
+        detail_body.mount(Static("Transport", classes="detail-label"))
+        detail_body.mount(Static(Content.styled(server.transport, "$secondary"), classes="detail-value"))
+
+        if server.command:
+            cmd_str = server.command
+            if server.args:
+                cmd_str += " " + " ".join(server.args)
+            detail_body.mount(Static("Command", classes="detail-label"))
+            detail_body.mount(Static(Content.styled(cmd_str, "dim"), classes="detail-value"))
+
+        if server.url:
+            detail_body.mount(Static("URL", classes="detail-label"))
+            detail_body.mount(Static(Content.styled(server.url, "$secondary"), classes="detail-value"))
+
+        detail_body.mount(Static("Tools", classes="detail-label"))
+        count = len(server.tools)
+        detail_body.mount(Static(Content(f"{count} available"), classes="detail-value"))
+        for t in server.tools[:8]:
+            t_clean = clean_tool_name(t.name, t.original_name)
+            detail_body.mount(
+                Static(
+                    Content.assemble(
+                        ("• ", "dim"),
+                        (t_clean, "dim"),
+                    ),
+                    classes="detail-value",
+                )
+            )
+        if count > 8:
+            detail_body.mount(Static(Content.styled(f"… and {count - 8} more", "dim"), classes="detail-value"))
+
+        if server.error:
+            detail_body.mount(Static(Content.styled("Error Diagnostics", "bold $error"), classes="detail-label"))
+            detail_body.mount(Static(Content.styled(str(server.error), "$error"), classes="detail-value"))
+
+        detail_body.mount(Static("Config Identifier", classes="detail-label"))
+        detail_body.mount(Static(Content.styled(server.name, "dim"), classes="detail-value"))
+
+    # ── Filter ───────────────────────────────────────────
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changed events."""
+        if event.input.id != "mcp-filter":
+            return
+        self._query = event.value
+        scroll = self.query_one(".mcp-list", VerticalScroll)
+        scroll.remove_children()
+        self._row_widgets = []
+        self._selected_index = 0
+        self._populate_scroll(scroll, self._query)
+        self._selected_index = min(
+            self._selected_index, max(0, len(self._row_widgets) - 1)
+        )
+        self._update_detail_panel()
+
+    # ── Navigation ───────────────────────────────────────
+
+    def _move_to(self, index: int) -> None:
+        count = len(self._row_widgets)
+        if not count or not (0 <= index < count):
+            return
+        old = self._selected_index
+        if not (0 <= old < count):
+            old = 0
+        self._selected_index = index
+        if old != index:
+            self._row_widgets[old].set_selected(False)
+            self._row_widgets[index].set_selected(True)
+        self._update_detail_panel()
+
+    def _move_selection(self, delta: int) -> None:
+        if not self._row_widgets:
+            return
+        target = self._selected_index + delta
+        if 0 <= target < len(self._row_widgets):
+            self._move_to(target)
+
+    def _next_server_header(self, start: int, step: int) -> int | None:
+        index = start + step
+        while 0 <= index < len(self._row_widgets):
+            if isinstance(self._row_widgets[index], MCPServerHeaderItem):
+                return index
+            index += step
+        return None
+
+    def _reveal_selection(self, widget: MCPToolItem | MCPServerHeaderItem, *, direction: int) -> None:
+        widget.scroll_visible()
+
+    def action_move_up(self) -> None:
+        """Execute the move up action."""
+        if not self._row_widgets:
+            return
+        old = self._selected_index
+        if old == 0:
+            self._move_to(len(self._row_widgets) - 1)
+        else:
+            self._move_selection(-1)
+        if self._selected_index != old:
+            self._reveal_selection(self._row_widgets[self._selected_index], direction=-1)
+
+    def action_move_down(self) -> None:
+        """Execute the move down action."""
+        if not self._row_widgets:
+            return
+        old = self._selected_index
+        if old == len(self._row_widgets) - 1:
+            self._move_to(0)
+        else:
+            self._move_selection(1)
+        if self._selected_index != old:
+            self._reveal_selection(self._row_widgets[self._selected_index], direction=1)
+
+    def action_jump_up(self) -> None:
+        """Execute the jump up action."""
+        target = self._next_server_header(self._selected_index, -1)
+        if target is None:
+            target = self._next_server_header(len(self._row_widgets), -1)
+        if target is None or target == self._selected_index:
+            return
+        self._move_to(target)
+        self._reveal_selection(self._row_widgets[target], direction=-1)
+
+    def action_jump_down(self) -> None:
+        """Execute the jump down action."""
+        target = self._next_server_header(self._selected_index, +1)
+        if target is None:
+            target = self._next_server_header(-1, +1)
+        if target is None or target == self._selected_index:
+            return
+        self._move_to(target)
+        self._reveal_selection(self._row_widgets[target], direction=1)
+
+    def action_page_up(self) -> None:
+        """Execute the page up action."""
+        if not self._row_widgets:
+            return
+        scroll = self.query_one(".mcp-list", VerticalScroll)
+        scroll.scroll_page_up()
+
+    def action_page_down(self) -> None:
+        """Execute the page down action."""
+        if not self._row_widgets:
+            return
+        scroll = self.query_one(".mcp-list", VerticalScroll)
+        scroll.scroll_page_down()
+
+    # ── Tool / Server Selection & Expand ─────────────────
+
+    def action_select_item(self) -> None:
+        """Handle Enter key on the currently selected item."""
+        if not self._row_widgets:
+            return
+        row = self._row_widgets[self._selected_index]
+        if isinstance(row, MCPToolItem):
+            self.app.push_screen(
+                MCPToolDetailScreen(
+                    tool_info=row.tool_info,
+                    server_name=row.server_name,
+                )
+            )
+            return
+
+        server = row.server
+        if server.status == "unauthenticated":
+            self.dismiss(server.name)
+            return
+        if server.status == "error":
+            self.show_server_error(server)
+            return
+
+    def action_toggle_expand(self) -> None:
+        """Alias for action_select_item for backward compatibility."""
+        self.action_select_item()
+
+    def action_toggle_all(self) -> None:
+        """Execute the toggle all action."""
+        tools = self._tool_widgets
+        if not tools:
+            return
+        any_collapsed = any(not w._expanded for w in tools)
+        for widget in tools:
+            widget.set_expanded(any_collapsed)
+
+    def show_server_error(self, server: MCPServerInfo) -> None:
+        """Display server error."""
+        self.app.push_screen(MCPServerErrorScreen(server))
+
+    # ── Reconnect / Disable ──────────────────────────────
+
+    def action_reconnect(self) -> None:
+        """Execute the reconnect action."""
+        if not self._pending_reconnect:
+            return
+        self.dismiss(MCP_VIEWER_RECONNECT_REQUEST)
+
+    def action_toggle_disable(self) -> None:
+        """Execute the toggle disable action."""
+        if not self._row_widgets:
+            return
+        row = self._row_widgets[self._selected_index]
+        server_name: str | None = None
+        if isinstance(row, MCPServerHeaderItem):
+            server_name = row.server.name
+        elif isinstance(row, MCPToolItem) and row.server_name:
+            server_name = row.server_name
+
+        if not server_name or self._on_toggle_disable is None:
+            return
+        self.app.call_later(self._on_toggle_disable, server_name)
+
+    def action_focus_filter(self) -> None:
+        """Execute the focus filter action."""
+        try:
+            self.query_one("#mcp-filter", Input).focus()
+        except Exception:
+            pass
+
+    def action_cancel(self) -> None:
+        """Execute the cancel action."""
+        self.dismiss(None)
+
+    # ── Refresh API ──────────────────────────────────────
+
+    async def refresh_server_info(
+        self,
+        server_info: list[MCPServerInfo],
+        *,
+        pending_reconnect: bool | None = None,
+        select_server: str | None = None,
+    ) -> None:
+        """Replace the displayed server list."""
+        self._server_info = server_info
+        self._connecting = False
+        self._query = ""
+        if pending_reconnect is not None:
+            self._pending_reconnect = pending_reconnect
+        try:
+            container = self.query_one("#mcp-container", Vertical)
+        except Exception:
+            container = self.query_one(Vertical)
+        await container.remove_children()
+        self._row_widgets = []
+        self._selected_index = 0
+        self._mount_body(container)
+        if select_server is not None:
+            for idx, widget in enumerate(self._row_widgets):
+                if (
+                    isinstance(widget, MCPServerHeaderItem)
+                    and widget.server.name == select_server
+                ):
+                    self._move_to(idx)
+                    break
+
+
+__all__ = [
+    "MCPServerErrorScreen",
+    "MCPServerHeaderItem",
+    "MCPToolDetailScreen",
+    "MCPToolItem",
+    "MCPViewerScreen",
+    "MCP_VIEWER_RECONNECT_REQUEST",
+    "clean_server_name",
+    "clean_tool_name",
+]

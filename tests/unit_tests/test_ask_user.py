@@ -1,22 +1,39 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for AskUserMiddleware, question validation, answer parsing, and cancellation handling."""
 
+from typing import Any, cast
 from unittest.mock import MagicMock
+
 import pytest
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command
 
-from opscloud.middleware.ask_user import (
+from talkops.middleware.ask_user import (
     ASK_USER_SYSTEM_PROMPT,
     AskUserMiddleware,
     _parse_answers,
     _validate_questions,
 )
-from opscloud.schema.interrupts import Question
+from talkops.schema.interrupts import Choice, Question
 
 
 def test_validate_questions_valid():
-    questions: list[Question] = [
+    """Verify validate questions valid."""
+    questions: Any = [
         {"question": "What is the cluster name?", "type": "text"},
         {
             "question": "Which environment?",
@@ -40,26 +57,31 @@ def test_validate_questions_valid():
 
 
 def test_validate_questions_empty_list():
+    """Verify validate questions empty list."""
     with pytest.raises(ValueError, match="at least one question"):
         _validate_questions([])
 
 
 def test_validate_questions_empty_text():
+    """Verify validate questions empty text."""
     with pytest.raises(ValueError, match="non-empty 'question' text"):
         _validate_questions([{"question": "   ", "type": "text"}])
 
 
 def test_validate_questions_unsupported_type():
+    """Verify validate questions unsupported type."""
     with pytest.raises(ValueError, match="unsupported ask_user question type"):
         _validate_questions([{"question": "How?", "type": "invalid_type"}])  # type: ignore[typeddict-item]
 
 
 def test_validate_questions_missing_choices():
+    """Verify validate questions missing choices."""
     with pytest.raises(ValueError, match="requires non-empty 'choices'"):
         _validate_questions([{"question": "Which?", "type": "multiple_choice", "choices": []}])
 
 
 def test_parse_answers_success():
+    """Verify parse answers success."""
     questions: list[Question] = [
         {"question": "Cluster?", "type": "text"},
         {"question": "Region?", "type": "text"},
@@ -68,6 +90,7 @@ def test_parse_answers_success():
     cmd = _parse_answers(response, questions, "call_999")
 
     assert isinstance(cmd, Command)
+    assert cmd.update is not None
     messages = cmd.update.get("messages", [])
     assert len(messages) == 1
     assert isinstance(messages[0], ToolMessage)
@@ -77,29 +100,34 @@ def test_parse_answers_success():
 
 
 def test_parse_answers_cancelled():
+    """Verify parse answers cancelled."""
     questions: list[Question] = [
         {"question": "Confirm deletion?", "type": "text"},
     ]
     response = {"status": "cancelled"}
     cmd = _parse_answers(response, questions, "call_cancel")
 
+    assert cmd.update is not None
     messages = cmd.update.get("messages", [])
     assert len(messages) == 1
     assert "(cancelled by user)" in messages[0].content
 
 
 def test_parse_answers_error():
+    """Verify parse answers error."""
     questions: list[Question] = [
         {"question": "Select target?", "type": "text"},
     ]
     response = {"status": "error", "error": "User prompt timed out"}
     cmd = _parse_answers(response, questions, "call_err")
 
+    assert cmd.update is not None
     messages = cmd.update.get("messages", [])
     assert "(error: User prompt timed out)" in messages[0].content
 
 
 def test_parse_answers_padded():
+    """Verify parse answers padded."""
     questions: list[Question] = [
         {"question": "Q1", "type": "text"},
         {"question": "Q2", "type": "text"},
@@ -108,12 +136,14 @@ def test_parse_answers_padded():
     response = {"answers": ["Ans1"]}
     cmd = _parse_answers(response, questions, "call_pad")
 
+    assert cmd.update is not None
     messages = cmd.update.get("messages", [])
     assert "Ans1" in messages[0].content
     assert "(no answer)" in messages[0].content
 
 
 def test_ask_user_middleware_tools_and_wrapping():
+    """Verify ask user middleware tools and wrapping."""
     mw = AskUserMiddleware()
     assert len(mw.tools) == 1
     assert mw.tools[0].name == "ask_user"
@@ -122,13 +152,14 @@ def test_ask_user_middleware_tools_and_wrapping():
         model=MagicMock(),
         system_message=SystemMessage(content="Base system prompt."),
         messages=[],
-        state={},
+        state=cast("Any", {}),
         runtime=None,
     )
 
     passed_request = None
 
-    def handler(req):
+    def handler(req: Any) -> Any:
+        """Provide handler test helper or fixture."""
         nonlocal passed_request
         passed_request = req
         return "response"
@@ -142,19 +173,21 @@ def test_ask_user_middleware_tools_and_wrapping():
 
 @pytest.mark.asyncio
 async def test_ask_user_middleware_awrap_model_call():
+    """Verify ask user middleware awrap model call."""
     mw = AskUserMiddleware()
 
     request = ModelRequest(
         model=MagicMock(),
         system_message=SystemMessage(content="Async base prompt."),
         messages=[],
-        state={},
+        state=cast("Any", {}),
         runtime=None,
     )
 
-    async def async_handler(req):
+    async def async_handler(req: Any) -> Any:
+        """Provide async handler test helper or fixture."""
         return req.system_message.content
 
-    content = await mw.awrap_model_call(request, async_handler)
+    content = cast("Any", await mw.awrap_model_call(request, async_handler))
     assert "Async base prompt." in content
     assert ASK_USER_SYSTEM_PROMPT in content

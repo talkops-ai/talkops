@@ -1,13 +1,31 @@
-"""Unit tests for tool catalog and goal tools."""
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""Unit tests for tool catalog and goal tools."""
 import json
+import sys
+from typing import Any
+
 import pytest
-from opscloud.tools.registry import ToolRegistry
-from opscloud.tools.catalog import register_all_tools
-from opscloud.tools.goal_tools import _goal_snapshot, _rubric_snapshot
+
+from talkops.tools.catalog import register_all_tools
+from talkops.tools.goal_tools import _goal_snapshot, _rubric_snapshot
+from talkops.tools.registry import ToolRegistry
 
 
 def test_tool_registry():
+    """Verify tool registry."""
     register_all_tools()
     registry = ToolRegistry.get_instance()
     tool = registry.build_tool("get_current_thread_id")
@@ -15,6 +33,7 @@ def test_tool_registry():
 
 
 def test_goal_and_rubric_snapshots():
+    """Verify goal and rubric snapshots."""
     state = {
         "_goal_objective": "Configure AWS CloudFront CDN",
         "_goal_status": "active",
@@ -27,19 +46,22 @@ def test_goal_and_rubric_snapshots():
 
     rubric = _rubric_snapshot(state)
     assert rubric["active"] is True
+    assert rubric["criteria"] is not None
     assert "Distribution is deployed" in rubric["criteria"]
 
 
 @pytest.mark.asyncio
 async def test_goal_tools_middleware_notice_generation_and_deduplication():
-    from opscloud.middleware.goal_tools import GoalToolsMiddleware
+    """Verify goal tools middleware notice generation and deduplication."""
+    from talkops.middleware.goal_tools import GoalToolsMiddleware
 
     middleware = GoalToolsMiddleware()
     # No goal -> no notice
-    assert await middleware.abefore_model({"messages": []}, runtime=None) is None
+    empty_state: Any = {"messages": []}
+    assert await middleware.abefore_model(empty_state, runtime=None) is None
 
     # Active goal -> generates notice via build_goal_state_notice(mapping)
-    state = {
+    state: Any = {
         "_goal_objective": "Configure AWS CloudFront CDN",
         "_goal_status": "active",
         "messages": [],
@@ -57,7 +79,7 @@ async def test_goal_tools_middleware_notice_generation_and_deduplication():
 
 def test_get_current_thread_id(monkeypatch):
     """Test get_current_thread_id with explicit config, get_config, and empty state."""
-    from opscloud.tools.thread import get_current_thread_id
+    from talkops.tools.thread import get_current_thread_id
 
     # 1. With config kwarg via invoke
     res = get_current_thread_id.invoke({}, config={"configurable": {"thread_id": "thread-123"}})
@@ -80,7 +102,7 @@ def test_get_current_thread_id(monkeypatch):
 
 def test_web_search_marker_and_factory(monkeypatch):
     """Test web_search marker, create_web_search_tool, and is_web_search_tool."""
-    from opscloud.tools.web_search import (
+    from talkops.tools.web_search import (
         create_web_search_tool,
         is_web_search_tool,
         web_search,
@@ -95,14 +117,13 @@ def test_web_search_marker_and_factory(monkeypatch):
     assert is_web_search_tool(bound_tool) is True
 
     # Other tools are not recognized
-    from opscloud.tools.fetch_url import fetch_url
+    from talkops.tools.fetch_url import fetch_url
 
     assert is_web_search_tool(fetch_url) is False
 
     # Calling web_search without Tavily key returns helpful error dictionary
-    import sys
 
-    ws_mod = sys.modules["opscloud.tools.web_search"]
+    ws_mod = sys.modules["talkops.tools.web_search"]
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setattr(ws_mod, "_get_tavily_client", lambda: None)
     err_res = web_search.invoke({"query": "kubernetes pod status"})
@@ -115,7 +136,7 @@ def test_web_search_marker_and_factory(monkeypatch):
 
 def test_fetch_url_validation_and_user_agent(monkeypatch):
     """Test fetch_url SSRF guard and user-agent header."""
-    from opscloud.tools.fetch_url import fetch_url
+    from talkops.tools.fetch_url import fetch_url
 
     # SSRF guard blocks loopback
     res_loopback = fetch_url.invoke({"url": "http://127.0.0.1:8080/secret"})

@@ -1,7 +1,21 @@
-"""Unit tests for OpsCloud logging configuration and subsystems.
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for TalkOps logging configuration and subsystems.
 
 Covers:
-- Default log paths under /tmp/opscloud_logs
+- Default log paths under /tmp/talkops_logs
 - Configurable log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 - File logging enabled by default and console logging disabled by default
 - Per-thread log file binding (bind_logging_to_thread)
@@ -12,16 +26,21 @@ Covers:
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
-from pathlib import Path
 import tempfile
+from contextlib import contextmanager
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from textual.app import App, ComposeResult
+from textual.widgets._markdown import MarkdownFence
 
-from opscloud.cli.main import build_parser, main
-from opscloud.utils.logger import (
+from talkops.cli.main import build_parser, main
+from talkops.utils.logger import (
     DEFAULT_LOG_DIR,
     DEFAULT_LOG_FILE,
     AgentLogger,
@@ -42,8 +61,11 @@ from opscloud.utils.logger import (
 )
 
 
-def test_default_log_paths():
-    """Default log directory and file point to /tmp/opscloud_logs."""
+def test_default_log_paths(monkeypatch):
+    """Default log directory and file point to /tmp/talkops_logs."""
+    monkeypatch.delenv("TALKOPS_LOG_DIR", raising=False)
+    monkeypatch.delenv("TALKOPS_LOG_DIRECTORY", raising=False)
+    monkeypatch.delenv("TALKOPS_LOG_FILE", raising=False)
     assert resolve_log_dir() == DEFAULT_LOG_DIR
     assert resolve_log_file() == DEFAULT_LOG_DIR / DEFAULT_LOG_FILE
 
@@ -54,7 +76,7 @@ def test_resolve_log_paths_custom_and_env(monkeypatch, tmp_path):
     assert resolve_log_dir(custom_dir) == custom_dir
     assert custom_dir.exists()
 
-    monkeypatch.setenv("OPSCLOUD_LOG_DIR", str(tmp_path / "env_logs"))
+    monkeypatch.setenv("TALKOPS_LOG_DIR", str(tmp_path / "env_logs"))
     resolved_env = resolve_log_dir()
     assert resolved_env == tmp_path / "env_logs"
     assert resolved_env.exists()
@@ -75,22 +97,22 @@ def test_resolve_log_level():
     assert resolve_log_level("CRITICAL") == logging.CRITICAL
     assert resolve_log_level(logging.DEBUG) == logging.DEBUG
 
-    with patch.dict("os.environ", {"OPSCLOUD_LOG_LEVEL": "ERROR"}):
+    with patch.dict("os.environ", {"TALKOPS_LOG_LEVEL": "ERROR"}):
         assert resolve_log_level() == logging.ERROR
 
 
 def test_console_and_file_defaults(monkeypatch):
     """Console logging defaults to False (silent) and file logging defaults to True."""
-    monkeypatch.delenv("OPSCLOUD_LOG_CONSOLE", raising=False)
+    monkeypatch.delenv("TALKOPS_LOG_CONSOLE", raising=False)
     monkeypatch.delenv("LOG_TO_CONSOLE", raising=False)
-    monkeypatch.delenv("OPSCLOUD_LOG_TO_FILE", raising=False)
+    monkeypatch.delenv("TALKOPS_LOG_TO_FILE", raising=False)
     monkeypatch.delenv("LOG_TO_FILE", raising=False)
 
     assert resolve_log_to_console() is False
     assert resolve_log_to_file() is True
 
     # Truthy env vars enable console
-    monkeypatch.setenv("OPSCLOUD_LOG_CONSOLE", "true")
+    monkeypatch.setenv("TALKOPS_LOG_CONSOLE", "true")
     assert resolve_log_to_console() is True
 
 
@@ -99,7 +121,7 @@ def test_resolve_log_mode(monkeypatch):
     assert resolve_log_mode() == "text"
     assert resolve_log_mode("json") == "json"
 
-    monkeypatch.setenv("OPSCLOUD_LOG_MODE", "json")
+    monkeypatch.setenv("TALKOPS_LOG_MODE", "json")
     assert resolve_log_mode() == "json"
 
 
@@ -205,7 +227,7 @@ def test_main_logging_configuration(monkeypatch, tmp_path):
     """main() entrypoint configures logging and silences console in quiet/json modes."""
     log_dir = tmp_path / "main_logs"
     mock_run = MagicMock(return_value=0)
-    monkeypatch.setattr("opscloud.cli.main.run_non_interactive", mock_run)
+    monkeypatch.setattr("talkops.cli.main.run_non_interactive", mock_run)
 
     # 1. Normal run with custom log-dir
     ret = main(["Audit infra", "--log-dir", str(log_dir), "--log-level", "warning"])
@@ -228,10 +250,10 @@ def test_main_logging_configuration(monkeypatch, tmp_path):
 
 def test_doctor_command_reports_logging(capsys, monkeypatch):
     """Doctor command outputs active log destination and level."""
-    from opscloud.cli.commands.doctor import run_doctor_command
+    from talkops.cli.commands.doctor import run_doctor_command
 
     fake_ctx = MagicMock(is_authenticated=True, account_id="123456789012", region="us-east-1", profile="default", error=None)
-    monkeypatch.setattr("opscloud.cli.commands.doctor.get_aws_context", lambda: fake_ctx)
+    monkeypatch.setattr("talkops.cli.commands.doctor.get_aws_context", lambda: fake_ctx)
 
     # 1. Table format
     ret = run_doctor_command("text")
@@ -252,8 +274,7 @@ def test_doctor_command_reports_logging(capsys, monkeypatch):
 
 def test_rotating_file_handler_applied(tmp_path):
     """File handlers use RotatingFileHandler with size limit and backup count."""
-    from logging.handlers import RotatingFileHandler
-    from opscloud.utils.logger import _build_file_handler
+    from talkops.utils.logger import _build_file_handler
 
     test_file = tmp_path / "rotating_test.log"
     handler = _build_file_handler(test_file, logging.DEBUG, is_json=False)
@@ -266,27 +287,29 @@ def test_rotating_file_handler_applied(tmp_path):
 @pytest.mark.asyncio
 async def test_headless_run_emits_lifecycle_logs(tmp_path, monkeypatch):
     """Headless run logs execution start, tool calls, subagents, and completion to log file."""
-    from opscloud.cli.non_interactive import _run_headless
-    from opscloud.utils.logger import configure_logging, get_active_log_file
+    from talkops.cli.non_interactive import _run_headless
+    from talkops.utils.logger import configure_logging
 
     log_dir = tmp_path / "headless_logs"
     configure_logging(log_dir=log_dir, level="INFO", log_to_file=True, log_to_console=False)
 
     class MockRemoteAgent:
+        """Test suite or helper class for mock remote agent."""
         async def astream(self, *args, **kwargs):
+            """Provide astream test helper or fixture."""
             yield ("root", "messages", "Hello from agent")
             mock_tool = MagicMock()
             mock_tool.name = "aws:describe_instances"
             yield ("root", "updates", {"messages": [mock_tool]})
             yield ("root", "custom", {"type": "subagent", "phase": "complete", "subagent_type": "security-auditor", "duration_ms": 120})
 
-    from contextlib import contextmanager
 
     @contextmanager
     def mock_server_session(cfg):
+        """Provide mock server session test helper or fixture."""
         yield MockRemoteAgent()
 
-    monkeypatch.setattr("opscloud.cli.non_interactive.server_session", mock_server_session)
+    monkeypatch.setattr("talkops.cli.non_interactive.server_session", mock_server_session)
 
     ret = await _run_headless(
         prompt="Inspect AWS security",
@@ -304,4 +327,110 @@ async def test_headless_run_emits_lifecycle_logs(tmp_path, monkeypatch):
     assert "Subagent security-auditor (complete)" in content
     assert "Headless run completed in" in content
 
+
+def test_configure_logging_clears_last_resort_when_sinks_disabled(tmp_path):
+    """Disabling both file and console logging replaces logging.lastResort with NullHandler."""
+    from talkops.utils.logger import configure_logging
+
+    prev_file = tmp_path / "previous.log"
+    configure_logging(
+        log_dir=tmp_path,
+        log_file=prev_file,
+        level="INFO",
+        log_to_file=True,
+        log_to_console=False,
+    )
+    assert prev_file.exists()
+
+    # Now disable both sinks (as conftest.py does)
+    disabled_file = tmp_path / "disabled.log"
+    configure_logging(
+        log_dir=tmp_path,
+        log_file=disabled_file,
+        level="INFO",
+        log_to_file=False,
+        log_to_console=False,
+    )
+    assert isinstance(logging.lastResort, logging.NullHandler)
+
+    # Emitting an error on asyncio logger must not reopen or append to prev_file
+    before_size = prev_file.stat().st_size
+    logging.getLogger("asyncio").error("Task was destroyed but it is pending!")
+    assert prev_file.stat().st_size == before_size
+
+
+@pytest.mark.asyncio
+async def test_markdown_fence_does_not_leak_pending_scrollbar_tasks():
+    """MarkdownFence show/hide/teardown must not spawn or leak pending ScrollBar tasks."""
+    from talkops.ui.theme import get_css_variable_defaults
+    from talkops.ui.widgets.messages import AssistantMessage, MessageList
+
+    asyncio_records: list[logging.LogRecord] = []
+
+    class _CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            """Provide emit test helper or fixture."""
+            asyncio_records.append(record)
+
+    asyncio_logger = logging.getLogger("asyncio")
+    capture = _CaptureHandler()
+    asyncio_logger.addHandler(capture)
+
+    class _FenceTestApp(App[None]):
+        def get_css_variables(self) -> dict[str, str]:
+            """Provide get css variables test helper or fixture."""
+            return {**super().get_css_variables(), **get_css_variable_defaults()}
+
+        def compose(self) -> ComposeResult:
+            """Compose and yield child widgets for this component."""
+            yield MessageList(id="ml")
+
+    try:
+        app = _FenceTestApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            ml = app.query_one("#ml", MessageList)
+            ml._mount_child(AssistantMessage("```bash\necho hello\n```"))
+            await pilot.pause(0.2)
+
+            fences = list(app.query(MarkdownFence))
+            assert fences
+            for fence in fences:
+                assert fence._horizontal_scrollbar is None
+
+            ml.clear()
+            await pilot.pause()
+            gc.collect()
+        gc.collect()
+
+        pending_errors = [
+            r.getMessage()
+            for r in asyncio_records
+            if "Task was destroyed but it is pending" in r.getMessage()
+        ]
+        assert pending_errors == []
+    finally:
+        asyncio_logger.removeHandler(capture)
+
+
+def test_agent_logger_writes_to_in_memory_debug_buffer(tmp_path):
+    """Logs emitted via get_logger() are captured in InMemoryLogBuffer for the Debug Console."""
+    from talkops._debug_buffer import get_log_buffer
+
+    configure_logging(
+        level="INFO",
+        log_to_console=False,
+        log_to_file=True,
+        log_dir=tmp_path,
+        log_file=tmp_path / "buffer_test.log",
+    )
+
+    buf = get_log_buffer()
+    assert buf is not None
+    start_cursor = buf.total_emitted
+
+    log = get_logger("talkops.ui.test_buffer")
+    log.info("Debug console visible log entry")
+
+    records, _ = buf.snapshot_records_since(start_cursor)
+    assert any("Debug console visible log entry" in r.message for r in records)
 

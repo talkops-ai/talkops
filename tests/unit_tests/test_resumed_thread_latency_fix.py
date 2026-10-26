@@ -1,3 +1,17 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Regression tests for resumed thread latency, reasoning configuration, and compaction delegation.
 
 Verifies:
@@ -10,18 +24,15 @@ Verifies:
 
 from __future__ import annotations
 
-import pytest
 from deepagents.backends.protocol import BackendProtocol
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langchain_core.messages import AIMessage, HumanMessage
 
-from opscloud.config.manifest import get_option
-from opscloud.config.metadata import build_stream_config
-from opscloud.config.settings import Settings
-from opscloud.middleware.compaction import _create_cli_compaction_middleware
-from opscloud.model.config import MODEL_PROFILES
-from opscloud.model.reasoning import (
-    current_effort_from_model_params,
+from talkops.config.manifest import get_option
+from talkops.config.metadata import build_stream_config
+from talkops.config.settings import Settings
+from talkops.middleware.compaction import _create_cli_compaction_middleware
+from talkops.model.config import MODEL_PROFILES
+from talkops.model.reasoning import (
     default_effort_for_model,
     is_effort_supported_for_model,
     supported_efforts_for_model,
@@ -31,12 +42,14 @@ from opscloud.model.reasoning import (
 
 
 def test_settings_and_metadata_reasoning_effort_defaults():
+    """Verify settings and metadata reasoning effort defaults."""
     settings = Settings()
     assert settings.reasoning_effort is None
 
     option = get_option("models.reasoning_effort")
     assert option is not None
     assert option.default is None
+    assert option.choices is not None
     assert "off" in option.choices
     assert "none" in option.choices
 
@@ -45,13 +58,15 @@ def test_settings_and_metadata_reasoning_effort_defaults():
 
 
 def test_gemini_profiles_no_forced_default():
+    """Verify gemini profiles no forced default."""
     assert "reasoning_effort_default" not in MODEL_PROFILES.get("google_genai:gemini-3.7-flash", {})
-    assert "reasoning_effort_default" not in MODEL_PROFILES.get("google_genai:gemini-3.8-flash", {})
+    assert "reasoning_effort_default" not in MODEL_PROFILES.get("google_genai:gemini-3.6-flash", {})
     assert default_effort_for_model("google_genai:gemini-3.7-flash") is None
 
 
 def test_reasoning_effort_disable_google_genai():
     # Model without configurable reasoning levels (e.g. gemini-2.5-flash-lite)
+    """Verify reasoning effort disable google genai."""
     assert supported_efforts_for_model("google_genai:gemini-2.5-flash-lite") == ()
     assert is_effort_supported_for_model("google_genai:gemini-2.5-flash-lite", "high") is False
 
@@ -59,7 +74,7 @@ def test_reasoning_effort_disable_google_genai():
     assert "high" in supported_efforts_for_model("google_genai:gemini-3.5-flash")
     assert is_effort_supported_for_model("google_genai:gemini-3.5-flash", "high") is True
 
-    # Turning off effort produces clean params with NO reasoning_effort or thinking keys (dcode flow)
+    # Turning off effort produces clean params with NO reasoning_effort or thinking keys
     params = with_effort_model_params("google_genai:gemini-3.5-flash", {"temperature": 0.0}, "off")
     assert "reasoning_effort" not in params
     assert "thinking_budget" not in params
@@ -73,6 +88,7 @@ def test_reasoning_effort_disable_google_genai():
 
     # without_effort_model_params cleans everything
     cleaned = without_effort_model_params("google_genai:gemini-3.5-flash", params_on)
+    assert cleaned is not None
     assert "reasoning_effort" not in cleaned
     assert "include_thoughts" not in cleaned
 
@@ -80,6 +96,7 @@ def test_reasoning_effort_disable_google_genai():
 
 def test_reasoning_effort_disable_anthropic_and_openai():
     # Anthropic
+    """Verify reasoning effort disable anthropic and openai."""
     anth_params = with_effort_model_params("anthropic:claude-3-7-sonnet", {}, "off")
     assert "thinking" not in anth_params
     assert "reasoning_effort" not in anth_params
@@ -91,16 +108,19 @@ def test_reasoning_effort_disable_anthropic_and_openai():
 
 
 class DummyBackend(BackendProtocol):
+    """Test suite or helper class for dummy backend."""
     pass
 
 
 def test_compaction_middleware_model_profile_and_delegation():
+    """Verify compaction middleware model profile and delegation."""
     fake_model = FakeListChatModel(responses=["test response"])
     backend = DummyBackend()
 
     middleware = _create_cli_compaction_middleware(fake_model, backend)
-    assert hasattr(fake_model, "profile")
-    assert fake_model.profile.get("max_input_tokens") == 128_000
+    profile = getattr(fake_model, "profile", None)
+    assert isinstance(profile, dict)
+    assert profile.get("max_input_tokens") == 128_000
 
     # Ensure wrap_model_call and awrap_model_call methods exist and callable
     assert callable(getattr(middleware, "wrap_model_call", None))
