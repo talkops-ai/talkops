@@ -354,6 +354,11 @@ class StatusBar(Horizontal):
         color: $warning;
     }
 
+    StatusBar .status-message.logged-out {
+        color: $warning;
+        text-style: bold;
+    }
+
     StatusBar .status-cwd {
         width: auto;
         text-align: right;
@@ -720,13 +725,16 @@ class StatusBar(Horizontal):
         except NoMatches:
             return
 
-        msg_widget.remove_class("thinking")
+        msg_widget.remove_class("thinking", "logged-out")
         # Hide when empty so the widget's padding doesn't reserve a blank gap
         # in the footer (mirrors the connection indicator).
         msg_widget.display = bool(new_value)
         if new_value:
             msg_widget.update(new_value)
-            if "thinking" in new_value.lower() or "executing" in new_value.lower():
+            lower_val = new_value.lower()
+            if "logged out" in lower_val:
+                msg_widget.add_class("logged-out")
+            elif "thinking" in lower_val or "executing" in lower_val:
                 msg_widget.add_class("thinking")
         else:
             msg_widget.update("")

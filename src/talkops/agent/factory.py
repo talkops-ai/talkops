@@ -640,8 +640,28 @@ def create_talkops_agent(
         effective_project_root = settings.effective_project_root
     project_scope_root = effective_project_root or effective_cwd
 
-    # 2. Create composite backend
-    default_backend = LocalShellBackend(root_dir=effective_cwd)
+    # 2. Create composite backend (local shell by default, or configured remote sandbox)
+    from talkops.backend.sandbox_config import SandboxConfig
+    from talkops.backend.sandbox_factory import (
+        get_sandbox_backend,
+        get_sandbox_working_dir,
+    )
+
+    sandbox_cfg = SandboxConfig.from_env()
+    explicit_sandbox_type = kwargs.pop("sandbox_type", None)
+    effective_sandbox_type = (
+        explicit_sandbox_type
+        or (sandbox_cfg.provider if sandbox_cfg.provider != "local" else None)
+        or getattr(settings, "sandbox_provider", "local")
+    )
+    is_remote_sandbox = bool(
+        effective_sandbox_type
+        and str(effective_sandbox_type).lower() not in {"local", "none"}
+    )
+    if sandbox_cfg.provider != "local":
+        default_backend = get_sandbox_backend(thread_id=thread_id)
+    else:
+        default_backend = LocalShellBackend(root_dir=effective_cwd)
     composite_backend = TalkOpsCompositeBackend(default=default_backend)
 
     # 3. Resolve active chat model
@@ -969,17 +989,22 @@ def create_talkops_agent(
 
 
     # 9. Build system prompt
+    prompt_cwd = (
+        get_sandbox_working_dir(str(effective_sandbox_type).lower())
+        if is_remote_sandbox
+        else effective_cwd
+    )
     effective_prompt = system_prompt or get_base_system_prompt(
         assistant_id=assistant_id,
         interactive=interactive,
-        cwd=effective_cwd,
+        cwd=prompt_cwd,
         fs_tools=fs_tools,
         model_name=model_name,
         model_provider=model_provider,
         model_context_limit=model_context_limit,
         model_unsupported_modalities=model_unsupported_modalities,
         cloud_provider=cloud_provider or getattr(settings, "cloud_provider", "aws"),
-        sandbox_type=getattr(settings, "sandbox_provider", "local"),
+        sandbox_type=str(effective_sandbox_type),
         has_search=any(getattr(t, "name", None) == "web_search" for t in all_tools),
     )
 
@@ -992,14 +1017,14 @@ def create_talkops_agent(
     agent_middleware.append(
         WebhookSREMiddleware(
             assistant_id=assistant_id,
-            cwd=effective_cwd,
+            cwd=prompt_cwd,
             fs_tools=fs_tools,
             model_name=model_name,
             model_provider=model_provider,
             model_context_limit=model_context_limit,
             model_unsupported_modalities=model_unsupported_modalities,
             cloud_provider=cloud_provider or getattr(settings, "cloud_provider", "aws"),
-            sandbox_type=getattr(settings, "sandbox_provider", "local"),
+            sandbox_type=str(effective_sandbox_type),
             has_search=any(getattr(t, "name", None) == "web_search" for t in all_tools),
         )
     )
@@ -1104,7 +1129,7 @@ def create_talkops_agent(
         _os.environ.get("TALKOPS_SERVER_TNR", "").lower() == "true"
     )
 
-    if enable_interpreter:
+    if enable_interpreter and not is_remote_sandbox:
         try:
             from langchain_core._api import suppress_langchain_beta_warning
             from langchain_quickjs import CodeInterpreterMiddleware, PTCOption

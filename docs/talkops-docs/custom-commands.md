@@ -1,107 +1,119 @@
-# Custom commands
+# Custom Commands
 
-> Define reusable slash commands as Markdown files with YAML frontmatter
+> Define reusable `/command` workflows as Markdown files with YAML frontmatter, live shell context, and scoped tool permissions
 
-Custom commands let you add reusable `/command` workflows to TalkOps (`talkops`) by dropping a Markdown file into `.talkops/commands/` or `~/.talkops/commands/`. Commands support positional and named argument substitution, inline shell execution, tool allowlists with brace expansion, model and reasoning-effort overrides, and isolated subagent execution (`context: fork`) without writing Python code. For persistent instructions and domain skills, see [Memory and skills](./memory-and-skills.md).
+Custom commands let you turn repeatable engineering workflows—such as pre-deploy checks, incident triage templates, git summaries, or Terraform reviews—into slash commands by dropping a `.md` file into `.talkops/commands/` or `~/.talkops/commands/`.
 
-## Create your first command
+You don't need to write any Python code. Each command is a Markdown prompt template with optional YAML frontmatter that supports:
 
-### 1. Create a command file
+* **Positional and named arguments** (`$ARGUMENTS`, `$0`, `$1`, or custom `$env` / `$namespace` parameters)
+* **Inline shell execution** (`` !`git status` `` and ```` ```! ````) to inject live cluster or repository state before the model runs
+* **Scoped tool permissions** (`allowed-tools` with brace expansion and `disallowed-tools`)
+* **Model, effort, and subagent overrides** (`model`, `effort`, and `context: fork`)
+* **Automatic hot-reloading** whenever you edit or add command files on disk
 
-Create `.talkops/commands/review.md` in your project:
+---
+
+## Quick Start: Create Your First Command
+
+### 1. Create a Markdown file in `.talkops/commands/`
+
+Create `.talkops/commands/git/summary.md` in your repository:
 
 ```markdown
 ---
-description: "Review recent git changes for security, infrastructure, and reliability issues"
-argument-hint: "[target-branch]"
+description: "Summarize recent commits in the repository"
+argument-hint: "[commit-range]"
 allowed-tools:
-  - "Bash(git diff *, git status *)"
+  - "Bash(git:{log,diff,status} *)"
   - read_file
-effort: high
+effort: medium
 ---
 
-## Current Repository Status
+## Working Tree Status
 !`git status --short`
 
-## Recent Diff Against ${0:-HEAD}
-!`git diff $0`
+## Recent Commits
+!`git log -n 10 --oneline`
 
-Please review the changes above focusing on:
-1. Security vulnerabilities or leaked credentials
-2. Breaking infrastructure or API changes
-3. Missing error handling or edge cases
+Summarize the recent changes above, grouping them into:
+1. Features and infrastructure updates
+2. Bug fixes and reliability improvements
+3. Any potential operational or migration risks
 
-Additional user instructions: $ARGUMENTS
+Additional focus or commit range: $ARGUMENTS
 ```
 
-### 2. Reload and run the command
+### 2. Invoke it from the `/` prompt
 
-In an active TalkOps session, run `/reload` (or launch `talkops`), then invoke `/review`:
+Because TalkOps watches your `commands/` directories for file changes, new and edited commands are picked up automatically (or you can run `/reload` at any time).
 
-```text
-/reload
-/review main Focus on IAM policy changes
-```
-
-Typing `/` in the prompt bar shows `/review [target-branch]` in the autocomplete menu with a `(project)` scope badge.
+Type `/` in the prompt bar to see your custom command in the autocomplete menu with its `(project)` scope badge, and press `Enter` to run it:
 
 <p align="center">
-  <img src="./images/talkops-custom-commands-autocomplete.png" alt="TalkOps TUI slash command autocomplete showing custom project commands" width="850" />
+  <img src="../assets/custom-commands-tui-summary.png" alt="TalkOps running the /git:summary project custom command and showing /git autocomplete in the command palette" width="850" />
 </p>
 
-> [!IMPORTANT]
-> **Image Placeholder (`docs/talkops-docs/images/talkops-custom-commands-autocomplete.png`):**
-> Capture a screenshot of the `talkops` chat input when typing `/`, showing the autocomplete popup with custom commands (such as `/review [target-branch]`, `/aws:audit`, `/git:summary`) alongside their `(project)` or `(user)` scope badges and descriptions.
+Run the command with or without arguments:
+
+```text
+/git:summary
+/git:summary Focus on database and IAM changes
+```
 
 ---
 
-## Discovery locations and precedence
+## Discovery Scopes, Precedence, and Namespaces
 
-TalkOps discovers `.md` command files across four scopes. When two commands share the same resolved name, the higher-priority scope wins:
+TalkOps discovers `.md` command files across four scopes. If two scopes define a command with the same name, the higher-priority scope wins:
 
-| Priority | Scope | Directory path | UI badge |
-| - | - | - | - |
-| **1 (highest)** | **Managed / Policy** | `$TALKOPS_MANAGED_COMMANDS_DIR` or `$CLAUDE_MANAGED_COMMANDS_DIR` | `(policy)` |
-| **2** | **Project** | `.talkops/commands/` and `.claude/commands/` (walks up from `cwd` to Git root) | `(project)` or `(project:<folder>)` |
-| **3** | **User** | `~/.talkops/commands/` and `~/.claude/commands/` | `(user)` |
-| **4 (lowest)** | **Plugins** | `<plugin_root>/commands/` | `(plugin:<name>)` |
+| Priority | Scope | Directory Location | UI Badge | When to Use |
+| :--- | :--- | :--- | :--- | :--- |
+| **1 (Highest)** | **Managed Policy** | `$TALKOPS_MANAGED_COMMANDS_DIR` (or `$CLAUDE_MANAGED_COMMANDS_DIR`) | `(policy)` | Organization-wide standard commands enforced across all workstations |
+| **2** | **Project** | `.talkops/commands/` and `.claude/commands/` *(walked from current directory up to the Git root)* | `(project)` or `(project:<folder>)` | Team workflows committed to version control for a specific repository |
+| **3** | **User** | `~/.talkops/commands/` and `~/.claude/commands/` | `(user)` | Personal shortcuts available across all your projects |
+| **4 (Lowest)** | **Plugin** | `<plugin_root>/commands/` | `(plugin:<name>)` | Commands bundled inside an installed [plugin](./plugins.md) |
 
-### Subdirectory namespacing
+### Subdirectory Namespacing (`:` and Space Aliases)
 
-Organize related commands into subdirectories inside `commands/`. Relative directory paths map automatically to colon-separated namespaces and also accept space-separated invocation:
+You can organize commands into nested folders inside `commands/`. Directory names become colon-separated namespaces, and TalkOps also accepts space-separated invocation automatically:
 
-| File path | Canonical command | Space-separated alias |
-| - | - | - |
-| `.talkops/commands/deploy.md` | `/deploy` | — |
+| File Path | Canonical Slash Command | Space-Separated Alias |
+| :--- | :--- | :--- |
+| `.talkops/commands/review.md` | `/review` | — |
+| `.talkops/commands/git/summary.md` | `/git:summary` | `/git summary <args>` |
 | `.talkops/commands/aws/audit.md` | `/aws:audit` | `/aws audit <args>` |
 | `.talkops/commands/k8s/rollout/status.md` | `/k8s:rollout:status` | `/k8s rollout status <args>` |
 | `.talkops/commands/terraform/SKILL.md` | `/terraform` | — |
 
+> [!TIP]
+> **Smart Autocomplete Ranking:** As you run custom commands, TalkOps tracks usage frequency with a 7-day recency half-life (`~/.talkops/.state/command_usage.json`) so your most frequently used commands float to the top of the `/` autocomplete list.
+
 ---
 
-## Frontmatter reference
+## Frontmatter Reference
 
-All YAML frontmatter fields are optional. When omitted, TalkOps uses the filename as the command name and the first non-heading paragraph of the Markdown body as the description.
+All YAML frontmatter fields are optional. If a file has no frontmatter at all, TalkOps derives the command name from the file path and uses the first non-heading paragraph of the Markdown body as the description.
 
 ```yaml
 ---
-name: deploy-check
-description: "Verify cluster readiness before deployment"
-when_to_use: "Use before rolling out a new release or applying Helm charts"
-argument-hint: "<environment> [namespace]"
+name: k8s:preflight
+description: "Verify Kubernetes cluster health and pending rollouts before deployment"
+when_to_use: "Use before rolling out a release or applying Helm/Kustomize changes"
+argument-hint: "<namespace> [deployment]"
 arguments:
-  - env
   - namespace
+  - deployment
 allowed-tools:
-  - "Bash(kubectl:{get,describe,logs} *)"
+  - "Bash(kubectl:{get,describe,logs,rollout} *)"
   - read_file
 disallowed-tools:
   - write_file
+  - edit_file
 model: sonnet
 effort: high
 context: inline
 agent: general-purpose
-background: false
 disable-model-invocation: false
 user-invocable: true
 paths:
@@ -113,157 +125,221 @@ version: "1.0.0"
 ```
 
 | Field | Type | Default | Description |
-| - | - | - | - |
-| `name` | `string` | Derived from path | Explicit command name override |
-| `description` | `string` | First body paragraph | Short description shown in `/` autocomplete and the model catalog |
-| `when_to_use` | `string` | `null` | Guidance telling the model when to invoke this command automatically via the `Skill` tool |
-| `argument-hint` | `string` | `null` | Placeholder hint shown next to the command in `/` autocomplete (e.g., `<env> [service]`) |
-| `arguments` | `list[str]` | `[]` | Named positional parameters (e.g., `[env, service]`) enabling `$env` and `$service` substitution |
-| `allowed-tools` | `list[str]` | `[]` | Allowlist of tools permitted during execution; supports brace expansion (`Bash(git:{diff,status} *)`) |
-| `disallowed-tools` | `list[str]` | `[]` | Denylist of tools blocked during execution |
-| `model` | `string` | `inherit` | Model override: `haiku`, `sonnet`, `opus`, `inherit`, or full `provider:model` spec |
-| `effort` | `string` / `int` | `null` | Reasoning effort override: `low`, `medium`, `high`, `max`, or integer token budget |
-| `context` | `string` | `"inline"` | Execution mode: `"inline"` (runs in main thread) or `"fork"` (spawns an isolated subagent) |
-| `agent` | `string` | `"general-purpose"` | Target subagent name when `context: fork` is set |
-| `background` | `bool` | `false` | Whether the command can run asynchronously in the background |
-| `disable-model-invocation` | `bool` | `false` | Hide the command from the model's autonomous `Skill` tool catalog (manual `/cmd` only) |
-| `user-invocable` | `bool` | `true` | Show the command in the `/` autocomplete menu (`false` makes it model-only) |
-| `paths` | `list[str]` | `[]` | Glob patterns (e.g., `"**/*.tf"`). Keeps the command dormant until a matching file is referenced |
-| `shell` | `string` | `"bash"` | Shell interpreter for inline `!` commands (`"bash"` or `"powershell"`) |
-| `hooks` | `dict` | `{}` | Command-scoped lifecycle hooks (`PreToolUse`, `PostToolUse`, `Stop`) |
-| `version` | `string` | `null` | Semantic version tag |
+| :--- | :--- | :--- | :--- |
+| `name` | `string` | Derived from file path | Explicit command name override. |
+| `description` | `string` | First body paragraph | Short summary displayed in `/` autocomplete and the model's skill catalog. |
+| `when_to_use` | `string` | `null` | Guidance telling the agent when to invoke this command autonomously via the `Skill` tool. |
+| `argument-hint` | `string` | `null` | Placeholder hint shown next to the command name in `/` autocomplete (for example, `<env> [service]`). |
+| `arguments` | `list[str]` | `[]` | Named positional parameters (for example, `[namespace, deployment]`), enabling `$namespace` and `$deployment` placeholders in the body. |
+| `allowed-tools` | `list[str]` | `[]` | Tool patterns pre-approved for this command without prompting; supports brace expansion (such as `Bash(git:{diff,status} *)`). Also accepts `allowed_tools`. |
+| `disallowed-tools` | `list[str]` | `[]` | Tool patterns blocked for the duration of this command turn. Also accepts `disallowed_tools`. |
+| `model` | `string` | `inherit` | Model override for the command turn: `haiku`, `sonnet`, `opus`, `inherit`, or a full `provider:model` identifier. |
+| `effort` | `string \| int` | `null` | Reasoning effort for the command turn: `low`, `medium`, `high`, `max`, or an integer token budget. |
+| `context` | `string` | `"inline"` | Execution mode: `"inline"` (runs in the main conversation) or `"fork"` (delegates to an isolated subagent). |
+| `agent` | `string` | `"general-purpose"` | Target subagent type when `context: fork` is set (for example, `aws-sre-agent` or `general-purpose`). |
+| `disable-model-invocation` | `bool` | `false` | When `true`, only the user can run `/command` manually; the model will not invoke it automatically. |
+| `user-invocable` | `bool` | `true` | When `false`, hides the command from the `/` autocomplete menu so it acts purely as a background model skill. |
+| `paths` | `list[str]` | `[]` | Glob patterns (such as `"**/*.tf"`). Keeps the command dormant in the model catalog until a matching file path is referenced. |
+| `shell` | `string` | `"bash"` | Shell interpreter used for inline `!` commands (`"bash"` or `"powershell"`). |
+| `version` | `string` | `null` | Optional semantic version string for documentation and tracking. |
 
 ---
 
-## Dynamic prompt expansion
+## Dynamic Prompt Expansion
 
-When you invoke a custom command, TalkOps expands variables and inline shell commands before sending the prompt to the agent.
+When you run a custom command, TalkOps runs a four-stage expansion pipeline before sending the prompt to the model:
 
-### 1. Positional and named arguments
+```mermaid
+flowchart LR
+    RAW["Markdown Template\n(.talkops/commands/*.md)"] --> ARGS["1. Argument Substitution\n$ARGUMENTS, $0, $name"]
+    ARGS --> ENV["2. Environment Variables\n${TALKOPS_PROJECT_DIR}, etc."]
+    ENV --> SHELL["3. Inline Shell Execution\n!`cmd` and ```! blocks"]
+    SHELL --> FILES["4. @file Mentions & Directives\nTool rules, model, context: fork"]
+```
 
-| Syntax | Behavior |
-| - | - |
-| `$ARGUMENTS` | Replaced with the entire argument string passed after `/command` |
-| `$0`, `$1`, `$2` | Replaced with the Nth positional argument (supports quoted strings) |
-| `$ARGUMENTS[0]`, `$ARGUMENTS[1]` | Indexed positional argument syntax |
-| `$<name>` or `${<name>}` | Replaced with the named argument declared in `arguments: [name1, name2]` |
-| `${0:-default}` | Positional or named argument with a fallback default value |
-| `\$ARGUMENTS`, `\$0` | Escaped literal dollar sign (no substitution) |
+### 1. Positional and Named Arguments
 
-If the Markdown body contains no argument placeholders and you pass arguments after `/command`, TalkOps appends `ARGUMENTS: <your args>` to the end of the expanded prompt.
+Arguments passed after `/command` are parsed using shell-style quoting (so `"my multi-word arg"` is treated as a single positional argument):
 
-### 2. Environment variables and `@file` mentions
+| Placeholder | Behavior |
+| :--- | :--- |
+| `$ARGUMENTS` | Replaced with the entire raw argument string passed after `/command`. |
+| `$0`, `$1`, `$2` | Replaced with the Nth positional argument (0-indexed). Out-of-range indices expand cleanly to an empty string. |
+| `$ARGUMENTS[0]`, `$ARGUMENTS[1]` | Alternative bracketed syntax for positional arguments. |
+| `$<name>` | Replaced with the corresponding positional argument declared in `arguments: [name1, name2]` in the frontmatter. |
+| `\$ARGUMENTS`, `\$0`, `\$name` | Escaped dollar sign—renders literally without substitution. |
 
-* `${TALKOPS_SKILL_DIR}` / `${CLAUDE_SKILL_DIR}`: Absolute path to the directory containing the command's `.md` file.
-* `${TALKOPS_PROJECT_DIR}` / `${CLAUDE_PROJECT_DIR}`: Absolute path to the current project root.
-* `${TALKOPS_SESSION_ID}` / `${CLAUDE_SESSION_ID}`: Active session thread ID.
-* `${TALKOPS_EFFORT}`: Active reasoning effort level.
-* `@path/to/file`: Extracted automatically into `mentioned_files` to attach file context and unlock path-scoped commands.
+> [!NOTE]
+> **Automatic Fallback When No Placeholder Is Present:** If your Markdown template doesn't include `$ARGUMENTS`, `$0`, or any named `$param` placeholder and you pass arguments when running `/command <args>`, TalkOps automatically appends `ARGUMENTS: <args>` to the end of the expanded prompt so your input is never lost.
 
-### 3. Inline shell execution (`` !`cmd` `` and ```` ```! ````)
+### 2. Built-in Environment Variables and `@file` Mentions
 
-Embed live command output directly into the prompt at expansion time:
+You can reference workspace and session paths inside any custom command body:
+
+* `${TALKOPS_SKILL_DIR}` / `${CLAUDE_SKILL_DIR}` — Absolute path to the directory containing the command's `.md` file (useful for referencing helper scripts next to the command).
+* `${TALKOPS_PROJECT_DIR}` / `${CLAUDE_PROJECT_DIR}` — Absolute path to the current project root.
+* `${TALKOPS_SESSION_ID}` / `${CLAUDE_SESSION_ID}` — Active conversation thread ID.
+* `${TALKOPS_EFFORT}` — Active reasoning effort level.
+* `${TALKOPS_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` — Root directory of the owning plugin (for plugin-bundled commands).
+* `${TALKOPS_PLUGIN_DATA}` / `${CLAUDE_PLUGIN_DATA}` — Persistent data directory of the owning plugin.
+* `@path/to/file` — Automatically extracted and attached as referenced file context (and unlocks any `paths:`-scoped commands matching that file).
+
+### 3. Inline Shell Execution (`` !`cmd` `` and ```` ```! ````)
+
+Embed live diagnostic output directly into the prompt before the model begins reasoning:
+
+* **Inline backtick syntax** (`` !`command` ``) replaces the expression in-place with stdout.
+* **Fenced code block syntax** (```` ```! ````) executes multi-line shell commands and replaces the block with the combined output.
 
 ````markdown
-Current git branch: !`git branch --show-current`
+Current Git branch: !`git branch --show-current`
 Active Kubernetes context: !`kubectl config current-context`
 
+### Recent Pod Events
 ```!
-git log -n 5 --oneline
+kubectl get events --sort-by='.lastTimestamp' | tail -n 15
 ```
 ````
 
-> [!NOTE]
-> When user arguments are interpolated into a command that uses inline shell execution, TalkOps sanitizes shell metacharacters (`;`, `|`, `&`, `` ` ``, `$()`, `>`, `<`) in the user arguments to prevent accidental command injection.
+> [!IMPORTANT]
+> **Argument Sanitization & Timeouts:**
+> * Each inline shell block runs in your project root with a **30-second timeout**. If a command fails or times out, TalkOps inserts an `[Error: ...]` marker into the expanded prompt rather than crashing your session.
+> * User-supplied command arguments are substituted **before** shell blocks run, and TalkOps automatically neutralizes `!` shell-execution triggers inside user arguments so untrusted argument text cannot inject additional `` !`...` `` blocks.
 
 ---
 
-## Control execution and permissions
+## Controlling Execution, Permissions, and Chaining
 
-* **Brace expansion in `allowed-tools`**: `"Bash(kubectl:{get,describe,logs} *)"` expands automatically to allow `kubectl get`, `kubectl describe`, and `kubectl logs` while blocking other `kubectl` subcommands.
-* **Isolated subagent execution (`context: fork`)**: Set `context: fork` (and optionally `agent: <name>`) to run heavy audits or verbose multi-step checks inside a forked subagent without cluttering the main conversation.
-* **Path-scoped activation (`paths:`)**: Commands with a `paths:` glob list remain dormant at startup to save system-prompt tokens and activate automatically as soon as a matching file path is referenced.
-* **Stacked slash commands**: Chain multiple custom commands in a single input line (for example, `/lint-rules /security-checklist src/talkops/agent/factory.py`). TalkOps merges their tool permissions and expands them in order.
+### Tool Allowlists and Brace Expansion (`allowed-tools` & `disallowed-tools`)
 
-<details>
-<summary><b>Authoring recipes</b></summary>
+Custom commands can pre-authorize specific read-only or diagnostic commands so TalkOps doesn't have to pause for manual approval on every step:
 
-### Minimal zero-frontmatter command (`.talkops/commands/explain.md`)
-
-```markdown
-Explain the architecture and data flow of the specified module in plain English.
-
-Target to explain: $ARGUMENTS
-```
-
-### Parameterized command with named arguments (`.talkops/commands/k8s-drift.md`)
-
-```markdown
----
-description: "Compare two Kubernetes namespaces for configuration drift"
-argument-hint: "<source-ns> <target-ns>"
-arguments:
-  - source_ns
-  - target_ns
+```yaml
 allowed-tools:
-  - "Bash(kubectl:{get,diff} *)"
----
-
-Compare workloads and ConfigMaps between namespace `$source_ns` and `$target_ns`.
+  - "Bash(kubectl:{get,describe,logs} *)"
+  - "Bash(aws:{sts,cloudwatch,ecs} *)"
+  - read_file
+disallowed-tools:
+  - write_file
+  - edit_file
 ```
 
-### Forked subagent audit command (`.talkops/commands/tf-audit.md`)
+* **Brace expansion**: `"Bash(kubectl:{get,describe,logs} *)"` expands automatically into `Bash(kubectl get *)`, `Bash(kubectl describe *)`, and `Bash(kubectl logs *)`.
+* **Permission lifetime**:
+  * `allowed-tools` grants are registered in the active session's command permissions so multi-step follow-ups in the workflow don't repeatedly re-prompt.
+  * `disallowed-tools`, `model`, and `effort` overrides are **turn-scoped**—they apply strictly to the command execution turn and reset automatically on your next normal message.
 
-```markdown
+### Isolated Subagent Execution (`context: fork`)
+
+For heavy audits or verbose multi-file investigations that would otherwise fill up your main conversation context, set `context: fork` in the frontmatter:
+
+```yaml
 ---
-description: "Deep audit of Terraform modules in an isolated subagent"
+description: "Run a deep security & IAM audit in an isolated subagent"
 context: fork
-agent: general-purpose
+agent: aws-cloud-security-engineer
 model: sonnet
 effort: high
 ---
 
-Audit all `.tf` files in ${0:-.} and return a summary table of findings.
+Audit all Terraform IAM policies in `$0` for wildcard actions or missing resource constraints, and return a prioritized remediation table.
+```
+
+When invoked, TalkOps dispatches the expanded prompt to the specified `agent` (defaulting to `general-purpose`) via an isolated `task` subagent call and returns the concise summary to your main chat.
+
+### Chaining Multiple Custom Commands
+
+You can stack up to **5 custom commands** in a single prompt line:
+
+```text
+/k8s:preflight /security-checklist production
+```
+
+When you chain commands:
+1. Shared trailing arguments (`production`) are passed to each command in the chain.
+2. Each command's template is expanded in order and combined with a `---` separator.
+3. `allowed-tools` and `disallowed-tools` are merged across the chain (and if any command in the chain requests `context: fork`, the combined workflow runs in a forked subagent).
+
+---
+
+## Practical Examples
+
+<details>
+<summary><b>1. Minimal Zero-Frontmatter Command (<code>.talkops/commands/explain.md</code>)</b></summary>
+
+```markdown
+Explain the architecture, key classes, and request flow of the specified module in clear, concise terms.
+
+Target module or file: $ARGUMENTS
+```
+
+Invoke with:
+```text
+/explain src/talkops/plugins/discovery.py
 ```
 
 </details>
 
 <details>
-<summary><b>Internal architecture and verification</b></summary>
+<summary><b>2. Parameterized Kubernetes Namespace Drift Check (<code>.talkops/commands/k8s/drift.md</code>)</b></summary>
 
-```mermaid
-flowchart TD
-    A["Markdown File (.talkops/commands/**/*.md)"] --> B["Frontmatter Parser (frontmatter.py)"]
-    B --> C["CustomCommandDefinition (models.py)"]
-    C --> D["CommandRouter / UI Autocomplete (_router.py)"]
-    C --> E["CustomCommandsMiddleware + Skill Tool"]
-    D --> F["Expansion Pipeline (expansion.py)"]
-    E --> F
-    F --> G["ExpandedCommandPrompt + CommandPermissionContext"]
-    G --> H["TalkOpsAgentState Channels"]
+```markdown
+---
+description: "Compare workloads and ConfigMaps between two Kubernetes namespaces"
+argument-hint: "<source-namespace> <target-namespace>"
+arguments:
+  - source_ns
+  - target_ns
+allowed-tools:
+  - "Bash(kubectl:{get,diff,describe} *)"
+---
+
+## Workloads in `$source_ns`
+!`kubectl get deploy,sts,daemonset -n $source_ns -o wide`
+
+## Workloads in `$target_ns`
+!`kubectl get deploy,sts,daemonset -n $target_ns -o wide`
+
+Compare the deployments, image tags, replica counts, and ConfigMaps between `$source_ns` and `$target_ns` and highlight any configuration drift.
 ```
 
-To verify discovered commands and prompt expansion from the shell:
-
-```bash
-uv run pytest tests/unit_tests/test_custom_commands.py -v
-
-uv run python -c "
-from pathlib import Path
-from talkops.commands.custom import discover_custom_commands
-for cmd in discover_custom_commands(Path.cwd()):
-    print(f'Discovered: /{cmd.name} {cmd.source_label} -> {cmd.description}')
-"
+Invoke with either colon or space syntax:
+```text
+/k8s:drift staging production
+/k8s drift staging production
 ```
+
+</details>
+
+<details>
+<summary><b>3. Path-Scoped Terraform Review (<code>.talkops/commands/tf/validate.md</code>)</b></summary>
+
+```markdown
+---
+description: "Validate Terraform formatting, providers, and module changes"
+paths:
+  - "**/*.tf"
+  - "**/*.tfvars"
+allowed-tools:
+  - "Bash(terraform:{fmt,validate,version} *)"
+  - read_file
+---
+
+!`terraform version`
+
+Review the referenced Terraform files for state hazards, unpinned provider versions, and security group exposure.
+```
+
+Because `paths:` is set, this command stays dormant in the model's autonomous skill catalog until you reference a `.tf` or `.tfvars` file (or invoke `/tf:validate` directly).
 
 </details>
 
 ---
 
-## See also
+## Related Documentation
 
-* [Memory and skills](./memory-and-skills.md)
-* [Subagents](./subagents.md)
-* [Plugins and marketplaces](./plugins.md)
-* [Command reference](./cli-reference.md)
-* [Hooks](./hooks.md)
+* [Memory and Skills](./memory-and-skills.md) — Persistent `TALKOPS.md` instructions and multi-file `SKILL.md` domain packages.
+* [Subagents](./subagents.md) — Defining custom subagents and using `context: fork` delegation.
+* [Plugins and Marketplaces](./plugins.md) — Packaging custom commands, skills, and subagents for your team.
+* [Approval Modes and Safety](./approval-mode.md) — How tool permissions, HITL modes, and allowlists work.
+* [CLI & TUI Reference](./cli-reference.md) — Built-in slash commands and keyboard shortcuts.

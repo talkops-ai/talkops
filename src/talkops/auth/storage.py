@@ -309,6 +309,10 @@ class CompositeCredentialStorage:
 
         data = self._read_auth_json()
         data["session"] = session.to_dict(include_secrets=True)
+        if session.auth_method in {"wif_sso", "oauth_pkce", "enterprise"} and (
+            session.org_id or session.control_plane_url
+        ):
+            data["saved_wif_provider"] = session.org_id or session.control_plane_url
         ok = self._write_auth_json(data)
 
         if sync_dotenv:
@@ -347,11 +351,39 @@ class CompositeCredentialStorage:
         return ok
 
     def clear_session(self, *, clear_dotenv: bool = True) -> bool:
-        """Remove the stored Control Plane / Central Server session lease."""
-        self._keyring_delete("session:api_key")
-        self._keyring_delete("session:access_token")
+        """Remove the stored Control Plane / Central Server session lease.
+
+        Preserves any non-secret enterprise WIF/SSO provider hint (`saved_wif_provider`)
+        in `auth.json` so subsequent logins can offer to continue with the same SSO provider.
+        """
+        kr_api = self._keyring_delete("session:api_key")
+        kr_tok = self._keyring_delete("session:access_token")
         data = self._read_auth_json()
-        had_session = bool(data.get("session"))
+        raw_session = data.get("session")
+        providers = data.get("providers")
+        had_talkops_prov = False
+        if isinstance(providers, dict) and "talkops" in providers:
+            providers.pop("talkops", None)
+            had_talkops_prov = True
+        self._keyring_delete("provider:talkops")
+
+        had_session = bool(raw_session or kr_api or kr_tok or had_talkops_prov)
+        if isinstance(raw_session, dict):
+            auth_method = str(raw_session.get("auth_method") or "")
+            wif_hint = str(
+                raw_session.get("wif_provider")
+                or (
+                    raw_session.get("org_id") or raw_session.get("control_plane_url")
+                    if auth_method in {"wif_sso", "oauth_pkce", "enterprise"}
+                    else ""
+                )
+                or ""
+            ).strip()
+            if wif_hint:
+                data["saved_wif_provider"] = wif_hint
+            cp_hint = str(raw_session.get("control_plane_url") or "").strip()
+            if cp_hint:
+                data["saved_control_plane_url"] = cp_hint
         data["session"] = None
         self._write_auth_json(data)
 
@@ -364,7 +396,11 @@ class CompositeCredentialStorage:
                 "TALKOPS_USER_ID",
             }
             for k in keys_to_clear:
-                os.environ.pop(k, None)
+                if os.environ.pop(k, None) is not None and k in {
+                    "TALKOPS_API_KEY",
+                    "TALKOPS_SERVER_API_KEY",
+                }:
+                    had_session = True
             target_env = self.env_path
             if target_env.exists():
                 with contextlib.suppress(OSError):
@@ -378,11 +414,19 @@ class CompositeCredentialStorage:
                             for k in keys_to_clear
                         )
                     ]
+                    if len(remaining) != len(lines):
+                        had_session = True
                     target_env.write_text(
                         "\n".join(remaining).strip() + ("\n" if remaining else ""),
                         encoding="utf-8",
                     )
         return had_session
+
+    def get_saved_wif_provider(self) -> str | None:
+        """Return the preserved non-secret enterprise WIF/SSO provider hint, if any."""
+        data = self._read_auth_json()
+        hint = str(data.get("saved_wif_provider") or "").strip()
+        return hint or None
 
     # ── Provider API Keys (22+ LLM Providers) ─────────────────────────────
 

@@ -352,6 +352,7 @@ def _collect_auth_user() -> tuple[str, str]:
                         (session.email or "").strip()
                         or (session.user_id or "").strip()
                         or os.environ.get("TALKOPS_USER_ID", "").strip()
+                        or (session.api_key_prefix or "").strip()
                     )
                     if identity:
                         return identity, _format_tier_label(session.user_tier)
@@ -380,7 +381,7 @@ def _beam_override_color(dist: int, status: str) -> str | None:
 def _beam_accent(status: str) -> str:
     if status == "connected":
         return "#34D399"
-    if status in ("starting", "connecting", "warning", "degraded"):
+    if status in ("starting", "connecting", "warning", "degraded", "logged_out"):
         return "#FBBF24"
     return "#FB7185"
 
@@ -447,9 +448,44 @@ def _status_label_and_color(status: str, colors: ThemeColors) -> tuple[str, str]
         "error": ("startup failed", colors.error),
         "warning": ("degraded", colors.warning),
         "degraded": ("degraded", colors.warning),
+        "logged_out": ("logged out", colors.warning),
         "starting": ("connecting", colors.warning),
         "connecting": ("connecting", colors.warning),
     }.get(status, ("connecting", colors.warning))
+
+
+def _collect_server_url(explicit_url: str | None = None) -> str:
+    """Return the active Central Server URL if connected remotely, else ``""``."""
+    raw = (explicit_url or "").strip().rstrip("/")
+    if not raw:
+        try:
+            from talkops.state import remote_session
+
+            raw = (getattr(remote_session, "_remote_server_url", None) or "").strip().rstrip("/")
+        except Exception:
+            raw = ""
+    if not raw:
+        raw = os.environ.get("TALKOPS_SERVER_URL", "").strip().rstrip("/")
+    if raw.startswith("inprocess://"):
+        return ""
+    return raw
+
+
+def _format_server_url_display(server_url: str, max_chars: int = 25) -> str:
+    """Format a Central Server URL to fit within the left-panel session stack."""
+    cleaned = (server_url or "").strip().rstrip("/")
+    if not cleaned:
+        return ""
+    if len(cleaned) <= max_chars:
+        return cleaned
+    # Strip scheme if needed to fit nicely before truncating
+    for prefix in ("https://", "http://"):
+        if cleaned.startswith(prefix):
+            stripped = cleaned[len(prefix) :]
+            if len(stripped) <= max_chars:
+                return stripped
+            return stripped[: max_chars - 1] + "…"
+    return cleaned[: max_chars - 1] + "…"
 
 
 @functools.lru_cache(maxsize=128)
@@ -463,6 +499,7 @@ def _build_logo_text_cached(
     show_icon: bool,
     ascii_mode: bool,
     ver: str,
+    resolved_server_url: str = "",
 ) -> Text:
     """Cached implementation of the TalkOps logo + brand lockup + session stack."""
     ver_clean = ver.lstrip("v") if ver else ""
@@ -492,16 +529,32 @@ def _build_logo_text_cached(
     if resolved_user:
         session_rows.append([(resolved_user, user_color)])
     health: list[tuple[str, str]] = []
+    sep_pad = f" {sep} " if len(status_label) > 10 else f"  {sep}  "
     if ver_str:
         health.append((ver_str, version_color))
     if status_label:
         if health:
-            health.append((f"  {sep}  ", rule_color))
+            health.append((sep_pad, rule_color))
         health.append((f"{dot} {status_label}", f"bold {status_color}"))
     if health:
+        health.append((sep_pad, rule_color))
+        if resolved_server_url:
+            health.append(("central", f"bold {version_color}"))
+        else:
+            health.append(("local", tagline_color))
         session_rows.append(health)
+    if resolved_server_url:
+        url_display = _format_server_url_display(resolved_server_url)
+        session_rows.append(
+            [
+                ("server", tagline_color),
+                (f"  {sep}  ", rule_color),
+                (url_display, user_color),
+            ]
+        )
     for offset, segs in enumerate(session_rows):
-        rows[5 + offset] = segs
+        if 5 + offset < _ICON_ROWS:
+            rows[5 + offset] = segs
 
     def _icon_color(code: str, col_idx: int) -> str | None:
         if code not in ("B", "G"):
@@ -567,6 +620,7 @@ def _build_logo_text(
     status_label: str | None = None,
     status_color: str | None = None,
     show_icon: bool = True,
+    server_url: str | None = None,
 ) -> Text:
     """Return the TalkOps logo + brand lockup + session stack with light beam.
 
@@ -579,7 +633,8 @@ def _build_logo_text(
                 centred under the wordmark (muted ``#94A3B8``)
       row  4    thin rule separating the brand lockup from session info
       row  5    authenticated Control Plane user & tier (``#CBD5E1``)
-      row  6    ``vX.Y.Z  ·  ● ready`` version + live health
+      row  6    ``vX.Y.Z  ·  ● ready  ·  local/central`` version + live health + mode
+      row  7    ``server  ·  http://...`` when connected to a Central Server
 
     The light beam sweeps across the icon and then the wordmark. With
     ``show_icon=False`` only the right-hand stack is returned; the banner uses
@@ -592,6 +647,8 @@ def _build_logo_text(
         resolved_user = _format_user_display(uid, utier)
     else:
         resolved_user = _format_user_display(user_display)
+
+    resolved_server_url = _collect_server_url(server_url)
 
     if status_label is None or status_color is None:
         colors = get_theme_colors(None)
@@ -611,6 +668,7 @@ def _build_logo_text(
         show_icon,
         ascii_mode,
         ver,
+        resolved_server_url,
     )
 
 
@@ -980,7 +1038,12 @@ class _LeftPanel(Widget):
     beam_x: reactive[int] = reactive(-6)
 
     def __init__(
-        self, *, user_display: str | None = None, show_icon: bool = True, **kwargs: Any
+        self,
+        *,
+        user_display: str | None = None,
+        show_icon: bool = True,
+        server_url: str | None = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize _LeftPanel."""
         super().__init__(**kwargs)
@@ -989,6 +1052,7 @@ class _LeftPanel(Widget):
         # False when a graphics-protocol widget shows the real PNG icon beside us;
         # the panel then renders only the wordmark lockup + session stack.
         self._show_icon = show_icon
+        self._server_url: str | None = server_url
         if user_display is None:
             uid, utier = _collect_auth_user()
             self._user_display: str = _format_user_display(uid, utier)
@@ -1002,6 +1066,11 @@ class _LeftPanel(Widget):
             self._user_display = _format_user_display(uid, utier)
         else:
             self._user_display = _format_user_display(user_display)
+        self.refresh()
+
+    def refresh_server(self, server_url: str | None = None) -> None:
+        """Refresh the cached Central Server URL display string."""
+        self._server_url = server_url
         self.refresh()
 
     def on_mount(self) -> None:
@@ -1053,6 +1122,7 @@ class _LeftPanel(Widget):
             status_label=status_label,
             status_color=status_color,
             show_icon=self._show_icon,
+            server_url=self._server_url,
         )
         return Group(logo)
 
@@ -1218,6 +1288,7 @@ class WelcomeBanner(Widget):
         mcp_disabled: bool = False,
         user_email: str = "",
         user_tier: str = "",
+        server_url: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize WelcomeBanner."""
@@ -1234,6 +1305,7 @@ class WelcomeBanner(Widget):
         self._user_display: str | None = (
             _format_user_display(user_email, user_tier) if user_email else None
         )
+        self._server_url: str | None = server_url
         self._status = "starting"
 
     # Backwards-compatible accessors (used by tests / callers).
@@ -1268,10 +1340,17 @@ class WelcomeBanner(Widget):
                 with Horizontal(id="welcome-brand"):
                     yield logo_image
                     yield _LeftPanel(
-                        user_display=self._user_display, show_icon=False, id="welcome-left"
+                        user_display=self._user_display,
+                        show_icon=False,
+                        server_url=self._server_url,
+                        id="welcome-left",
                     )
             else:
-                yield _LeftPanel(user_display=self._user_display, id="welcome-left")
+                yield _LeftPanel(
+                    user_display=self._user_display,
+                    server_url=self._server_url,
+                    id="welcome-left",
+                )
             yield _InfoPanel(self._info, id="welcome-right")
 
     def on_resize(self, event: events.Resize) -> None:
@@ -1329,14 +1408,63 @@ class WelcomeBanner(Widget):
         except Exception:
             pass
 
+    def update_server(self, server_url: str | None = None) -> None:
+        """Explicitly set or clear the Central Server URL displayed on the left panel."""
+        self._server_url = server_url
+        try:
+            left = self.query_one(_LeftPanel)
+            left.refresh_server(self._server_url)
+        except Exception:
+            pass
+
     def refresh_auth(self) -> None:
-        """Re-read the Control Plane session from storage and refresh the left panel."""
+        """Re-read the Control Plane session from storage, refresh the left panel, and restore ready status if authenticated."""
         self._user_display = None
         try:
             left = self.query_one(_LeftPanel)
             left.refresh_user(None)
         except Exception:
             pass
+        if self._status in ("warning", "degraded", "logged_out"):
+            has_cp_session = False
+            try:
+                from talkops.auth.storage import get_credential_storage
+
+                sess = get_credential_storage().load_session()
+                has_cp_session = bool(
+                    (
+                        sess
+                        and (
+                            sess.api_key
+                            or sess.access_token
+                            or sess.email
+                            or sess.user_id
+                        )
+                    )
+                    or os.environ.get("TALKOPS_API_KEY", "").strip()
+                    or os.environ.get("TALKOPS_SERVER_API_KEY", "").strip()
+                )
+            except Exception:
+                pass
+            app = getattr(self, "app", None)
+            has_live_client = bool(
+                self._status != "logged_out"
+                and app is not None
+                and getattr(app, "_client", None) is not None
+                and not getattr(app, "_connecting", False)
+                and getattr(app, "_server_startup_error", None) is None
+            )
+            if has_cp_session or has_live_client:
+                self.set_connected()
+                if app is not None:
+                    try:
+                        from talkops.ui.widgets.status import StatusBar
+
+                        sb = app.query_one("#status-bar", StatusBar)
+                        if "logged out" in (sb.status_message or "").lower():
+                            sb.set_status("Ready")
+                    except Exception:
+                        pass
 
     def set_connected(self) -> None:
         """Transition the health indicators to green 'ready'."""
@@ -1349,6 +1477,11 @@ class WelcomeBanner(Widget):
     def set_warning(self) -> None:
         """Transition the health indicators to yellow 'warning'."""
         self._set_status("warning")
+
+    def set_logged_out(self) -> None:
+        """Transition the banner to 'logged out' state with sign-in instructions."""
+        self.update_user("Not signed in · /login to sign in", "")
+        self._set_status("logged_out")
 
     def set_error(self) -> None:
         """Transition the health indicators to red 'error'."""

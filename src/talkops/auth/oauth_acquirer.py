@@ -186,6 +186,7 @@ class LoopbackCallbackServer:
         """Bind the server to `127.0.0.1:0` and return the assigned `redirect_uri`."""
         loop = asyncio.get_running_loop()
         self._code_future = loop.create_future()
+        _active_loopback_servers.add(self)
         try:
             self._server = await asyncio.start_server(
                 self._handle_client,
@@ -202,6 +203,14 @@ class LoopbackCallbackServer:
                 self.port = 54321
         return self.redirect_uri
 
+    def cancel(self) -> None:
+        """Synchronously abort any pending wait_for_code future and close listening sockets."""
+        _active_loopback_servers.discard(self)
+        if self._code_future is not None and not self._code_future.done():
+            self._code_future.cancel()
+        if self._server is not None:
+            self._server.close()
+
     def deliver_callback_url(self, callback_url_or_code: str) -> str:
         """Validate a callback URL or code against `expected_state` and resolve the loopback future."""
         code_val = extract_code_from_paste(callback_url_or_code, expected_state=self.expected_state)
@@ -214,6 +223,7 @@ class LoopbackCallbackServer:
 
     async def stop(self) -> None:
         """Close the ephemeral HTTP server."""
+        _active_loopback_servers.discard(self)
         if self._server is not None:
             self._server.close()
             try:
@@ -645,11 +655,27 @@ class BrowserAndPasteTokenAcquirer:
         raise asyncio.CancelledError()
 
 
+_active_loopback_servers: set[LoopbackCallbackServer] = set()
+
+
+def cancel_active_oauth_flows() -> int:
+    """Cancel any in-flight browser loopback OAuth PKCE listeners during logout."""
+    active = list(_active_loopback_servers)
+    _active_loopback_servers.clear()
+    for srv in active:
+        try:
+            srv.cancel()
+        except Exception:
+            pass
+    return len(active)
+
+
 __all__ = [
     "BrowserAndPasteTokenAcquirer",
     "LoopbackCallbackServer",
     "PKCEChallenge",
     "build_authorize_url",
+    "cancel_active_oauth_flows",
     "exchange_pkce_code_for_session",
     "extract_code_from_paste",
     "generate_pkce_challenge",

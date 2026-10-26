@@ -1,6 +1,6 @@
 [project]
 name = "talkops-ai"
-version = "0.3.0b16"
+version = "0.3.0b17"
 description = "Autonomous Multi-Agent Framework for Software & Infrastructure Coding, Cloud Operations, DevOps, SRE, FinOps & Event-Driven Automation"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -75,6 +75,15 @@ dependencies = [
     "langchain-litellm>=0.11.0",
     "langchain-meta>=0.5.0",
     "litellm>=1.103.3",
+    "daytona>=0.217.0",
+    "langchain-daytona>=0.0.8",
+    "langchain-modal>=0.0.6",
+    "langchain-runloop>=0.0.7",
+    "modal>=1.5.5",
+    "bedrock-agentcore>=1.25.0",
+    "langchain-agentcore-codeinterpreter>=0.0.5",
+    "langchain-vercel-sandbox>=0.0.2",
+    "vercel>=0.5.9",
 ]
 
 [project.optional-dependencies]
@@ -89,12 +98,46 @@ test-integration = [
     "agentevals>=0.0.8",
     "langsmith>=0.10.6",
 ]
+agentcore = [
+    "bedrock-agentcore>=1.25.0",
+    "langchain-agentcore-codeinterpreter>=0.0.5",
+]
+daytona = [
+    "daytona>=0.217.0",
+    "langchain-daytona>=0.0.8",
+]
+modal = [
+    "langchain-modal>=0.0.6",
+    "modal>=1.5.5",
+]
+runloop = [
+    "langchain-runloop>=0.0.7",
+]
+vercel = [
+    "langchain-vercel-sandbox>=0.0.2",
+    "vercel>=0.5.9",
+]
 sandboxes = [
     "daytona>=0.217.0",
     "langchain-daytona>=0.0.8",
     "langchain-modal>=0.0.6",
     "langchain-runloop>=0.0.7",
     "modal>=1.5.5",
+    "bedrock-agentcore>=1.25.0",
+    "langchain-agentcore-codeinterpreter>=0.0.5",
+    "langchain-vercel-sandbox>=0.0.2",
+    "vercel>=0.5.9",
+]
+all-sandboxes = [
+    "daytona>=0.217.0",
+    "langchain-daytona>=0.0.8",
+    "langchain-modal>=0.0.6",
+    "langchain-runloop>=0.0.7",
+    "modal>=1.5.5",
+    "bedrock-agentcore>=1.25.0",
+    "langchain-agentcore-codeinterpreter>=0.0.5",
+    "langchain-vercel-sandbox>=0.0.2",
+    "vercel>=0.5.9",
 ]
 
 [dependency-groups]

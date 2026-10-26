@@ -1,190 +1,232 @@
-# Memory and skills
+# Memory and Skills
 
-> Persistent memory, AGENTS.md files, and reusable skills for TalkOps, including creation, discovery, and invocation
+TalkOps gives you two complementary ways to customize how the agent works in your environment and retain operational knowledge across sessions:
 
-There are two primary ways to customize how TalkOps (`talkops`) works in your environment:
+- **[Memory](#memory)** — Persistent `AGENTS.md` files and key-value memory entries that load automatically at the start of every session. Use memory for your team's infrastructure conventions, naming standards, preferred regions, and lessons learned.
+- **[Skills](#skills)** — Reusable, on-demand playbooks (`SKILL.md` directories) that package step-by-step operational procedures, troubleshooting runbooks, reference docs, and helper scripts.
 
-* **[Memory](#memory)**: `AGENTS.md` files and persistent memory entries that carry across sessions. Use memory for coding style, infrastructure naming conventions, and project architecture.
-* **[Skills](#skills)**: Reusable, on-demand `SKILL.md` directories that the agent discovers at startup and reads only when relevant. Use skills for task-specific workflows, cloud provider best practices, and reference checklists.
-
-Use `/remember` inside any session to prompt the agent to extract conventions from the current conversation and save them to memory or skills.
-
-> [!TIP]
-> Want to define parameterized `/command` workflows with inline shell execution? See [Custom commands](./custom-commands.md).
+At any point during a conversation, you can run **`/remember`** to have TalkOps distill what you just solved into either persistent memory or a reusable skill.
 
 ---
 
 ## Memory
 
-### Automatic convention learning
+Memory ensures you never have to repeat your environment rules—such as which AWS profiles to use, how Terraform workspaces are structured, or which tags are required on every resource.
 
-As you collaborate with TalkOps, you can teach it infrastructure and coding conventions that persist across future sessions:
+### Capturing Learnings with `/remember`
 
-```text
-> We use AWS KMS customer-managed keys for all S3 buckets and enforce bucket-owner-enforced object ownership
-```
-
-Or explicitly save a convention with `/remember`:
+As you work with TalkOps—especially after troubleshooting a tricky incident or correcting how a command should be run—use `/remember` to save the takeaway for future sessions:
 
 ```text
-/remember Our S3 buckets always require KMS CMK encryption and bucket-owner-enforced ownership
+# Let TalkOps review the current conversation and extract key conventions automatically
+/remember
+
+# Or tell TalkOps specifically what to remember
+/remember Our S3 buckets always require KMS customer-managed keys and bucket-owner-enforced ownership
 ```
 
-TalkOps stores the convention and applies it automatically when you ask it to create or review resources in later sessions.
+When you run `/remember`, TalkOps analyzes the conversation and decides the best place to store each takeaway:
+- Simple preferences, rules, and environment facts are added to **`AGENTS.md`**.
+- Repeatable, multi-step operational procedures are packaged into a new **Skill** (`SKILL.md`).
 
-### Where memories are stored
+---
 
-| Scope | Path | When it loads |
-| - | - | - |
-| **Project** (higher priority) | `.talkops/memory/` | Whenever running inside that project |
-| **User** (fallback) | `~/.talkops/memory/` | Every session across all directories |
+### Two Layers of Memory
 
-When both scopes contain a memory with the same key, the project-level entry takes precedence. To keep memory from consuming excessive context-window capacity, TalkOps caps injected memory at **200 lines** (or **25 KB**) per session.
+TalkOps combines two types of persistent memory at session startup:
 
-### Manage memory (`/memory`)
+#### 1. `AGENTS.md` Files (Always-On Instructions)
 
-Use the `/memory` command inside an interactive session to inspect or edit stored entries:
+[`AGENTS.md`](https://agents.md/) files are plain Markdown documents loaded directly into the agent's instructions at the start of every session:
 
-```text
-/memory                    # List all active memories
-/memory save <key>         # Save a new memory entry
-/memory delete <key>       # Remove a stored memory entry
-```
+| Scope | File Locations | Best Used For |
+| :--- | :--- | :--- |
+| **Project** *(shared with team)* | `.talkops/AGENTS.md` or `AGENTS.md` *(in repo root)* | Repository architecture, environment names (`dev`, `staging`, `prod`), Terraform backend conventions, required resource tags, and Kubernetes cluster rules. Commit this file to Git so your whole team benefits. |
+| **User / Global** *(personal)* | `~/.talkops/AGENTS.md` or `~/.talkops/agents/talkops/AGENTS.md` | Your personal communication style, default cloud profile preferences, and cross-repository DevOps habits (for example, preferring `tofu` over `terraform` or always running dry-run diffs first). |
 
-### `AGENTS.md` files
+> [!NOTE]
+> **Built-in Memory Protection:** TalkOps automatically protects your `AGENTS.md` files from accidental deletion by the agent, and preserves system-managed onboarding blocks while allowing the agent to append new preferences and operational lessons when you run `/remember`.
 
-[`AGENTS.md`](https://agents.md/) files provide persistent instructions that are always loaded into the system prompt at session start:
+#### 2. Key-Value Memory Entries (`.talkops/memory/`)
 
-* **Project**: `.talkops/AGENTS.md` or `AGENTS.md` in the repository root—loaded whenever TalkOps runs inside that project (commit this file to Git to share conventions with your team).
-* **Global**: `~/.talkops/{agent}/AGENTS.md`—loaded on every session for that agent across all repositories.
+In addition to `AGENTS.md`, you can store focused topic notes as individual Markdown files (`<key>.md`):
 
-<details>
-<summary><b>When to use global vs. project AGENTS.md</b></summary>
+| Scope | Directory | Priority |
+| :--- | :--- | :--- |
+| **Project** | `<repo>/.talkops/memory/` | **Higher** — overrides a user memory entry with the same key when running inside that project. |
+| **User (Global)** | `~/.talkops/memory/` | **Fallback** — loaded in every session across all directories. |
 
-Use a **global `AGENTS.md`** (`~/.talkops/{agent}/AGENTS.md`) for:
+To keep your context window fast and lean, TalkOps caps injected key-value memories at **250 lines** (or **30 KB**) per session.
 
-* Personal communication style and formatting preferences
-* Universal DevOps habits (for example, preferring `tofu` over `terraform` or always running dry-run diffs first)
-* Tool usage patterns that apply across every repository
+---
 
-Use a **project `AGENTS.md`** (`.talkops/AGENTS.md` or `AGENTS.md`) for:
+### Managing Memory in the TUI (`/memory`)
 
-* Repository architecture, directory layout, and environment naming (`dev`, `staging`, `prod`)
-* Terraform state backend conventions, required resource tags, and module structure
-* Kubernetes cluster context rules, Helm chart conventions, and CI/CD test commands
+Use the `/memory` command inside an interactive session to inspect, search, or manage your stored memories:
 
-</details>
+| Command | Description |
+| :--- | :--- |
+| `/memory` *(or `/remember`)* | Extracts learnings from the current conversation and saves them to memory or skills. |
+| `/memory show` *(or `/memory list`)* | Displays active `AGENTS.md` files and lists all saved key-value memory entries. |
+| `/memory search <query>` | Searches across both your `AGENTS.md` files and `.talkops/memory/` entries for a keyword. |
+| `/memory get <key>` | Displays the full content of a specific memory entry. |
+| `/memory save <key> <content>` | Saves a key-value memory directly (writes to `.talkops/memory/<key>.md` in a project, or `~/.talkops/memory/<key>.md` globally). |
+| `/memory delete <key>` | Deletes a stored memory entry by key. |
+| `/memory clear` | Removes all stored key-value memory entries. |
 
 ---
 
 ## Skills
 
-Skills package domain expertise—such as workflows, best practices, helper scripts, and reference docs—into reusable directories that follow the [Agent Skills specification](https://agentskills.io/).
+While memory tells the agent *what* conventions to follow, **Skills** teach the agent *how* to execute specialized workflows—such as auditing Kubernetes manifests, diagnosing ECS crash loops, or rotating IAM credentials.
 
-To preserve context-window capacity, TalkOps uses **progressive disclosure**: at startup, it reads only the `name` and `description` from each `SKILL.md` frontmatter. When a task matches a skill's description, the agent loads the full `SKILL.md` instructions on demand. Discovery runs again whenever you execute `/reload`.
+### Why Skills Are Flexible & Context-Efficient
 
-### Add a skill
+TalkOps implements the open [Agent Skills specification](https://agentskills.io/) with several capabilities designed for real-world cloud operations:
 
-#### 1. Create a skill directory
+1. **Progressive Disclosure (3-Level Loading)**
+   Instead of stuffing every runbook into the system prompt at startup, TalkOps loads skills in three stages:
+   - **Stage 1 (Startup):** Only the compact `name` and `description` from each skill's YAML frontmatter are shown to the agent.
+   - **Stage 2 (On Trigger):** When your request matches a skill's description (or you invoke `/skill:<name>`), the agent reads the full `SKILL.md` playbook.
+   - **Stage 3 (On Demand):** Optional reference files (`references/`) and helper scripts (`scripts/`) inside the skill folder are only read or executed when a specific step requires them.
+2. **Automatic Hot-Reloading**
+   Whenever you or the agent create or edit a `SKILL.md` file mid-session—or when you run `/reload`—TalkOps automatically refreshes the active skill catalog on the very next turn without restarting.
+3. **Subagent & Workspace Isolation**
+   Skills bundled inside specialized subagent plugins stay scoped to that subagent so they don't clutter your main session, while project-level skills stay isolated to their repository.
 
-Scaffold a new skill from the shell or create a directory containing `SKILL.md`:
+---
+
+### Skill Discovery & Precedence
+
+TalkOps discovers skills from multiple directories. If two locations define a skill with the same name, the higher-priority location wins:
+
+| Priority | Scope | Directory | Purpose |
+| :--- | :--- | :--- | :--- |
+| **1 (Highest)** | **Project Agent Skills** | `.agents/skills/` *(and `.claude/skills/`)* | Portable project skills shared across AI coding and ops assistants. |
+| **2** | **Project TalkOps Skills** | `.talkops/skills/` | Project-specific runbooks and workflows committed to your repository. |
+| **3** | **User Agent Skills** | `~/.agents/skills/` *(and `~/.claude/skills/`)* | Personal skills shared across tools on your machine. |
+| **4** | **User TalkOps Skills** | `~/.talkops/agents/talkops/skills/` | Personal TalkOps skills created via `talkops skills create`. |
+| **5** | **Plugin Skills** | Installed plugins (`~/.talkops/plugins/`, `.talkops/plugins/`) | Domain skills provided by enabled plugins (namespaced as `<plugin>:<skill>`). |
+| **6 (Lowest)** | **Built-in Skills** | Bundled with TalkOps | Core utility skills (`remember`, `skill-creator`, `commit`, `simplify`). |
+
+---
+
+### Browsing & Invoking Skills
+
+Skills activate automatically whenever your prompt matches their description, or you can browse and trigger them directly.
+
+#### Inside the TUI
+
+| Command | Description |
+| :--- | :--- |
+| `/skills` | Opens the interactive two-pane **Skills Viewer** modal—filter skills on the left, inspect scope, location, description, and preview on the right, and press `Enter` to read the full `SKILL.md` playbook. |
+| `/tools` | Prints a summary of all discovered skills, core built-in tools, and connected MCP server tools in the chat view. |
+| `/skill:<name> [args]` | Explicitly invokes a skill by name (for example, `/skill:commit`, `/skill:simplify`, or `/skill:eks-skill check node groups`). |
+| `/skill-creator [args]` | Launches the built-in interactive **Skill Creator** assistant to design, scaffold, or refine a skill right from your conversation. |
+
+![Skills Viewer Modal](../assets/skills-tui-viewer-modal.png)
+
+#### From the CLI at Launch (`-s` / `--skill`)
+
+You can pre-load and invoke a skill when launching an interactive or non-interactive session:
 
 ```bash
-talkops skills create my-eks-runbook
+# Launch an interactive session with a skill pre-loaded
+talkops -s eks-runbook
+
+# Run a headless one-shot task using a specific skill
+talkops -s eks-runbook -n "Audit all deployments in k8s/prod/ for missing resource limits"
 ```
 
-Each skill directory follows this structure:
+---
+
+### Creating Your Own Skill
+
+You can create a new skill either conversationally in the TUI (by running `/skill-creator` or `/remember`) or from your terminal with `talkops skills create`.
+
+#### 1. Scaffold a Skill Directory
+
+```bash
+# Create a personal skill (available across all your projects)
+talkops skills create eks-runbook
+
+# Or create a project skill inside the current repo (.talkops/skills/eks-runbook)
+talkops skills create eks-runbook --project
+```
+
+A skill directory can include a required `SKILL.md` file along with optional supporting folders:
 
 ```text
-my-eks-runbook/
-├── SKILL.md          # Required — instructions with YAML frontmatter
-├── scripts/          # Optional — helper scripts executed by the agent
-├── references/       # Optional — domain documentation and cheat sheets
-└── assets/           # Optional — templates, examples, and schemas
+eks-runbook/
+├── SKILL.md          # Required — YAML frontmatter + step-by-step instructions
+├── scripts/          # Optional — executable Python/Bash helper scripts
+├── references/       # Optional — detailed docs, schemas, or cloud policies loaded on demand
+└── assets/           # Optional — starter templates or manifests copied into outputs
 ```
 
-#### 2. Edit `SKILL.md`
+#### 2. Write the `SKILL.md` Playbook
 
-Add YAML frontmatter (`name` and `description`) followed by Markdown instructions:
+Every `SKILL.md` starts with YAML frontmatter (`name` and `description`). Because the agent uses `description` to decide when to activate the skill, make sure it clearly states **what** the skill does and **when** to trigger it:
 
 ```markdown
 ---
-name: kubernetes
-description: "Author, audit, and troubleshoot Kubernetes manifests following Pod Security Standards"
+name: eks-runbook
+description: "Diagnose and remediate AWS EKS node and pod issues, and audit Kubernetes manifests against production readiness standards. Use when troubleshooting EKS clusters or reviewing k8s YAML files."
 ---
 
-# Kubernetes Engineering Skill
+# EKS Production Runbook
 
-When authoring or debugging manifests:
-1. Always define explicit CPU and memory requests and limits.
-2. Configure readinessProbe and livenessProbe on all long-running workloads.
-3. Enforce non-root securityContext (runAsNonRoot: true).
-4. Include standard labels: app.kubernetes.io/name, instance, version.
+## Operational Procedure
+1. Verify the active AWS profile and Kubernetes context before running cluster commands.
+2. When authoring or reviewing workloads:
+   - Define explicit CPU and memory `requests` and `limits`.
+   - Configure `readinessProbe` and `livenessProbe` on all long-running services.
+   - Enforce `runAsNonRoot: true` in the pod `securityContext`.
+3. For node-level networking issues, read [VPC_CNI.md](references/VPC_CNI.md) before modifying daemonsets.
 ```
 
-### Skill discovery and precedence
+---
 
-TalkOps discovers skills across seven locations. When two skills share the same name, the higher-priority source overrides the lower one:
+### Managing Skills from the CLI (`talkops skills`)
 
-| Priority | Source | Location |
-| - | - | - |
-| **1 (highest)** | Project Agent Skills | `.agents/skills/` |
-| **2** | Project TalkOps Skills | `.talkops/skills/` |
-| **3** | User Agent Skills | `~/.agents/skills/` |
-| **4** | User TalkOps Skills | `~/.talkops/skills/` |
-| **5** | Marketplace & Workspace Plugin Skills | Enabled plugins for the active workspace (`~/.talkops/plugins/cache/`, `<repo>/.talkops/plugins/`, `<repo>/.agents/plugins/`) |
-| **6** | Subagent Skills | Bundled subagent packages and agent-plugin skills (isolated to their subagent) |
-| **7 (lowest)** | Global Built-in Skills | Bundled with TalkOps (`cloud-core`, `docker`, `kubernetes`, `remember`) |
-
-> [!TIP]
-> Use `.agents/skills/` for portable skills shared across multiple AI coding assistants, and `.talkops/skills/` for skills tailored to TalkOps workflows. Skills bundled inside a plugin installed with `--scope project` or `--scope local` (or placed under `<repo>/.talkops/plugins/` or `<repo>/.agents/plugins/`) are strictly isolated to that workspace and will not appear in other repositories. See [Plugins and marketplaces](./plugins.md#scopes-and-workspace-isolation).
-
-> [!NOTE]
-> To protect your machine from untrusted files in cloned repositories, TalkOps tracks project skill trust in `~/.talkops/.state/skill_trust.json` and prompts for confirmation the first time a project skill is discovered.
-
-### Invoke or pre-load a skill
-
-Skills activate automatically when a prompt matches their description, or you can invoke them explicitly:
-
-```text
-/skills                    # Browse all loaded skills in the TUI
-/skill kubernetes          # Explicitly invoke a skill mid-session
-```
-
-To pre-load a skill at launch from the shell:
+Use the `talkops skills` (or `talkops skill`) CLI command suite to inspect and manage skills from your terminal:
 
 ```bash
-talkops -s kubernetes
-talkops -s kubernetes -p "Audit all deployments in k8s/prod/" -q
-```
-
-<p align="center">
-  <img src="./images/talkops-skills-browser.png" alt="TalkOps TUI skills browser showing loaded built-in, plugin, and project skills" width="850" />
-</p>
-
-> [!IMPORTANT]
-> **Image Placeholder (`docs/talkops-docs/images/talkops-skills-browser.png`):**
-> Capture a screenshot of the `/skills` viewer inside an interactive `talkops` session, showing the discovered skills list (`cloud-core`, `kubernetes`, `docker`, plus any installed plugin or project skills), their scope labels, and descriptions.
-
-### List and search skills from the shell
-
-```bash
-# List all discovered skills
+# List all discovered user, project, plugin, and built-in skills
 talkops skills list
 
-# Inspect a specific skill
-talkops skills info kubernetes
+# List only project-scoped skills in the current repository
+talkops skills list --project
 
-# Search skills by keyword
-talkops skills find terraform
+# View metadata, path, and full instructions for a specific skill
+talkops skills info eks-runbook
+
+# Delete a skill (add --project for project skills, or --force to skip confirmation)
+talkops skills delete eks-runbook
+```
+
+#### Managing Trusted External Skill Directories
+
+To prevent untrusted symlinks inside a skill folder from reading arbitrary files outside your standard skill directories, TalkOps verifies that every `SKILL.md` resolves inside a trusted root. If a skill points to an external directory, TalkOps prompts you once for approval and records your decision in `~/.talkops/.state/skill_trust.json`.
+
+You can inspect or revoke trusted external skill directories at any time:
+
+```bash
+# List external directories you have approved for skills
+talkops skills trust list
+
+# Revoke trust for a specific external directory
+talkops skills trust revoke /path/to/external/skills
+
+# Clear all trusted external skill directories
+talkops skills trust clear
 ```
 
 ---
 
-## See also
+## See Also
 
-* [Custom commands](./custom-commands.md)
-* [Subagents](./subagents.md)
-* [Plugins and marketplaces](./plugins.md)
-* [Configuration](./Configuration.md)
-* [Command reference](./cli-reference.md)
+- **[Custom Commands](./custom-commands.md)** — Define parameterized `/command` shortcuts with inline shell execution.
+- **[Subagents](./subagents.md)** — Delegate isolated multi-step tasks to specialized subagents.
+- **[Plugins & Marketplaces](./plugins.md)** — Install full-featured domain plugins that bundle skills, subagents, and MCP servers.
+- **[Configuration Overview](./Configuration.md)** — Manage your global and project settings.

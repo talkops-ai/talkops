@@ -201,7 +201,11 @@ def build_working_dir_section(
 ) -> str:
     """Build the working directory and path handling section."""
     if sandbox_type and sandbox_type.lower() not in {"local", "none"}:
-        working_dir = "/workspace" if not cwd else str(cwd)
+        from talkops.backend.sandbox_factory import get_sandbox_working_dir
+
+        working_dir = (
+            get_sandbox_working_dir(sandbox_type.lower()) if not cwd else str(cwd)
+        )
         return (
             f"### Current Working Directory\n\n"
             f"You are operating in a **remote Linux sandbox** (`{sandbox_type}`) at `{working_dir}`.\n\n"

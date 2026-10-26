@@ -52,6 +52,10 @@ def run_interactive(
     server_url: str | None = None,
     api_key: str | None = None,
     user_id: str | None = None,
+    sandbox_type: str | None = None,
+    sandbox_id: str | None = None,
+    sandbox_snapshot_name: str | None = None,
+    sandbox_setup: str | None = None,
 ) -> int:
     """Launch interactive TUI session with background server (or remote central server) and cloud context."""
     if resume_thread:
@@ -144,6 +148,18 @@ def run_interactive(
         "api_key": effective_api_key,
         "user_id": effective_user_id,
     }
+    if sandbox_type and sandbox_type not in ("none", "local"):
+        server_kwargs["sandbox_type"] = sandbox_type
+        os.environ["TALKOPS_SANDBOX_PROVIDER"] = sandbox_type
+    if sandbox_id:
+        server_kwargs["sandbox_id"] = sandbox_id
+        os.environ["TALKOPS_SANDBOX_ID"] = sandbox_id
+    if sandbox_snapshot_name:
+        server_kwargs["sandbox_snapshot_name"] = sandbox_snapshot_name
+        os.environ["TALKOPS_SANDBOX_SNAPSHOT"] = sandbox_snapshot_name
+    if sandbox_setup:
+        server_kwargs["sandbox_setup"] = sandbox_setup
+        os.environ["TALKOPS_SANDBOX_SETUP_SCRIPT"] = sandbox_setup
 
     app: TalkOpsApp | None = None
     try:

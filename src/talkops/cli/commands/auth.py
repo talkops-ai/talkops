@@ -41,8 +41,12 @@ from rich.console import Console
 from rich.table import Table
 
 from talkops.auth.models import StoredSession, hash_api_key, mask_api_key
-from talkops.auth.oauth_acquirer import BrowserAndPasteTokenAcquirer
+from talkops.auth.oauth_acquirer import (
+    BrowserAndPasteTokenAcquirer,
+    cancel_active_oauth_flows,
+)
 from talkops.auth.storage import get_credential_storage
+from talkops.commands.core.auth import check_logout_mode_guard
 from talkops.config.aws import get_aws_context
 from talkops.model.config import (
     PROVIDER_API_KEY_ENV,
@@ -57,6 +61,7 @@ from talkops.state.remote_session import (
     get_cached_temporary_token,
     get_remote_client_config,
     set_remote_client_context,
+    stop_background_token_refresh_task,
 )
 
 
@@ -687,6 +692,30 @@ def run_auth_logout_command(
     logout_all = bool(getattr(args, "logout_all", False))
     provider = getattr(args, "provider", None)
 
+    if not logout_all:
+        guard = check_logout_mode_guard(provider, storage=storage)
+        if guard is not None:
+            alert_title, alert_body = guard
+            payload = {
+                "session_cleared": False,
+                "providers_cleared": [],
+                "mode_guard": {
+                    "title": alert_title,
+                    "message": alert_body,
+                    "is_warning": True,
+                },
+            }
+            if output_format == "json":
+                write_json("auth logout", payload)
+                return 0
+            console = Console()
+            console.print(f"[bold yellow]{alert_title}[/bold yellow]")
+            console.print(alert_body)
+            return 0
+
+    cancel_active_oauth_flows()
+    stop_background_token_refresh_task()
+
     cleared_session = False
     cleared_providers: list[str] = []
 
@@ -710,6 +739,7 @@ def run_auth_logout_command(
     payload = {
         "session_cleared": cleared_session,
         "providers_cleared": cleared_providers,
+        "saved_wif_provider": storage.get_saved_wif_provider(),
     }
     if output_format == "json":
         write_json("auth logout", payload)

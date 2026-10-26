@@ -347,6 +347,7 @@ class TestSandboxFactory:
         assert get_sandbox_working_dir("modal") == "/workspace"
         assert get_sandbox_working_dir("daytona") == "/home/daytona"
         assert get_sandbox_working_dir("runloop") == "/home/user"
+        assert get_sandbox_working_dir("vercel") == "/vercel/sandbox"
         assert get_sandbox_working_dir("agentcore") == "/workspace"
         assert get_sandbox_working_dir("unknown") == "/workspace"
 
@@ -367,3 +368,97 @@ class TestSandboxFactory:
         res = backend.execute("echo 'sandbox local test'")
         assert res.exit_code == 0
         assert "sandbox local test" in res.output
+
+    def test_sandbox_registry_builtins_and_deps(self) -> None:
+        """Verify all 6 built-in providers are registered and their packages are installed."""
+        from talkops.backend.sandbox_factory import (
+            get_default_working_dir,
+            verify_sandbox_deps,
+        )
+        from talkops.backend.sandbox_registry import SandboxRegistry
+
+        registry = SandboxRegistry.load()
+        providers = registry.available_providers()
+        for expected in ("agentcore", "daytona", "langsmith", "modal", "runloop", "vercel"):
+            assert expected in providers
+            assert registry.is_available(expected)
+            verify_sandbox_deps(expected)
+
+        assert get_default_working_dir("langsmith") == "/root"
+        assert get_default_working_dir("daytona") == "/home/daytona"
+        assert get_default_working_dir("modal") == "/workspace"
+        assert get_default_working_dir("runloop") == "/home/user"
+        assert get_default_working_dir("vercel") == "/vercel/sandbox"
+
+    def test_sandbox_registry_custom_provider_config(self, tmp_path: Path) -> None:
+        """Verify config-declared [sandboxes.providers.<name>] is loaded into SandboxRegistry."""
+        from talkops.backend.sandbox_registry import SandboxRegistry
+
+        cfg_file = tmp_path / "config.toml"
+        cfg_file.write_text(
+            """
+[sandboxes]
+default = "acme"
+
+[sandboxes.providers.acme]
+class_path = "talkops.backend.sandbox_factory:_ModalProvider"
+working_dir = "/custom/acme"
+supports_sandbox_id = true
+supports_snapshot_name = true
+
+[sandboxes.providers.acme.params]
+region = "us-east-1"
+"""
+        )
+        cfg = SandboxConfig.load(cfg_file)
+        registry = SandboxRegistry(cfg)
+        assert registry.default == "acme"
+        assert registry.is_available("acme")
+        assert registry.get_working_dir("acme") == "/custom/acme"
+        assert registry.get_config_params("acme") == {"region": "us-east-1"}
+        meta = registry.get_metadata("acme")
+        assert meta is not None
+        assert meta.supports_sandbox_id is True
+        assert meta.supports_snapshot_name is True
+
+    def test_create_sandbox_validation(self) -> None:
+        """Verify create_sandbox rejects incompatible snapshot_name / sandbox_id combinations."""
+        from talkops.backend.sandbox_factory import create_sandbox
+
+        with pytest.raises(ValueError, match="snapshot_name cannot be combined with sandbox_id"):
+            with create_sandbox("langsmith", sandbox_id="sb-1", snapshot_name="snap-1"):
+                pass
+
+        with pytest.raises(ValueError, match="snapshot_name is not supported by provider 'modal'"):
+            with create_sandbox("modal", snapshot_name="snap-1"):
+                pass
+
+    def test_cli_sandbox_flags_validation(self) -> None:
+        """Verify CLI parser and _resolve_and_validate_sandbox handle --sandbox flags."""
+        from talkops.cli.main import _resolve_and_validate_sandbox, build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(
+            ["--sandbox", "runloop", "--sandbox-id", "dbx_123", "--sandbox-setup", "./setup.sh"]
+        )
+        _resolve_and_validate_sandbox(args, parser)
+        assert args.sandbox == "runloop"
+        assert args.sandbox_id == "dbx_123"
+        assert args.sandbox_setup == "./setup.sh"
+
+        # --sandbox-id without --sandbox raises SystemExit(2) via parser.error
+        args_no_sb = parser.parse_args(["--sandbox-id", "dbx_123"])
+        with pytest.raises(SystemExit):
+            _resolve_and_validate_sandbox(args_no_sb, parser)
+
+        # --sandbox-id with daytona (unsupported) raises SystemExit(2)
+        args_daytona_id = parser.parse_args(["--sandbox", "daytona", "--sandbox-id", "sb_1"])
+        with pytest.raises(SystemExit):
+            _resolve_and_validate_sandbox(args_daytona_id, parser)
+
+        # --sandbox-snapshot-name with modal (unsupported) raises SystemExit(2)
+        args_modal_snap = parser.parse_args(
+            ["--sandbox", "modal", "--sandbox-snapshot-name", "snap_1"]
+        )
+        with pytest.raises(SystemExit):
+            _resolve_and_validate_sandbox(args_modal_snap, parser)

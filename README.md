@@ -7,11 +7,12 @@
 </p>
 
 <p align="center">
-  <b>Ask for any DevOps operation in plain language. TalkOps plans it, runs it safely, and reports back.</b><br>
-  Autonomous incident triage · Kubernetes · Terraform · Multi-Cloud · CI/CD — from a local terminal, a pipeline, or a shared server.
+  <b>Describe a task in plain language, or let an incoming alert start it. TalkOps works out the steps, checks each one before it runs, and tells you what it did.</b><br>
+  An open-source multi-agent framework for cloud, Kubernetes, Terraform, CI/CD, incident response, and cloud cost work. Run it in your terminal, in CI, or as a shared server for your team.
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/talkops-ai/"><img src="https://img.shields.io/pypi/v/talkops-ai?label=PyPI&color=1A73E8" alt="PyPI version" height="18"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License" height="18"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12+-blue.svg" alt="Python 3.12+" height="18"></a>
   <a href="https://github.com/langchain-ai/langgraph"><img src="https://img.shields.io/badge/LangGraph-1.2.x-green.svg" alt="LangGraph" height="18"></a>
@@ -32,21 +33,19 @@
 </p>
 
 <p align="center">
-  <video src="docs/assets/talkops-tui-finops-demo.mp4" controls autoplay loop muted playsinline width="100%">
-    <img src="docs/assets/talkops-tui-finops-demo.gif" alt="TalkOps in action: enabling Jev Smart Mode, installing the AWS FinOps Engineer plugin, auditing 17 AWS regions across 32 tools (1.1M tokens for $0.36 with 77% cache hit), and generating an executive FinOps remediation report" width="100%">
-  </video>
+  <img src="docs/assets/talkops-tui-finops-demo.gif" alt="TalkOps in action: enabling Jev Smart Mode, installing the AWS FinOps Engineer plugin, auditing 17 AWS regions across 53 tool calls (1.1M tokens for $0.36 with 77% cache hit), and generating an executive FinOps remediation report" width="100%">
 </p>
 <p align="center">
-  <sub><b>Autonomous AWS FinOps Audit in Jev Smart Mode:</b> Installing <code>aws-finops-engineer</code> via <code>/plugins</code>, auditing 17 AWS regions across 32 tool calls (<b>1.1M tokens · 77% cache hit · $0.36 total cost</b>), and generating an actionable remediation report (<a href="docs/assets/talkops-tui-finops-demo.mp4">watch HD MP4</a>).</sub>
+  <sub><b>Autonomous AWS FinOps Audit in Jev Smart Mode:</b> Installing <code>aws-finops-engineer</code> via <code>/plugins</code>, auditing 17 AWS regions across 53 tool calls (<b>1.1M tokens · 77% cache hit · $0.36 session cost</b>), and generating an actionable remediation report.</sub>
 </p>
 
 ---
 
 ## What is TalkOps?
 
-**TalkOps** is an autonomous multi-agent Cloud Operations and DevOps framework built on **[DeepAgents](https://github.com/langchain-ai/deepagents)**, **[LangGraph](https://github.com/langchain-ai/langgraph)**, **[LangChain](https://github.com/langchain-ai/langchain)** (26+ built-in LLM providers), and the **[TypeSafe AI Jev](https://pypi.org/project/langchain-typesafe/)** System One engine. It runs interactively in a **[Textual](https://textual.textualize.io/)** terminal UI (TUI), headlessly inside CI/CD pipelines (`talkops -p`), over the **Agent Client Protocol** (`talkops --acp`), or centrally as a multi-tenant server (`talkops serve`) that ingests production webhooks and coordinates multiple connected operator clients.
+**TalkOps** is an autonomous multi-agent Cloud Operations and DevOps framework built on **[DeepAgents](https://github.com/langchain-ai/deepagents)**, **[LangGraph](https://github.com/langchain-ai/langgraph)**, **[LangChain](https://github.com/langchain-ai/langchain)** (26+ built-in LLM providers), and the **[TypeSafe AI Jev](https://pypi.org/project/langchain-typesafe/)** System One engine. It runs interactively in a **[Textual](https://textual.textualize.io/)** terminal UI (TUI), headlessly inside CI/CD pipelines (`talkops -p`), or centrally as a multi-tenant server (`talkops serve`) that ingests production webhooks and coordinates multiple connected operator clients.
 
-Whether triaging a 3 AM PagerDuty or Prometheus alert storm, diagnosing Kubernetes `CrashLoopBackOff` pods, auditing multi-cloud AWS/Azure/GCP FinOps and IAM posture, refactoring Terraform modules, or repairing broken GitHub Actions workflows, TalkOps plans and executes end-to-end operational tasks across native **Model Context Protocol (MCP)** tools and isolated **Docker, Kubernetes, Daytona, Modal, and Runloop** sandboxes within deterministic safety guardrails.
+Whether triaging a 3 AM PagerDuty or Prometheus alert storm, diagnosing Kubernetes `CrashLoopBackOff` pods, auditing multi-cloud AWS/Azure/GCP FinOps and IAM posture, refactoring Terraform modules, or repairing broken GitHub Actions workflows, TalkOps plans and executes end-to-end operational tasks across native **Model Context Protocol (MCP)** tools and isolated remote sandboxes (**LangSmith, AWS Bedrock AgentCore, Daytona, Modal, Runloop, and Vercel**) within deterministic safety guardrails.
 
 <table>
   <tr>
@@ -82,7 +81,7 @@ Whether triaging a 3 AM PagerDuty or Prometheus alert storm, diagnosing Kubernet
 ### 1. Install TalkOps
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash
+curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
 ```
 
 <details>
@@ -99,12 +98,20 @@ pipx install --pip-args="--pre" talkops-ai
 pip install --pre -U talkops-ai
 
 # Install a specific version via install.sh
-curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- 0.3.0b16
+curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- 0.3.0b17
 ```
 
 </details>
 
-### 2. Run TalkOps (TUI, Headless CLI, or Server Mode)
+### 2. Add a Model Key and Verify
+
+```bash
+talkops auth set anthropic       # prompts for the key (or: export ANTHROPIC_API_KEY=...)
+export TYPESAFE_API_KEY=...      # optional: enables Jev Smart Mode; without it, Smart Mode asks before every tool call
+talkops doctor                   # check AWS identity, cloud/DevOps CLIs, Python runtime, and logging
+```
+
+### 3. Run TalkOps (TUI, Headless CLI, or Server Mode)
 
 You can invoke TalkOps using either `talkops` or the `ops` shorthand alias:
 
@@ -132,7 +139,7 @@ TalkOps brings **coding, cloud management, platform engineering, observability, 
 
 | Capability Area | What TalkOps Handles |
 | :--- | :--- |
-| **Software & Infrastructure Coding** | Writes, refactors, debugs, and reviews application code, scripts, and infrastructure configs across repositories; runs tests; performs diff-aware `/review` checks; and connects to IDEs via the Agent Client Protocol (`--acp`). |
+| **Software & Infrastructure Coding** | Writes, refactors, debugs, and reviews application code, scripts, and infrastructure configs across repositories; runs tests; and performs diff-aware `/review` checks. |
 | **Multi-Cloud Architecture & Management** | Designs, provisions, and manages services across AWS, Azure, and GCP—covering compute, networking/VPCs, databases (RDS, Aurora, DynamoDB), serverless, storage, data lakes, AI/ML workloads, and cloud migrations. |
 | **IaC, GitOps & CI/CD Automation** | Authors, validates, and refactors Terraform, OpenTofu, Terragrunt, AWS CDK, CloudFormation, Crossplane, and Ansible; builds and repairs GitHub Actions, GitLab CI, and Jenkins pipelines. |
 | **Kubernetes, Containers & Platform Engineering** | Builds and optimizes Dockerfiles; manages EKS, AKS, and GKE clusters; configures Helm releases, Karpenter autoscaling, Ingress, and NetworkPolicies; and diagnoses `CrashLoopBackOff` or `OOMKilled` workloads. |
@@ -154,7 +161,7 @@ Enabling **Smart Mode** (`talkops --smart`, `/smart`, or `Shift+Tab`) activates 
 | **2. Pick Model Tier** | Matches the task difficulty to the right model tier (**Fast**, **Standard**, or **Powerful**) and sets the thinking effort (`off` to `max`). | **`<70ms`** | Simple checks get instant, low-cost answers; complex investigations get deep reasoning. |
 | **3. Check Tool Safety** | Inspects every proposed shell command, file edit, MCP tool call, or subagent action for state changes and potential impact. | **`<100ms`** (`0` LLM tokens) | Catches destructive or out-of-scope commands before they run. |
 | **4. Run or Ask Approval** | Automatically runs safe read-only checks; pauses and asks for human confirmation before modifying production resources. | Immediate | Keeps routine workflows fast while protecting production environments. |
-| **5. Verify Goal Criteria** | Grades `/goal` or `--criteria` completion checklists in parallel without slow LLM-judge calls. | **`<200ms`** | Confirms every requested requirement is satisfied before finishing. |
+| **5. Verify Goal Criteria** | Grades `/goal` or `--rubric` completion checklists in parallel without slow LLM-judge calls. | **`<200ms`** | Confirms every requested requirement is satisfied before finishing. |
 
 > [!IMPORTANT]
 > **Fail-Closed Production Protection:** Smart Mode always pauses for explicit human approval if a command modifies a `production` environment, carries a high impact radius, has low safety confidence, or runs without `TYPESAFE_API_KEY` configured.
@@ -277,7 +284,7 @@ talkops help                               # Show general CLI reference (or `tal
 
 <br>
 
-Manages Control Plane and Central Server sessions (Browser SSO or API key), encrypted LLM provider keys, and AWS STS identity checks.
+Manages Control Plane and Central Server sessions (Browser SSO or API key), LLM provider keys (stored in the OS keychain, with a `0600` file fallback on headless hosts), and AWS STS identity checks.
 
 ```bash
 talkops auth status                                                    # Inspect session lease, LLM providers & AWS STS status
@@ -285,7 +292,7 @@ talkops auth login --sso                                               # Authent
 talkops auth login --server-url http://host:2024 --api-key oc_live_... # Exchange an API key for a signed JWT session
 talkops auth token --refresh                                           # Print or force-refresh the active bearer JWT
 talkops auth list                                                      # List all LLM providers and credential status
-talkops auth set anthropic sk-ant-...                                  # Store an encrypted provider API key
+talkops auth set anthropic sk-ant-...                                  # Store a provider API key (prompts if omitted)
 talkops auth remove anthropic                                          # Remove a stored provider credential
 talkops auth aws --profile prod-admin --region us-east-1               # Verify AWS STS caller identity for a profile/region
 talkops auth logout                                                    # Revoke stored session credentials (--all, --account, --provider)
@@ -298,7 +305,7 @@ talkops auth logout                                                    # Revoke 
 
 <br>
 
-Lists or deletes saved conversation threads locally (`~/.talkops/sessions.db`) or on a remote Central Server (`--server-url`).
+Lists or deletes saved conversation threads locally (`~/.talkops/.state/sessions.db`) or on a remote Central Server (`--server-url`).
 
 ```bash
 talkops threads list                                                   # List local saved conversation threads
@@ -381,9 +388,24 @@ talkops skills trust list                  # List, revoke, or clear trusted skil
 
 </details>
 
+<details>
+<summary><b><code>talkops agents</code> (Alias: <code>talkops agent</code>) — List available specialist subagents</b></summary>
+
+<br>
+
+Lists user, project (`.talkops/agents/`), and plugin-provided specialist agents that can be activated with `-a/--agent` or `/agent:<name>`.
+
+```bash
+talkops agents list                        # List all discovered specialist agents
+talkops agents list --cwd ./infra-repo     # Discover project agents from a specific workspace
+talkops -a aws-finops-engineer             # Start a session with a specific agent
+```
+
+</details>
+
 ### Interactive TUI Slash Commands (`/`)
 
-Inside the interactive terminal UI, type `/` to open the fuzzy-searchable command palette. In addition to the built-in commands below, discovered skills (`/<skill-name>`), plugin subagents (`/agent:<name>`), and custom commands in `.talkops/commands/` are automatically registered in the palette. Every command is documented in the **[CLI & Slash Command Reference](docs/talkops-docs/cli-reference.md#interactive-slash-commands)**.
+Inside the interactive terminal UI, type `/` to open the fuzzy-searchable command palette. In addition to the built-in commands below, discovered skills (`/<skill-name>`), plugin subagents (`/agent:<name>`), and custom commands in `.talkops/commands/` are automatically registered in the palette. Every command is documented in the **[CLI & Slash Command Reference](docs/talkops-docs/cli-reference.md#in-chat-slash-commands)**.
 
 <details>
 <summary><b>Expand Interactive <code>/slash</code> Commands by Category</b></summary>
@@ -414,9 +436,10 @@ Explore the complete documentation in [`docs/talkops-docs/`](docs/talkops-docs/)
 | | **[CLI & Slash Command Reference](docs/talkops-docs/cli-reference.md)** | Complete guide to every CLI subcommand, flag, and interactive `/slash` command |
 | **Core Operations, Server & Safety** | **[Approval Modes & Jev Smart Mode](docs/talkops-docs/approval-mode.md)** | How 3-tier model routing (`<70ms`) and tool safety checks (`<100ms`) work |
 | | **[Central Server & Multi-Client Architecture](docs/talkops-docs/central-server.md)** | Running `talkops serve`, persistent thread storage, user authentication, and team connections |
+| | **[Server Addons](docs/talkops-docs/server-addons.md)** | Server profiles (`default`, `api-only`, `webhook-worker`, `enterprise-full`), built-in addons, and custom addon marketplaces |
 | | **[Webhooks & Event-Driven Automation](docs/talkops-docs/webhooks.md)** | Receiving PagerDuty, Alertmanager, Datadog, SNS, CloudEvents, ServiceNow, Jenkins, and GitHub alerts with automated RCA reports |
 | | **[Goal Mode & Rubrics](docs/talkops-docs/goal-and-rubrics.md)** | Multi-step task completion with automatic checklist verification (`/goal`, `/rubric`, `--goal`, `--rubric`) |
-| | **[Remote Sandboxes](docs/talkops-docs/remote-sandboxes.md)** | Running commands safely inside isolated Docker containers, Kubernetes pods, or cloud sandboxes |
+| | **[Remote Sandboxes](docs/talkops-docs/remote-sandboxes.md)** | Running commands safely inside isolated LangSmith, AgentCore, Daytona, Modal, Runloop, or Vercel sandboxes |
 | **Configuration & Credentials** | **[Configuration Guide](docs/talkops-docs/Configuration.md)** | How settings resolve across CLI flags, environment variables, `config.toml`, and `config.db` |
 | | **[`config.toml` Reference](docs/talkops-docs/config.toml.md)** | Full reference for cloud, Kubernetes, DevOps, model, security, sandbox, and webhook settings |
 | | **[Credentials & Authentication](docs/talkops-docs/credentials.md)** | Managing LLM API keys, server tokens, AWS/Azure/GCP credentials, and webhook secrets |
@@ -441,4 +464,4 @@ Explore the complete documentation in [`docs/talkops-docs/`](docs/talkops-docs/)
 Contributions—including new webhook adapters, `SKILL.md` runbooks, subagent definitions, MCP integrations, and core framework improvements—are welcome. Review **[CONTRIBUTING.md](CONTRIBUTING.md)** and **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** for development environment setup, testing gates, and pull request guidelines.
 
 ### License
-Distributed under the open-source license specified in **[LICENSE](LICENSE)**.
+Distributed under the **Apache License 2.0**. See **[LICENSE](LICENSE)** for details.

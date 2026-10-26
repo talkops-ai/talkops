@@ -186,6 +186,7 @@ async def test_pool_command_execution():
     handler = PoolHandler()
     clear_agent_pool()
 
+
     # 1. /pool status
     ctx_status = CommandContext(app=None, raw_command="/pool status", args="status")
     res_status = await handler.execute(ctx_status)
@@ -232,6 +233,7 @@ async def test_pool_selector_screen_mount():
 
     clear_agent_pool()
 
+
     class TestApp(App[None]):
         """Test suite or helper class for test app."""
         def on_mount(self) -> None:
@@ -275,6 +277,7 @@ async def test_pool_selector_buttons_visible_in_constrained_terminal():
 
     clear_agent_pool()
 
+
     class TestApp(App[None]):
         """Test suite or helper class for test app."""
         def on_mount(self) -> None:
@@ -311,6 +314,7 @@ async def test_pool_selector_save_and_reset_actions():
     from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
     clear_agent_pool()
+
 
     saved_result = None
 
@@ -574,6 +578,7 @@ async def test_multi_provider_pool_command_set_and_status():
     from talkops.config.toml_config import clear_agent_pool, load_agent_pool
 
     clear_agent_pool()
+
     handler = PoolHandler()
 
     # 1. Set multi-provider pool
@@ -607,6 +612,7 @@ async def test_multi_provider_pool_command_set_and_status():
     clear_agent_pool()
 
 
+
 @pytest.mark.asyncio
 async def test_pool_selector_screen_multi_provider_ui():
     """Verify pool selector screen multi provider ui."""
@@ -614,6 +620,7 @@ async def test_pool_selector_screen_multi_provider_ui():
     from talkops.ui.widgets.pool_selector import PoolSelectorScreen
 
     clear_agent_pool()
+
 
     saved_result = None
 
@@ -682,6 +689,201 @@ async def test_pool_selector_screen_multi_provider_ui():
         assert persisted["provider"] == "multi"
 
     clear_agent_pool()
+
+
+@pytest.mark.asyncio
+async def test_logout_command_mode_guards(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    """Verify /logout mode guards for TalkOps ADC, TalkOps Enterprise Gateway, and Direct TalkOps API Key modes."""
+    from talkops.auth.models import StoredSession
+    from talkops.auth.storage import CompositeCredentialStorage
+    from talkops.commands.core.auth import LogoutHandler
+
+    auth_file = tmp_path / "auth.json"
+    env_file = tmp_path / ".env"
+    storage = CompositeCredentialStorage(auth_file_path=auth_file, env_file_path=env_file)
+    monkeypatch.setattr("talkops.auth.storage.get_credential_storage", lambda: storage)
+    monkeypatch.setattr("talkops.config.paths.AUTH_PATH", auth_file)
+    monkeypatch.setattr("talkops.config.paths.GLOBAL_ENV_PATH", env_file)
+
+    for k in (
+        "TALKOPS_ADC_AUTH",
+        "TALKOPS_LLM_GATEWAY_URL",
+        "TALKOPS_GATEWAY_URL",
+        "TALKOPS_API_KEY",
+        "TALKOPS_SERVER_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    handler = LogoutHandler()
+    assert handler.bypass_tier == BypassTier.IMMEDIATE_UI
+
+    # 1. TalkOps ADC Mode Guard (`TALKOPS_ADC_AUTH`)
+    monkeypatch.setenv("TALKOPS_ADC_AUTH", "1")
+    res_adc = await handler.execute(CommandContext(app=None, raw_command="/logout", args=""))
+    assert res_adc.success is True
+    assert res_adc.data["logged_out"] is False
+    assert res_adc.data["alert_title"] == "ADC Logout Instructions"
+    assert "unset TALKOPS_ADC_AUTH" in res_adc.data["alert_body"]
+    assert res_adc.notify_severity == "warning"
+    monkeypatch.delenv("TALKOPS_ADC_AUTH", raising=False)
+
+    # 2. TalkOps Enterprise Gateway Mode Guard (`TALKOPS_LLM_GATEWAY_URL`)
+    monkeypatch.setenv("TALKOPS_LLM_GATEWAY_URL", "https://gateway.internal.talkops.ai")
+    res_gw = await handler.execute(CommandContext(app=None, raw_command="/logout", args=""))
+    assert res_gw.success is True
+    assert res_gw.data["logged_out"] is False
+    assert res_gw.data["alert_title"] == "Enterprise Gateway Mode"
+    assert "unset TALKOPS_LLM_GATEWAY_URL" in res_gw.data["alert_body"]
+    assert res_gw.notify_severity == "warning"
+    monkeypatch.delenv("TALKOPS_LLM_GATEWAY_URL", raising=False)
+
+    # 3. Direct TalkOps API Key Mode Guard (unstored env-only TALKOPS_API_KEY)
+    monkeypatch.setenv("TALKOPS_API_KEY", "oc_live_direct_env_key_123456")
+    res_tk = await handler.execute(CommandContext(app=None, raw_command="/logout", args=""))
+    assert res_tk.success is True
+    assert res_tk.data["logged_out"] is False
+    assert res_tk.data["alert_title"] == "TalkOps API Key Mode"
+    assert "unset TALKOPS_API_KEY" in res_tk.data["alert_body"]
+    assert res_tk.notify_severity == "warning"
+    monkeypatch.delenv("TALKOPS_API_KEY", raising=False)
+
+    # 4. Stored session with auth_method="gateway" also triggers Enterprise Gateway Mode guard
+    storage.save_session(
+        StoredSession(
+            api_key="oc_live_gw_1234567890",
+            auth_method="gateway",
+            server_url="https://gw.talkops.ai",
+        )
+    )
+    res_sess_gw = await handler.execute(CommandContext(app=None, raw_command="/logout", args=""))
+    assert res_sess_gw.data["logged_out"] is False
+    assert res_sess_gw.data["alert_title"] == "Enterprise Gateway Mode"
+
+
+@pytest.mark.asyncio
+async def test_logout_command_full_cleanup_conversation_reset_and_tui_transition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    """Verify bare /logout logs out of TalkOps Auth (preserving 3rd-party provider keys & WIF hint), cancels streaming, resets thread, and pushes AuthManagerScreen."""
+    from talkops.auth.models import StoredSession
+    from talkops.auth.oauth_acquirer import LoopbackCallbackServer
+    from talkops.auth.storage import CompositeCredentialStorage
+    from talkops.commands.core.auth import LogoutHandler
+    from talkops.state.remote_session import (
+        get_remote_client_config,
+        set_remote_client_context,
+    )
+    from talkops.ui.widgets.auth_manager import AuthManagerScreen
+
+    auth_file = tmp_path / "auth.json"
+    env_file = tmp_path / ".env"
+    storage = CompositeCredentialStorage(auth_file_path=auth_file, env_file_path=env_file)
+    monkeypatch.setattr("talkops.auth.storage.get_credential_storage", lambda: storage)
+    monkeypatch.setattr("talkops.config.paths.AUTH_PATH", auth_file)
+    monkeypatch.setattr("talkops.config.paths.GLOBAL_ENV_PATH", env_file)
+
+    for k in (
+        "TALKOPS_ADC_AUTH",
+        "TALKOPS_LLM_GATEWAY_URL",
+        "TALKOPS_GATEWAY_URL",
+        "TALKOPS_API_KEY",
+        "TALKOPS_SERVER_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    # Save an enterprise WIF/SSO TalkOps Control Plane session and a 3rd-party OpenAI provider key
+    storage.save_session(
+        StoredSession(
+            access_token="eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c3JfMSJ9.sig",
+            api_key="oc_live_k9x2m4p1_secret123456",
+            server_url="http://127.0.0.1:2024",
+            control_plane_url="https://cp.talkops.ai",
+            user_id="usr_1",
+            email="engineer@corp.com",
+            org_id="corp-wif-provider",
+            auth_method="wif_sso",
+            expires_at=9999999999.0,
+        ),
+        sync_dotenv=True,
+    )
+    storage.set_provider_key("openai", "sk-proj-testkey999", sync_dotenv=True)
+    set_remote_client_context("http://127.0.0.1:2024", api_key="oc_live_k9x2m4p1_secret123456", user_id="usr_1")
+
+    # Start an ephemeral loopback server to verify /logout cancels in-flight TalkOps OAuth listeners
+    loopback = LoopbackCallbackServer(expected_state="state123")
+    await loopback.start()
+
+    mock_app = MagicMock()
+    mock_app._agent_thread_id = "old-thread-111"
+    mock_app._session_state = MagicMock()
+    mock_app._session_state.reset_thread = MagicMock(return_value="new-thread-222")
+    mock_app._pending_messages = ["queued_msg"]
+    mock_app._queued_widgets = ["queued_widget"]
+    mock_banner = MagicMock()
+    mock_messages = MagicMock()
+    mock_status_bar = MagicMock()
+
+    def _query_one(selector, *args, **kwargs):
+        if selector == "#messages":
+            return mock_messages
+        if selector == "#status-bar":
+            return mock_status_bar
+        return mock_banner
+
+    mock_app.query_one = MagicMock(side_effect=_query_one)
+
+    ctx = CommandContext(
+        app=mock_app,
+        raw_command="/logout",
+        args="",
+        thread_id="old-thread-111",
+        model_spec="openai:gpt-4o",
+    )
+    res = await LogoutHandler().execute(ctx)
+
+    assert res.success is True
+    assert res.data["logged_out"] is True
+    assert res.data["session_cleared"] is True
+    assert res.data["providers_cleared"] == []
+    assert res.data["cancelled_oauth_flows"] >= 1
+    assert res.data["new_thread_id"] == "new-thread-222"
+    assert res.data["transitioned_to_auth_screen"] is True
+    assert res.data["saved_wif_provider"] == "corp-wif-provider"
+
+    # TalkOps Auth session secrets are wiped from storage & remote context, while saved_wif_provider and 3rd-party OpenAI key remain intact
+    assert storage.load_session() is None
+    assert storage.get_saved_wif_provider() == "corp-wif-provider"
+    assert storage.get_provider_key("openai") == "sk-proj-testkey999"
+    assert get_remote_client_config() == (None, None, None)
+
+    # Active streaming work interrupted, messages cleared, thread reset, banner & status bar updated, AuthManagerScreen pushed with "talkops"
+    mock_app._force_interrupt_active_work.assert_called_once()
+    mock_messages.clear.assert_called_once()
+    assert mock_app._agent_thread_id == "new-thread-222"
+    mock_banner.refresh_auth.assert_called_once()
+    mock_banner.set_logged_out.assert_called_once()
+    mock_status_bar.set_status.assert_any_call("● Logged out · /login to sign in")
+    assert res.mount_as_app_message is True
+    assert res.message is not None
+    assert "Logged Out of TalkOps" in res.message
+    assert "What's next to log back in:" in res.message
+    mock_app.push_screen.assert_called_once()
+    pushed_screen = mock_app.push_screen.call_args[0][0]
+    assert isinstance(pushed_screen, AuthManagerScreen)
+    assert pushed_screen._initial_provider == "talkops"
+
+    # Explicit `/logout all` also clears 3rd-party LLM provider credentials
+    res_all = await LogoutHandler().execute(
+        CommandContext(app=None, raw_command="/logout all", args="all")
+    )
+    assert res_all.success is True
+    assert "openai" in res_all.data["providers_cleared"]
+    assert storage.get_provider_key("openai") is None
+
 
 
 

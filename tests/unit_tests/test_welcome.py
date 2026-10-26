@@ -610,3 +610,85 @@ async def test_new_session_commands_preserve_welcome_banner_and_notify():
         assert any("Started new thread (abcdef12)" in n for n in notifications)
 
 
+@pytest.mark.asyncio
+async def test_welcome_banner_restores_ready_status_after_reauth_from_logout(
+    tmp_path, monkeypatch
+):
+    """Verify WelcomeBanner transitions from 'degraded' back to 'ready' once TalkOps credentials are saved after /logout."""
+    from talkops.auth.models import StoredSession
+    from talkops.auth.storage import CompositeCredentialStorage
+
+    auth_file = tmp_path / "auth.json"
+    env_file = tmp_path / ".env"
+    storage = CompositeCredentialStorage(auth_file_path=auth_file, env_file_path=env_file)
+    monkeypatch.setattr("talkops.auth.storage.get_credential_storage", lambda: storage)
+    monkeypatch.setattr("talkops.config.paths.AUTH_PATH", auth_file)
+    monkeypatch.setattr("talkops.config.paths.GLOBAL_ENV_PATH", env_file)
+    monkeypatch.delenv("TALKOPS_API_KEY", raising=False)
+    monkeypatch.delenv("TALKOPS_SERVER_API_KEY", raising=False)
+
+    app = WelcomeHarnessApp()
+    async with app.run_test(size=(120, 24)) as pilot:
+        left_panel = app.banner.query_one(_LeftPanel)
+
+        # 1. Simulate /logout placing banner in 'logged out' state
+        app.banner.set_logged_out()
+        await pilot.pause()
+        logged_out_plain = "".join(
+            getattr(r, "plain", "") for r in left_panel.render().renderables
+        )
+        assert "logged out" in logged_out_plain
+        assert "Not signed in · /login to sign in" in logged_out_plain
+
+        # 2. User provides TalkOps API key in AuthPromptScreen -> refresh_auth() runs
+        storage.save_session(
+            StoredSession(
+                api_key="oc_live_k9x2m4p1_secret123456",
+                user_tier="pro",
+            ),
+            sync_dotenv=True,
+        )
+        app.banner.refresh_auth()
+        await pilot.pause()
+
+        ready_plain = "".join(
+            getattr(r, "plain", "") for r in left_panel.render().renderables
+        )
+        assert "ready" in ready_plain
+        assert "logged out" not in ready_plain
+        assert "oc_live_k9x2m4p1_*** (Pro)" in ready_plain
+
+
+@pytest.mark.asyncio
+async def test_welcome_banner_displays_local_vs_central_server_on_left_panel(
+    monkeypatch,
+):
+    """Verify the left panel shows 'local' by default and 'central' + server URL when connected to a Central Server."""
+    monkeypatch.delenv("TALKOPS_SERVER_URL", raising=False)
+    monkeypatch.setattr("talkops.state.remote_session._remote_server_url", None)
+
+    app = WelcomeHarnessApp()
+    async with app.run_test(size=(120, 24)) as pilot:
+        left_panel = app.banner.query_one(_LeftPanel)
+        app.banner.set_connected()
+        app.banner.update_user("sandeep@talkops.ai", "pro")
+        await pilot.pause()
+
+        local_lines = left_panel.render().renderables[0].plain.splitlines()
+        assert "ready" in local_lines[6]
+        assert "local" in local_lines[6]
+        assert "central" not in local_lines[6]
+
+        # Switch to Central Server mode
+        app.banner.update_server("http://localhost:2024")
+        await pilot.pause()
+
+        central_lines = left_panel.render().renderables[0].plain.splitlines()
+        assert "ready" in central_lines[6]
+        assert "central" in central_lines[6]
+        assert "server" in central_lines[7]
+        assert "http://localhost:2024" in central_lines[7]
+
+
+
+

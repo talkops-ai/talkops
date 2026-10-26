@@ -36,6 +36,9 @@ from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_SANDBOX_DEFAULT_SENTINEL = "__DEFAULT__"
+"""Marker stored by `--sandbox` with no value, resolved to `[sandboxes].default`."""
+
 
 
 def run_auth_command(*args: Any, **kwargs: Any) -> int:
@@ -594,6 +597,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated list of allowed shell commands ('recommended', 'all', or comma-separated names).",
     )
 
+    # Remote Sandboxes
+    parser.add_argument(
+        "--sandbox",
+        dest="sandbox",
+        nargs="?",
+        const=_SANDBOX_DEFAULT_SENTINEL,
+        default="none",
+        metavar="TYPE",
+        help=(
+            "Remote sandbox for code execution (default: none - local only). "
+            "Built-ins: agentcore, daytona, langsmith, modal, runloop, vercel. "
+            "Third-party and config-declared providers are also accepted. "
+            "Pass --sandbox with no value to use [sandboxes].default from config.toml."
+        ),
+    )
+    parser.add_argument(
+        "--sandbox-id",
+        dest="sandbox_id",
+        type=str,
+        default=None,
+        metavar="ID",
+        help="Existing sandbox ID to attach to (skips creation and cleanup).",
+    )
+    parser.add_argument(
+        "--sandbox-snapshot-name",
+        dest="sandbox_snapshot_name",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="Snapshot (langsmith, daytona) or blueprint (runloop) name to use or create.",
+    )
+    parser.add_argument(
+        "--sandbox-setup",
+        dest="sandbox_setup",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to setup script to run inside the sandbox after creation.",
+    )
+
     # Model & Config
     parser.add_argument(
         "-M",
@@ -967,6 +1010,66 @@ def _validate_args(args: argparse.Namespace) -> int | None:
     return None
 
 
+def _resolve_and_validate_sandbox(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    """Resolve `--sandbox` against `SandboxRegistry` and validate related flags."""
+    sandbox_val = getattr(args, "sandbox", None)
+    sandbox_id = getattr(args, "sandbox_id", None)
+    sandbox_snapshot_name = getattr(args, "sandbox_snapshot_name", None)
+
+    if sandbox_val in {"none", "local", None}:
+        if sandbox_snapshot_name is not None:
+            parser.error("--sandbox-snapshot-name requires a --sandbox provider")
+        if sandbox_id is not None:
+            parser.error("--sandbox-id requires a --sandbox provider")
+        return
+
+    if sandbox_snapshot_name is not None and sandbox_id is not None:
+        parser.error("--sandbox-snapshot-name cannot be combined with --sandbox-id")
+
+    from talkops.backend.sandbox_registry import SandboxRegistry
+
+    registry = SandboxRegistry.load()
+
+    if sandbox_val == _SANDBOX_DEFAULT_SENTINEL:
+        default = registry.default
+        if not default:
+            parser.error(
+                "--sandbox was given with no value but no [sandboxes].default "
+                "is configured in ~/.talkops/config.toml. Pass a provider "
+                "name explicitly or set [sandboxes].default."
+            )
+        args.sandbox = default
+        sandbox_val = default
+
+    assert isinstance(sandbox_val, str)
+    if not registry.is_available(sandbox_val):
+        available = ", ".join(registry.available_providers())
+        parser.error(
+            f"Unknown sandbox provider '{sandbox_val}'.\n"
+            f"Available providers: {available}.\n\n"
+            "If this is a third-party provider, install the package that "
+            f"publishes it or declare [sandboxes.providers.{sandbox_val}] in "
+            "~/.talkops/config.toml."
+        )
+
+    metadata = registry.get_metadata(sandbox_val)
+    if sandbox_snapshot_name is not None and (
+        metadata is None or not metadata.supports_snapshot_name
+    ):
+        parser.error(
+            f"--sandbox-snapshot-name is not supported by provider '{sandbox_val}'"
+        )
+    if (
+        sandbox_id is not None
+        and metadata is not None
+        and not metadata.supports_sandbox_id
+    ):
+        parser.error(f"--sandbox-id is not supported by provider '{sandbox_val}'")
+
+
 # ── Main Entrypoint ──────────────────────────────────────
 
 
@@ -1272,7 +1375,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: --profile-override is not valid JSON: {exc}", file=sys.stderr)
             return 1
 
-    # 6. Validate argument combinations
+    # 6. Validate argument combinations and sandbox flags
+    _resolve_and_validate_sandbox(args, parser)
+    if getattr(args, "sandbox", None) and args.sandbox not in {"none", "local"}:
+        from talkops.backend.sandbox_factory import verify_sandbox_deps
+
+        try:
+            verify_sandbox_deps(args.sandbox)
+        except ImportError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
     val_err = _validate_args(args)
     if val_err is not None:
         return val_err
@@ -1359,6 +1472,14 @@ def main(argv: list[str] | None = None) -> int:
             non_interactive_kwargs["tnr"] = True
         if getattr(args, "agent", None):
             non_interactive_kwargs["agent"] = args.agent
+        if getattr(args, "sandbox", None) and args.sandbox not in {"none", "local"}:
+            non_interactive_kwargs["sandbox_type"] = args.sandbox
+        if getattr(args, "sandbox_id", None):
+            non_interactive_kwargs["sandbox_id"] = args.sandbox_id
+        if getattr(args, "sandbox_snapshot_name", None):
+            non_interactive_kwargs["sandbox_snapshot_name"] = args.sandbox_snapshot_name
+        if getattr(args, "sandbox_setup", None):
+            non_interactive_kwargs["sandbox_setup"] = args.sandbox_setup
         return run_non_interactive(args.prompt, **non_interactive_kwargs)
 
     # 10. Interactive TUI mode
@@ -1395,6 +1516,14 @@ def main(argv: list[str] | None = None) -> int:
         interactive_kwargs["user_id"] = args.user_id
     if getattr(args, "agent", None):
         interactive_kwargs["agent"] = args.agent
+    if getattr(args, "sandbox", None) and args.sandbox not in {"none", "local"}:
+        interactive_kwargs["sandbox_type"] = args.sandbox
+    if getattr(args, "sandbox_id", None):
+        interactive_kwargs["sandbox_id"] = args.sandbox_id
+    if getattr(args, "sandbox_snapshot_name", None):
+        interactive_kwargs["sandbox_snapshot_name"] = args.sandbox_snapshot_name
+    if getattr(args, "sandbox_setup", None):
+        interactive_kwargs["sandbox_setup"] = args.sandbox_setup
     return run_interactive(**interactive_kwargs)
 
 

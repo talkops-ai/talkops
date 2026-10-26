@@ -1,169 +1,288 @@
-# Goals and rubrics
+# Goals & Acceptance Rubrics
 
-> Define objectives and acceptance criteria for TalkOps sessions and CI/CD pipelines
+> Give TalkOps a plain-English goal or a pass/fail checklist. TalkOps plans the work, checks its own results after every step, and keeps going until every requirement is verified.
 
-Goals and rubrics help TalkOps verify whether its work satisfies the requirements you care about. Use a **goal** for interactive, objective-driven work where the agent should draft acceptance criteria and track progress across turns, and use a **rubric** when you already know the exact grading criteria for interactive or headless CI/CD runs.
+When you ask an AI assistant to handle a large multi-step project—like setting up a new Kubernetes service, refactoring a Terraform module, or auditing cloud security—two things often go wrong with ordinary chatbots:
+1. **They jump straight into making changes** before aligning with you on the plan or asking clarifying questions.
+2. **They stop too early**, claiming the job is "done" before verifying that tests pass, configurations are valid, or cloud resources are actually healthy.
 
-## Choose a goal or rubric
+TalkOps solves both problems with **Goals (`/goal`)** and **Rubrics (`/rubric` / `--rubric`)**:
 
-Use a **goal** when you have a high-level objective and want TalkOps to break it into verifiable acceptance criteria before starting. Once active, the goal panel tracks each criterion (`[pending]`, `[passed]`, `[failed]`) across turns until the objective is complete.
-
-Use a **rubric** when you already have explicit acceptance criteria—either inline or in a specification file—and want an automated grader loop to evaluate the workspace and feed back remediation steps until every criterion passes.
-
-| Feature | Goals | Rubrics |
-| - | - | - |
-| **Primary use case** | Interactive multi-turn terminal sessions | Automated quality gates and CI/CD pipelines |
-| **Criteria source** | Drafted by the agent from your objective | Explicitly provided by you (inline or `@file`) |
-| **Execution loop** | Collaborative tracking with live TUI checklist | Closed-loop worker + grader iteration |
-| **Grader model** | Active session model | Configurable via `--rubric-model` + Jev `<200ms` fast-pass |
-| **Launch flag / command** | `--goal TEXT` or `/goal <objective>` | `--rubric TEXT\|@PATH` or `/rubric` |
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Plan &amp; Align Before Executing</h3>
+      <p>Give TalkOps a high-level objective with <code>/goal</code>. Before changing anything, TalkOps drafts an <b>Implementation Plan</b>, asks any <b>Clarifying Questions</b>, builds a <b>Step-by-Step To-Do List</b>, and proposes a <b>Success Checklist</b> for your approval.</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>Self-Checks Every Result</h3>
+      <p>TalkOps doesn't just take the AI's word that a task is finished. At the end of a turn, an independent <b>Rubric Grader</b> inspects the commands run, files changed, and cloud outputs—automatically sending the agent back to fix anything it missed.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Instant Verification in Smart Mode</h3>
+      <p>When running in <b>Smart Mode</b> (<code>--smart</code>), <b>TypeSafe Jev</b> grades all of your acceptance criteria in parallel in <b>under 200ms</b>—cutting out slow, expensive AI-judge calls while catching cloud blockers automatically.</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>CI/CD Quality Gates</h3>
+      <p>In automated pipelines (<code>talkops -p ... --rubric</code>), TalkOps returns exit code <code>0</code> only when every checklist item passes, and exits with code <code>2</code> if any requirement is unmet—stopping broken changes before they merge.</p>
+    </td>
+  </tr>
+</table>
 
 ---
 
-## Use a goal
+## Goals vs. Rubrics: Which One Should You Use?
 
-Use `/goal` (or launch with `--goal`) when you know the outcome you want and want TalkOps to draft and track concrete acceptance criteria.
+Both features use the same underlying verification engine, but they are designed for different workflows:
 
-```bash
-talkops --goal "Harden production EKS cluster with Pod Security Standards and NetworkPolicies"
+| Feature | How You Start It | Who Writes the Checklist? | Best For |
+| :--- | :--- | :--- | :--- |
+| **Goal Mode** | `/goal <objective>` in TUI<br>*(or `talkops --goal "<objective>"`)* | **TalkOps drafts it for you** (along with an Implementation Plan, To-Do steps, and Clarifying Questions) and asks for your approval | Multi-step interactive projects, infrastructure rollouts, and complex troubleshooting where you want to align on a plan first |
+| **Persistent Rubric** | `/rubric set <criteria>`<br>or `/rubric file <path>` | **You provide it** (inline text or a Markdown file) | Enforcing standing team rules across a whole session (for example, *"Always run `terraform validate` and never open port 0.0.0.0/0"*) |
+| **Next-Turn Rubric** | `/rubric next <criteria>` | **You provide it** for the next prompt only | Adding a quick, one-time quality check to your very next instruction |
+| **Headless CI/CD Rubric** | `talkops -p "..." --rubric @checks.md` | **You provide it** in your CI script or repo | Automated pull-request checks, deployment verification, and nightly compliance audits in GitHub Actions, GitLab CI, or Jenkins |
+
+---
+
+## How Goal Mode (`/goal`) Works Step by Step
+
+When you start a goal in the terminal, TalkOps guides the task from initial planning all the way to verified completion:
+
+```mermaid
+flowchart LR
+    Start["1. Set Your Goal\n/goal <objective>\nor talkops --goal"] --> Draft["2. AI Drafts Proposal\nImplementation Plan,\nQuestions, To-Dos & Criteria"]
+    Draft --> Review["3. You Review & Approve\nAnswer questions (q),\nApprove (y), Edit (e), or Refine (r)"]
+    Review --> Work["4. Guided Execution\nSeeds live To-Do list &\nworks step by step"]
+    Work --> Grade{"5. Rubric Verification\nAre all criteria\nsatisfied?"}
+    Grade -- "Missing items\n(up to max-iterations)" --> Work
+    Grade -- "Cloud / IAM roadblock" --> Blocked["Paused as Blocked\nAsks for your help"]
+    Grade -- "All verified!" --> Done["Goal Complete"]
 ```
 
-Or start a goal inside an interactive session:
+### 1. State your objective in plain English
+Start a goal at launch or at any point during a conversation:
 
+```bash
+# Launch TalkOps with an initial goal
+talkops --smart --goal "Audit our staging EKS cluster for crashing pods and fix any memory limit issues"
+```
+
+Or inside the interactive TUI:
 ```text
-/goal Implement AWS KMS state encryption and cross-account IAM roles for OpenTofu
+/goal Create a least-privilege IAM role for checkout-service to read from the prod-orders S3 bucket
 ```
 
-TalkOps inspects your workspace, generates a checklist of acceptance criteria, and updates progress using its built-in `get_goal` and `update_goal` tools as each milestone is verified:
+### 2. Review the proposed Plan, Questions, To-Dos, and Criteria
+Before the main assistant runs a single command that changes your environment, TalkOps's planning architect prepares a complete **Goal Proposal** and opens an interactive review card right in your terminal:
 
-```text
-/goal migrate payment-service deployment to Helm chart with HPA and PDB
-start by templating the deployment and service manifests
-now add the HorizontalPodAutoscaler and PodDisruptionBudget
-run helm lint and template dry-run to verify
-```
+- **Implementation Plan**: A clear Markdown overview with a **Summary**, **Proposed Changes** (which files or cloud resources will be created, modified, or deleted), and a **Verification Plan**.
+- **Clarifying Questions *(when needed)***: If your request has genuine trade-offs or missing details, TalkOps presents up to 3 multiple-choice questions (with the recommended choice listed first) so you can resolve them before work begins.
+- **Tactical Execution Checklist (`write_todos`)**: 2 to 6 ordered steps that will populate TalkOps's live To-Do tracker once you approve.
+- **Proposed Criteria (Verification Rubric)**: 2 to 5 concrete, observable outcomes that must be true before the goal can be marked complete.
 
-<p align="center">
-  <img src="./images/talkops-goal-rubric-panel.png" alt="TalkOps TUI goal tracking panel showing passed and pending acceptance criteria" width="850" />
-</p>
+From the review card, you can respond with a single keystroke:
+- **`q` — Answer clarifying questions & refine plan**: Select your answers using the arrow keys (or choose *Other* to type a custom answer). TalkOps immediately updates the plan and checklist to reflect your choices.
+- **`y` — Approve plan & start execution**: Locks in the goal, populates the live To-Do list, and starts executing Step 1 right away.
+- **`e` — Edit plan / criteria**: Open an inline editor to tweak the acceptance criteria bullets yourself.
+- **`r` — Refine plan with custom instructions**: Type plain-English feedback (for example, *"Skip the CloudWatch alarm step and use us-west-2"*) to have TalkOps revise the proposal.
+- **`n` or `Esc` — Cancel**: Discard the proposal without starting.
 
-> [!IMPORTANT]
-> **Image Placeholder (`docs/talkops-docs/images/talkops-goal-rubric-panel.png`):**
-> Capture a screenshot of the `talkops` TUI while an active `/goal` is being tracked, showing:
-> 1. The Goal panel above the chat input displaying the objective title.
-> 2. Individual acceptance criteria rows with status badges (`[passed]`, `[pending]`, `[failed]`).
-> 3. A `update_goal` tool call in the conversation transcript marking a criterion complete.
+### 3. Track progress across long sessions
+Once you approve the proposal:
+- **Live Status Bar & Goal Panel**: Your active goal is pinned in a status panel right above the chat input box and in the bottom status bar (`✓ Rubric set`, `⏸ Goal paused`, `⚠ Goal blocked`, or `✓ Goal complete`).
+- **Automatic To-Do Tracking**: TalkOps automatically seeds its live To-Do checklist with your approved tactical steps, marking the first step `in_progress` and checking off each step as it goes.
+- **Never Forgets the Goal**: Even if your conversation runs for dozens of turns, gets summarized with `/compact`, or is closed and resumed days later with `/resume`, TalkOps keeps your objective, approved implementation plan, and acceptance criteria pinned in the AI's active memory.
 
-<details>
-<summary><b>Goal command and flag reference</b></summary>
-
-* `--goal TEXT`: Launch an interactive session and initialize a goal from `TEXT`.
-* `/goal <objective>`: Draft acceptance criteria from a plain-language objective and track them in the TUI.
-* `get_goal` / `update_goal`: Built-in agent tools used to inspect and update criterion status during execution.
-
-</details>
+### 4. Built-in protection against premature "Done!" claims
+The assistant is **not allowed** to close out a goal on its own:
+- **Staged Completion (`update_goal`)**: When the assistant finishes its work and requests goal completion, TalkOps holds that request in a pending state until the **Rubric Grader** independently verifies every requirement.
+- **Automatic Self-Correction**: If the grader finds that a test wasn't run, a file is incomplete, or a cloud check failed, TalkOps keeps the goal active, hands the missing items (and any unfinished To-Do steps) back to the assistant, and lets it fix the gap automatically.
+- **Clear Blocker Alerts**: If the assistant runs into an external problem it cannot fix by itself—such as missing AWS IAM permissions, a cloud service quota, or conflicting instructions—the goal switches to **`⚠ Goal blocked`** and pauses so you can step in, adjust permissions, or amend the goal.
 
 ---
 
-## Use a rubric
+## How Smart Mode & TypeSafe Jev Accelerate Verification
 
-Use `--rubric` (or `/rubric` in a session) when you already know the acceptance criteria and want an automated grader to verify the agent's changes.
+In standard modes (`Manual` or `Auto`), checking a rubric at the end of a turn requires spinning up a separate AI grading agent to read the conversation history and judge each requirement. While thorough, a traditional AI grader can add several seconds of wait time and extra token costs after every turn.
 
-### Specify an inline rubric
+When you run in **Smart Mode** (`talkops --smart` or `/smart`) with **TypeSafe Jev** configured, TalkOps uses a **two-tier hybrid verification engine** that makes grading nearly instantaneous:
 
-Pass criteria directly on the command line for non-interactive tasks:
-
-```bash
-talkops -p "Author a Terraform module for an AWS RDS Aurora Postgres cluster" \
-  --rubric "1. Multi-AZ deployment is enabled.
-2. Storage is encrypted with an AWS KMS customer-managed key.
-3. Automated backups are retained for 14 days.
-4. Enhanced monitoring and Performance Insights are enabled.
-5. Security group restricts port 5432 to the VPC CIDR only." \
-  --rubric-model "openai:gpt-4o" \
-  --rubric-max-iterations 3 \
-  -y
+```mermaid
+flowchart LR
+    TurnEnd["Assistant Finishes Turn"] --> Extract["1. Extract Real Evidence\nLast 10 commands & outputs,\nmodified files, cloud calls & To-Dos"]
+    Extract --> Jev["2. Jev System-1 Fast-Pass (<200ms)\nChecks all criteria in parallel +\nReadiness Score + Blocker Check"]
+    Jev -- "All Criteria Pass &\nProduction Ready" --> Pass["Verified in <200ms!\nZero LLM Grader Cost"]
+    Jev -- "External Cloud Quota /\nIAM Blocker Detected" --> Block["Marks Goal 'Blocked'\nStops Wasted Retries"]
+    Jev -- "1+ Criteria Unmet" --> Tier2["3. Tier-2 Diagnostic Advice\n1-shot AI prompt writes concise\nfix instructions for failed items only"]
+    Tier2 --> Retry["Assistant Fixes the Gap"]
 ```
 
-### Load a rubric from a file
+### What happens behind the scenes in Smart Mode:
 
-Prefix a file path with `@` to load reusable architectural or compliance standards from disk:
-
-```bash
-talkops -p "Refactor VPC networking" --rubric @specs/vpc-rubric.md -y
-```
-
-```markdown
-<!-- specs/vpc-rubric.md -->
-# VPC Architecture Rubric
-
-1. Primary CIDR block is 10.100.0.0/16 with 3 public and 3 private subnets across 3 AZs.
-2. NAT Gateways are deployed redundantly across all 3 availability zones.
-3. VPC Flow Logs publish to an encrypted CloudWatch Log Group.
-4. Default security group denies all inbound and outbound traffic.
-5. VPC gateway endpoints are provisioned for S3 and DynamoDB.
-```
+1. **Extracts real execution evidence (not chat fluff)**:
+   Instead of feeding the entire raw conversation to the grader, TalkOps pulls out a clean, compact summary of what actually happened: the commands executed and their exit codes, files modified, cloud and MCP tool outputs, To-Do list progress, and any errors encountered.
+2. **Grades every requirement in parallel in under 200ms (`Jev System-1 Fast-Pass`)**:
+   TypeSafe Jev turns your checklist bullets into parallel verification checks and evaluates three things at the exact same time:
+   - **Pass/Fail for Each Criterion**: Checks whether direct evidence in the command logs, file changes, or cloud queries proves each bullet is satisfied.
+   - **Operational Readiness Score**: Rates the overall work from *Incomplete* to *Functional* to *Production Ready*.
+   - **Environmental Blocker Detection**: Checks whether the assistant is making normal progress or is stuck on an external cloud blocker (such as an AWS quota limit, missing IAM permission, or network failure) or an ambiguous requirement.
+3. **Stops wasted retries when blocked by the environment**:
+   If Jev sees that a command failed because of an AWS IAM `AccessDenied` error or a service quota limit, TalkOps immediately marks the goal **`⚠ Goal blocked`** and alerts you—instead of burning through 3 retry loops running commands that can never succeed.
+4. **Targeted fix instructions when something is missed (`Tier-2 Escalation`)**:
+   - If all criteria pass, Jev approves the work in **under 200ms** without calling an LLM judge at all.
+   - If any criterion is still incomplete, TalkOps sends *only the failing bullets* to your grading model to write 1–2 concise bullet points of remediation advice—telling the assistant the exact file, configuration, or verification command it still needs to run on the next turn.
 
 ---
 
-## How rubric grading works
+## Managing Goals in the Terminal (`/goal`)
 
-When a rubric is active, `ReliableRubricMiddleware` runs a closed-loop evaluation cycle after the worker agent finishes a pass:
+Once a goal is active, you can inspect, pause, resume, or adjust it at any time without losing your progress:
 
-1. **Worker pass**: The worker agent edits files and runs validation commands in the workspace.
-2. **Evidence extraction**: TalkOps collects workspace diffs, file states, and command outputs.
-3. **Grader evaluation**:
-   * **Tier 1 — Jev System One Fast-Pass (`<200ms`)**: When `--smart` or `TYPESAFE_API_KEY` is active, `JevHybridRubricGrader` & `JevCriteriaCompiler` evaluate all acceptance criteria against the task evidence in parallel in under 200ms. If every criterion passes, the run completes immediately with exit code `0`.
-   * **Tier 2 — Frontier LLM diagnostic fallback**: If any criterion fails (or when running without Jev), the configured `--rubric-model` evaluates the failed criteria and generates targeted remediation instructions.
-4. **Self-correction**: The remediation report is fed back into the worker agent's context for the next iteration, repeating until all criteria pass or `--rubric-max-iterations` is reached.
+| Command | What It Does |
+| :--- | :--- |
+| `/goal <objective>` | Drafts an Implementation Plan, To-Do list, and Acceptance Criteria for a new goal (or amends your current goal if one is already active). |
+| `/goal show` *(or `/goal status`)* | Shows the current goal objective, status (`active`, `paused`, `blocked`, `complete`), implementation plan, tactical To-Do steps, criteria, and grader settings. |
+| `/goal amend <feedback>` | Updates the current goal's plan, To-Do list, and criteria based on your instructions (for example, `/goal amend skip the load test check`). |
+| `/goal new <objective>` | Replaces an active goal with a brand-new goal objective. |
+| `/goal pause` | Pauses the active goal so you can ask unrelated side questions without the goal driving the conversation or triggering grading. |
+| `/goal resume` | Resumes a paused goal and continues from where you left off without repeating completed work. |
+| `/goal clear` | Clears the active goal and its checklist from the thread (while keeping your grader model and iteration preferences). |
+| `/goal model [provider:model\|clear]` | Sets (or resets) which AI model grades your criteria and writes diagnostic feedback. |
+| `/goal max-iterations <N\|clear>` | Sets the maximum number of self-correction loops (default: `3`) before TalkOps stops and asks for your input. |
 
 > [!TIP]
-> Pair your worker agent with a grader model from a different provider family (for example, an Anthropic Claude worker graded by `--rubric-model openai:gpt-4o`) to reduce self-evaluation bias in CI/CD pipelines.
+> **Conversational goal updates:** While a goal is active or blocked, you don't even need to type `amend`. Running `/goal skip the nginx syntax check` automatically updates your existing plan and removes that requirement from the checklist instead of wiping out your goal.
 
-<details>
-<summary><b>Rubric CLI flags and CI/CD examples</b></summary>
+---
 
-### Rubric flags
+## Using Standalone Rubrics (`/rubric` & `--rubric`)
 
-| Flag | Description |
-| - | - |
-| `--rubric TEXT\|@PATH` | Acceptance criteria as inline text or `@path` to a file |
-| `--rubric-model MODEL` | Model used by the rubric grader (`provider:model`). Defaults to the main agent model |
-| `--rubric-max-iterations N` | Maximum grader iterations before stopping (default: `3`) |
-| `--smart` | Enable Jev System One `<200ms` fast-pass rubric grading |
+When you already have a specific pass/fail checklist—such as a team code-review standard, a production readiness checklist, or a CI/CD compliance gate—you can apply a **Rubric** directly without going through the `/goal` planning screen.
 
-### CI/CD example: Kubernetes manifest compliance
+### 1. In the Interactive Terminal (`/rubric` or `/criteria`)
 
-```bash
-talkops -p "Audit and fix deployment.yaml" \
-  --rubric "1. Non-root securityContext is enforced.
-2. Read-only root filesystem is enabled.
-3. Liveness and readiness probes have timeout thresholds.
-4. CPU and memory requests and limits are defined." \
-  --rubric-model "openai:gpt-4o" \
-  --rubric-max-iterations 3 \
-  --quiet \
-  -y
+You can use `/rubric` (or its alias `/criteria`) to set either a **persistent session rubric** or a **one-turn rubric**:
+
+```text
+# Enforce a checklist across every turn in this session
+/rubric set All Terraform changes must pass `terraform fmt -check` and `terraform validate`, and all IAM policies must use least-privilege actions.
+
+# Enforce a checklist for your NEXT prompt only, then auto-clear
+/rubric next Include a rollback command for every kubectl change you propose.
+
+# Load a team checklist from a Markdown file
+/rubric file ./rubrics/k8s-production-readiness.md
+
+# Check or clear the active rubric
+/rubric show
+/rubric clear
 ```
 
-### CI/CD example: Automated Terraform refactoring
+### 2. In Automated CI/CD Pipelines (`talkops -p ... --rubric`)
+
+In non-interactive scripts and CI/CD jobs (`-p` / `--prompt`), `--rubric` turns TalkOps into an **automated quality gate**. You can pass the checklist inline or load a file by prefixing the path with `@`:
 
 ```bash
-talkops -p "Refactor database module to support read replicas" \
-  --rubric @specs/db-replica-rubric.md \
-  --rubric-model "anthropic:claude-3-7-sonnet-20250219" \
-  --max-turns 15 \
-  --quiet \
-  -y
+# Pass inline acceptance criteria in Smart Mode
+talkops --smart \
+  -p "Upgrade the payments Helm chart to v2.14 and verify all pods are Ready" \
+  --rubric "All pods in namespace prod-payments are Running; helm test passes with exit code 0; no ContainerCreating or CrashLoopBackOff events exist"
+
+# Or load a detailed Markdown checklist from your repository (@path)
+talkops --smart \
+  -p "Audit our Terraform module in ./infra/vpc and fix any security issues" \
+  --rubric @./rubrics/terraform-security.md \
+  --rubric-max-iterations 4
+```
+
+### Cross-Model Grading (`--rubric-model`)
+
+Want a fast, affordable model to do the heavy lifting, but a top reasoning model to grade the final result? Or want to ensure an AI model isn't "grading its own homework"?
+
+Use `--rubric-model` (or `/rubric model` in the TUI) to assign a dedicated model for evaluation:
+
+```bash
+talkops -p "Refactor the billing Lambda handler and add unit tests" \
+  --model openai:gpt-5.4-mini \
+  --rubric @./rubrics/python-service.md \
+  --rubric-model anthropic:claude-sonnet-4-6 \
+  --rubric-max-iterations 3
+```
+
+### Deterministic Exit Codes for CI/CD
+
+When you run `talkops -p ... --rubric` in GitHub Actions, GitLab CI, or Jenkins, TalkOps uses standard exit codes so your pipeline knows automatically whether the quality gate passed:
+
+| Exit Code | Status | What Happened |
+| :---: | :--- | :--- |
+| **`0`** | `success` | All acceptance criteria in your rubric were verified (`satisfied`). |
+| **`2`** | `criteria_unmet` | The assistant finished its allowed attempts (`--rubric-max-iterations`), but one or more criteria were still not met. |
+| **`124`** | `timeout` / `max_turns` | The run hit the `--timeout` or `--max-turns` safety limit before finishing. |
+| **`1`** | `error` | A configuration, authentication, or runtime error occurred. |
+
+<details>
+<summary><b>Example: Machine-readable JSON output for CI scripts (<code>--json</code>)</b></summary>
+
+Adding `--json` outputs a clean JSON summary that includes `"status"` (`"success"` or `"criteria_unmet"`) and `"rubric_status"` (`"satisfied"` or `"needs_revision"`):
+
+```bash
+talkops --smart --json \
+  -p "Verify that the staging database backup completed today" \
+  --rubric "Latest RDS snapshot for staging-postgres is from today and has status 'available'"
+```
+
+```json
+{
+  "schema_version": "1.0",
+  "command": "run",
+  "ok": true,
+  "data": {
+    "status": "success",
+    "thread_id": "8f3c1e2a-9b4d-4c1e-8a7b-2d5e6f7a8b9c",
+    "turns": 2,
+    "duration_seconds": 6.42,
+    "rubric_status": "satisfied",
+    "content": "Verified: RDS snapshot `rds:staging-postgres-2026-10-25-04-00` completed today and its status is `available`."
+  }
+}
 ```
 
 </details>
 
 ---
 
-## See also
+## Tips for Writing Great Acceptance Criteria
 
-* [TalkOps overview](./overview.md)
-* [Quickstart](./quickstart.md)
-* [Command reference](./cli-reference.md)
-* [Approval modes](./approval-mode.md)
+Whether you are editing a `/goal` checklist or writing a reusable `.md` file for `--rubric`, a few simple habits make verification much more reliable:
+
+1. **Describe observable outcomes, not internal thoughts**:
+   - *Good*: `- Pod payments-api in prod is Running with 0 restarts`
+   - *Avoid*: `- Understand why the pod was crashing and think about memory limits`
+2. **State what *must* be true (avoid negative "do not" rules)**:
+   - *Good*: `- Only read-only AWS CLI describe/list commands are used to verify the VPC`
+   - *Avoid*: `- Execution completes without running any delete commands`
+3. **Name exact files, commands, or health checks when they matter**:
+   - *Good*: `- pytest tests/unit/test_auth.py passes with 0 failures`
+   - *Good*: `- Terraform configuration in infra/eks passes terraform validate`
+
+<details>
+<summary><b>Sample Reusable Rubric File (<code>rubrics/k8s-rollout.md</code>)</b></summary>
+
+```markdown
+- Deployment manifest uses a specific version tag (not `:latest`) and defines CPU and memory requests and limits
+- `kubectl rollout status` confirms the deployment rolled out completely in the target namespace
+- All pods for the service are in `Running` status with `Ready` containers and `0` restarts
+- Service health endpoint returns HTTP 200 OK
+```
+
+</details>
+
+---
+
+## Where to Go Next
+
+- **[Approval Modes & Smart Mode](approval-mode.md)** — See how Smart Mode and TypeSafe Jev route models and guard tool execution.
+- **[CLI & Slash Command Reference](cli-reference.md)** — Full reference for `--goal`, `--rubric`, `/goal`, and `/rubric` flags and commands.
+- **[Webhooks & Automated Incident Response](webhooks.md)** — Trigger automated root-cause investigations from PagerDuty, Alertmanager, Datadog, AWS, and GitHub.

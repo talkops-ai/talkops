@@ -34,9 +34,20 @@ if TYPE_CHECKING:
         cleanup_all_sandboxes,
         cleanup_sandbox,
         clear_sandbox_cache,
+        create_sandbox,
         create_sandbox_backend,
+        get_default_working_dir,
         get_sandbox_backend,
+        verify_sandbox_deps,
     )
+    from talkops.backend.sandbox_provider import (
+        SandboxError,
+        SandboxInstallHint,
+        SandboxNotFoundError,
+        SandboxProvider,
+        SandboxProviderMetadata,
+    )
+    from talkops.backend.sandbox_registry import SandboxRegistry
 
 __all__ = [
     "BackendRegistry",
@@ -44,14 +55,23 @@ __all__ = [
     "LocalShellBackend",
     "TalkOpsCompositeBackend",
     "SandboxConfig",
+    "SandboxError",
+    "SandboxInstallHint",
+    "SandboxNotFoundError",
+    "SandboxProvider",
+    "SandboxProviderMetadata",
+    "SandboxRegistry",
     "cleanup_all_sandboxes",
     "cleanup_sandbox",
     "clear_sandbox_cache",
+    "create_sandbox",
     "create_sandbox_backend",
     "get_backend_class",
     "get_backend_registry",
+    "get_default_working_dir",
     "get_sandbox_backend",
     "register_backend",
+    "verify_sandbox_deps",
 ]
 
 
@@ -62,8 +82,17 @@ def __getattr__(name: str) -> Any:
         "TalkOpsCompositeBackend": "talkops.backend.composite",
         "CompositeBackend": "talkops.backend.composite",
         "SandboxConfig": "talkops.backend.sandbox_config",
+        "SandboxError": "talkops.backend.sandbox_provider",
+        "SandboxInstallHint": "talkops.backend.sandbox_provider",
+        "SandboxNotFoundError": "talkops.backend.sandbox_provider",
+        "SandboxProvider": "talkops.backend.sandbox_provider",
+        "SandboxProviderMetadata": "talkops.backend.sandbox_provider",
+        "SandboxRegistry": "talkops.backend.sandbox_registry",
         "get_sandbox_backend": "talkops.backend.sandbox_factory",
+        "create_sandbox": "talkops.backend.sandbox_factory",
         "create_sandbox_backend": "talkops.backend.sandbox_factory",
+        "get_default_working_dir": "talkops.backend.sandbox_factory",
+        "verify_sandbox_deps": "talkops.backend.sandbox_factory",
         "cleanup_sandbox": "talkops.backend.sandbox_factory",
         "cleanup_all_sandboxes": "talkops.backend.sandbox_factory",
         "clear_sandbox_cache": "talkops.backend.sandbox_factory",

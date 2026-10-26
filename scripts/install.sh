@@ -16,17 +16,17 @@
 # Install TalkOps — AI DevOps & Cloud Operations Agent.
 #
 # Usage:
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- [options]
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- VERSION
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- [options]
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- VERSION
 #
 # Install an exact version:
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | TALKOPS_VERSION="0.3.0b16" bash
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- 0.3.0b16
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | TALKOPS_VERSION="0.3.0b17" bash
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- 0.3.0b17
 #
 # Install directly from the GitHub repository:
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | TALKOPS_SOURCE="git" bash
-#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- --git
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | TALKOPS_SOURCE="git" bash
+#   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- --git
 #
 # Install in editable mode from a local checkout:
 #   ./scripts/install.sh --local
@@ -56,7 +56,7 @@
 #   TALKOPS_PACKAGE_NAME     — Package name on PyPI (default: "talkops-ai")
 #   TALKOPS_REPO_URL         — GitHub repo URL (default: "https://github.com/talkops-ai/talkops")
 #   TALKOPS_SOURCE           — "pypi", "git", or "local" (default: "pypi")
-#   TALKOPS_VERSION          — Exact version to install (e.g. "0.3.0b16")
+#   TALKOPS_VERSION          — Exact version to install (e.g. "0.3.0b17")
 #   TALKOPS_EXTRAS           — Comma-separated pip extras (e.g. "dev", "sandboxes")
 #   TALKOPS_PRERELEASE       — uv pre-release strategy: allow, disallow, if-necessary (default: allow)
 #   TALKOPS_PYTHON           — Python version to use (default: 3.12)
@@ -134,7 +134,7 @@ resolve_latest_pypi_version() {
     fi
   fi
   if [ -z "$latest" ]; then
-    latest="0.3.0b16"
+    latest="0.3.0b17"
   fi
   printf '%s' "$latest"
 }
@@ -144,9 +144,9 @@ print_help() {
 ${BOLD}TalkOps Installer${NC} — AI DevOps & Cloud Operations Agent
 
 ${BOLD}Usage:${NC}
-  curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash
-  curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- [options]
-  curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/ui-enhancement/scripts/install.sh | bash -s -- VERSION
+  curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
+  curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- [options]
+  curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- VERSION
 
 ${BOLD}Options:${NC}
   --help, -h          Show this help message and exit
@@ -164,7 +164,7 @@ ${BOLD}Options:${NC}
   --uninstall         Uninstall talkops and remove binaries
 
 ${BOLD}Environment Variables:${NC}
-  TALKOPS_VERSION          Exact version to install (e.g. "0.3.0b16")
+  TALKOPS_VERSION          Exact version to install (e.g. "0.3.0b17")
   TALKOPS_SOURCE           "pypi", "git", or "local" (default: pypi)
   TALKOPS_EXTRAS           Comma-separated pip extras
   TALKOPS_PRERELEASE       uv pre-release strategy (default: allow)
@@ -927,7 +927,7 @@ done
 
 FINAL_VERSION=""
 if [ -n "$INSTALLED_PRIMARY" ]; then
-  FINAL_VERSION="$("$INSTALLED_PRIMARY" --version 2>/dev/null | awk '{print $NF}' || echo "0.3.0b16")"
+  FINAL_VERSION="$("$INSTALLED_PRIMARY" --version 2>/dev/null | awk '{print $NF}' || echo "0.3.0b17")"
 fi
 
 # ── Welcome Banner & Quick Start ─────────────────────────────

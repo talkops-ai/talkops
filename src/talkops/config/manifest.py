@@ -790,14 +790,14 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
     ConfigOption(
         key="sandbox.provider",
         group="Sandbox",
-        summary="Execution sandbox provider (local/daytona/modal/runloop)",
+        summary="Execution sandbox provider (local/modal/daytona/runloop/langsmith/agentcore)",
         kind=OptionKind.CHOICE,
         db_key="SANDBOX_PROVIDER",
         env_var="SANDBOX_PROVIDER",
         toml_keys=("sandboxes", "default"),
         settings_field="sandbox_provider",
         default="local",
-        choices=("local", "daytona", "modal", "runloop"),
+        choices=("local", "modal", "daytona", "runloop", "langsmith", "agentcore"),
     ),
     ConfigOption(
         key="sandboxes.sync_workspace",

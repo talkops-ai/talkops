@@ -388,6 +388,17 @@ class TalkOpsApp(App):
             self._approval_mode = ApprovalMode.MANUAL
 
         self._auto_approve = False
+        raw_sb = (
+            extra_kwargs.get("sandbox_type")
+            or (server_kwargs.get("sandbox_type") if isinstance(server_kwargs, dict) else None)
+            or os.environ.get("TALKOPS_SANDBOX_PROVIDER")
+        )
+        self._sandbox_type: str | None = (
+            str(raw_sb).strip().lower()
+            if raw_sb and str(raw_sb).strip().lower() not in {"none", "local", ""}
+            else None
+        )
+        self._sandbox_active: bool = self._sandbox_type is not None
         self._resume_thread = resume_thread
         self._goal = goal
         self._initial_prompt = initial_prompt
@@ -720,6 +731,7 @@ class TalkOpsApp(App):
                 mcp_disabled=bool(
                     (getattr(self, "_mcp_preload_kwargs", None) or {}).get("no_mcp")
                 ),
+                server_url=self._server_url,
             )
         )
         self._sync_status_cloud()
@@ -825,6 +837,7 @@ class TalkOpsApp(App):
                 mcp_disabled=bool(
                     (getattr(self, "_mcp_preload_kwargs", None) or {}).get("no_mcp")
                 ),
+                server_url=self._server_url,
             )
             first_child = messages_widget.children[0] if messages_widget.children else None
             if first_child is not None:

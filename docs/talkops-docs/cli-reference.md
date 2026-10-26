@@ -1,420 +1,381 @@
 # CLI & Slash Command Reference
 
-TalkOps provides two complementary command surfaces defined in `src/talkops/cli/` and `src/talkops/ui/command_registry.py`:
-1. **Terminal CLI Subcommands (`talkops <subcommand>`)** for launching interactive TUI sessions, running headless CI/CD checks, starting the Central Server and webhook listener (`talkops serve`), authenticating (`talkops auth`), managing remote/local threads (`talkops threads`), and administering MCP servers, plugins, and skills.
-2. **Interactive Slash Commands (`/<command>`)** for controlling the live session, switching Jev Smart Mode and model pools, inspecting cloud context, running `/review` or `/goal` loops, and managing subagents without leaving the TUI.
+> Easy lookup guide for every `talkops` (and `ops`) terminal command, keyboard shortcut, and in-chat `/slash` command.
 
-> [!NOTE]
-> 📸 **Image Placeholder — `docs/assets/cli-command-palette.png`**
-> **What to capture:** Screenshot of the TalkOps TUI command palette open when typing `/`, showing fuzzy autocomplete for `/smart`, `/pool`, `/cloud`, `/threads`, `/fork`, and `/review` with keyboard shortcut hints.
+You can control TalkOps in two ways:
+
+1. **From your terminal (`talkops` / `ops`)** — Start an interactive chat, run a one-off question (`-p`), launch a shared team server (`talkops serve`), sign in (`talkops auth`), or manage plugins, skills, and tools.
+2. **Inside the chat window (`/`, `!`, `@`)** — Type `/` in the chat box to switch modes (`/smart`), pick AI models (`/model`, `/pool`), switch cloud accounts (`/cloud`), install plugins (`/plugins`), or review code (`/review`).
+
+**Quick Jump:**
+[Main `talkops` Flags](#starting-talkops-main-flags) ·
+[`serve`](#talkops-serve-aliases-webhook-webhooks) ·
+[`auth`](#talkops-auth) ·
+[`threads`](#talkops-threads) ·
+[`mcp`](#talkops-mcp) ·
+[`plugin`](#talkops-plugin-alias-plugins) ·
+[`addon`](#talkops-addon-alias-addons) ·
+[`skills`](#talkops-skills-alias-skill) ·
+[`agents`](#talkops-agents-alias-agent) ·
+[`doctor`](#talkops-doctor) ·
+[`benchmark`](#talkops-benchmark-alias-benchmarks) ·
+[Chat Shortcuts](#chat-shortcuts--input-prefixes) ·
+[Slash Commands](#in-chat-slash-commands)
 
 ---
 
-## Root CLI Invocation & Flags
+## Starting TalkOps (Main Flags)
 
-### `talkops` / `ops` (Root Command & Alias)
-
-Launches the interactive Textual terminal UI by default, or executes a non-interactive headless run when `-p` / `--prompt` is passed. You can invoke the CLI using either `talkops` or the `ops` shorthand alias.
+Running `talkops` (or the shorter `ops` alias) opens the interactive chat window in your terminal. If you want to ask a single question and exit—for example, inside a script or CI/CD pipeline—pass `-p "your question"`.
 
 ```bash
-talkops [FLAGS]          # or: ops [FLAGS]
-talkops -p "<prompt>"    # or: ops -p "<prompt>"
+# Open the interactive chat window
+talkops                           # or: ops
+
+# Open the chat window in Smart Mode and send an initial question
+talkops --smart -m "Check if any pods in kube-system are failing"
+
+# Run a single question and exit (great for scripts and CI/CD)
+talkops -p "Check security groups in ap-south-1 for open SSH ports"
+
+# Pipe error logs directly into TalkOps
+kubectl logs deploy/checkout-api -n prod --tail=100 | talkops -p "Why is this service returning 502 errors?"
 ```
 
-#### Execution & Approval Mode Flags
+### Everyday Options (Prompts, Safety & Cloud)
 
-| Flag | Short | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `--prompt <text>` | `-p` | `None` | Execute `<text>` in headless non-interactive mode and print the response to stdout (`src/talkops/cli/main.py`). |
-| `--smart` | `-s` | `False` | Enable **Jev Smart Mode**: `<70ms` 3-tier dynamic model/reasoning routing + `<100ms` System One tool safety classification. |
-| `--auto-approve` | `-y` | `False` | Enable **Auto Mode**: auto-approve routine tools while still blocking catastrophic shell destructors (`rm -rf /`, `mkfs`). |
-| `--yolo` | — | `False` | Enable **YOLO Mode**: bypass all tool approval prompts (use strictly inside disposable sandboxes). |
-| `--max-turns <int>` | — | Unlimited | Maximum number of agentic turns allowed in a headless (`-p`) or `/goal` run. |
-| `--criteria <text>` | — | `None` | Success rubric evaluated after each turn in headless (`-p`) mode; the agent iterates until the criteria are met or `--max-turns` is reached. |
-
-#### Model & Sandbox Flags
-
-| Flag | Short | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `--model <spec>` | `-M`, `--models` | Active default | Primary model or comma-separated model pool (e.g., `claude-sonnet-4-6` or `claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-6`). |
-| `--agent <name>` | `-a` | `talkops` | Named agent configuration or subagent profile to launch. |
-| `--sandbox <type>` | `-S` | `none` | Execution sandbox backend (`none`, `local`, `docker`, `k8s`). |
-| `--sandbox-id <id>` | — | Auto | Attach to an existing Docker container ID or Kubernetes pod name. |
-| `--sandbox-setup <path>` | — | `None` | Path to a setup script executed inside the sandbox before the session starts. |
-| `--shell-allow-list <list>` | — | Default safe list | Comma-separated list of allowed shell executables (or `recommended`). |
-| `--no-Verify-ssl` | — | `False` | Disable TLS certificate verification for corporate proxy environments. |
-
-#### Central Server & Multi-Client Connection Flags
-
-| Flag | Short | Environment Variable | Description |
-| :--- | :--- | :--- | :--- |
-| `--server-url <url>` | — | `TALKOPS_SERVER_URL` | Connect the TUI or headless CLI as a remote client to a running `talkops serve` instance (e.g., `http://talkops.internal:2024`). |
-| `--api-key <key>` | — | `TALKOPS_API_KEY` | Long-lived API key (`oc_live_...`, exchanged automatically for a short-lived JWT) or static server token. |
-| `--user-id <id>` | — | `TALKOPS_USER_ID` | Explicit user identity (`X-TalkOps-User-Id`) for multi-tenant thread and memory isolation. |
-| `--resume [thread_id]` | `-r` | — | Resume the most recent thread (when no ID is given) or attach to a specific local/remote `thread_id`. |
-| `--initial-skill <name>` | — | — | Pre-load a specific `SKILL.md` runbook into the session context at startup. |
-
-#### MCP & Utility Flags
-
-| Flag | Short | Description |
+| Flag | Short / Alias | What It Does |
 | :--- | :--- | :--- |
-| `--mcp-config <path>` | — | Load an additional `.mcp.json` configuration file for this session. |
-| `--no-mcp` | — | Disable all external Model Context Protocol (MCP) servers for this run. |
-| `--trust-project-mcp` | — | Automatically trust project-scoped `.mcp.json` stdio commands without prompting. |
-| `--interactive` | `-i` | Force interactive TUI mode even if initial prompt arguments are supplied. |
-| `--acp` | — | Run the Agent Client Protocol (ACP) stdio server for IDE integrations. |
-| `--version` | `-v` | Print the installed TalkOps version and exit. |
-| `--help` | `-h` | Show root CLI help and exit. |
+| `--prompt <text>` | `-p`, `-n` | Run a single question without opening the interactive chat window, print the answer, and exit. |
+| `--message <text>` | `-m` | Open the interactive chat window and immediately send `<text>` as your first message. |
+| `--smart` | — | Turn on **Smart Mode**: automatically picks a fast, low-cost AI model for simple checks and a stronger model for hard problems, while checking commands for safety. |
+| `--auto-approve` | `-y` | Automatically run routine commands without asking `[y/n]`, while still blocking dangerous commands. |
+| `--approval-mode <mode>` | — | Choose how commands are approved: `manual`, `smart`, `auto`, or `yolo` (`yolo` is only for `-p` or `talkops serve`). |
+| `--read-only` | `--dry-run` | Safe mode—allows TalkOps to read and inspect your cloud or cluster, but blocks any changes or deletions. |
+| `--aws-profile <name>` | — | Use a specific AWS profile for this session (for example, `staging` or `prod-readonly`). |
+| `--aws-region <region>` | — | Use a specific AWS region for this session (for example, `us-east-1` or `ap-south-1`). |
+| `--model <spec>` | `-M` | Pick which AI model to use (for example, `anthropic:claude-sonnet-4-5` or `openai:gpt-5.6-luna`). |
+| `--agent <name>` | `-a` | Start with a specific specialist agent (for example, `-a aws-cloud-security-engineer`). |
+| `--skill <name>` | `-s` | Run a saved `SKILL.md` runbook right when the session starts. |
+| `--resume <thread_id>` | `-r` | Continue a previous conversation by its ID. |
+| `--sandbox [provider]` | — | Run commands and file edits inside an isolated cloud sandbox (`modal`, `daytona`, `runloop`, `langsmith`, `agentcore`, or `vercel`). |
+| `--server-url <url>` | — | Connect to a shared team server (`talkops serve`) instead of running locally. |
+| `--cwd <path>` | `--workspace` | Run TalkOps inside a specific folder. |
+| `--version` / `--help` | `-v` / `-h` | Show the installed version or help text. |
+
+<details>
+<summary><b>Advanced CLI Flags (Scripting, JSON Output, Goals &amp; Debugging)</b></summary>
+
+| Flag | Short | What It Does |
+| :--- | :--- | :--- |
+| `--quiet` | `-q` | Only print the final answer in `-p` mode (hides step-by-step progress). |
+| `--no-stream` | — | Wait until the answer is finished before printing it in `-p` mode. |
+| `--json` | `--output-format json` | Output results as JSON so other scripts can read them easily. |
+| `--stdin` | — | Read piped input from `stdin` and attach it to your prompt. |
+| `--max-turns <int>` | — | Stop after at most `<int>` steps in `-p` mode. |
+| `--timeout <sec>` | — | Stop if a `-p` run takes longer than `<sec>` seconds (exits with code `124`). |
+| `--goal <objective>` | — | Start the interactive chat with a multi-step goal that TalkOps works toward until finished. |
+| `--rubric <text\|@file>` | — | Give `-p` mode a checklist of requirements (or a `@file.md`). TalkOps keeps working until every item passes. |
+| `--rubric-model <spec>` | — | Choose which AI model grades your `--rubric` checklist. |
+| `--rubric-max-iterations <n>` | — | Maximum number of retries when checking `--rubric`. |
+| `--default-model [spec]` | — | Show your saved default model, or save `<spec>` as your new default. |
+| `--clear-default-model` | — | Reset your saved default model. |
+| `--model-params <json>` | — | Pass extra model settings as JSON (for example, `'{"temperature": 0.0}'`). |
+| `--no-subagents` | — | Turn off specialist subagents and do everything in the main chat. |
+| `--shell-allow-list <list>` | `-S` | Comma-separated list of allowed shell commands (`recommended`, `all`, or specific command names). |
+| `--tnr` | — | Enable automatic rollback if a change fails verification. |
+| `--api-key <key>` | — | API key (`TALKOPS_API_KEY`) for signing in to a Central Server or Control Plane. |
+| `--user-id <id>` | — | Your user ID (`TALKOPS_USER_ID`) when sharing a Central Server with teammates. |
+| `--mcp-config <path>` | — | Load an extra `.mcp.json` tool configuration file. |
+| `--no-mcp` | — | Disable external MCP tool servers for this session. |
+| `--trust-project-mcp` | — | Trust project `.mcp.json` servers without asking for confirmation. |
+| `--sandbox-id <id>` | — | Connect to an already-running cloud sandbox container by its ID instead of creating a new one. |
+| `--sandbox-snapshot-name <name>` | — | Pre-built container snapshot or blueprint name for `--sandbox langsmith` or `--sandbox runloop`. |
+| `--sandbox-setup <path>` | — | Run a local `.sh` setup script inside the remote sandbox right after it starts. |
+| `--startup-cmd <cmd>` | — | Run a local shell command before the first prompt starts. |
+| `--trajectory-file <path>` | — | Save a detailed step-by-step log (JSONL) of the run to `<path>`. |
+| `--verbose` / `--log-level` | `-V` | Show detailed debug logs (`debug`, `info`, `warning`, `error`). |
+| `--log-dir` / `--log-file` | — | Customize where log files are saved (default: `/tmp/talkops_logs/talkops.log`). |
+
+</details>
 
 ---
 
-## CLI Subcommands (Individual Mini-Sections)
+## CLI Subcommands
 
-### `talkops serve` (Aliases: `talkops webhooks`, `talkops webhook`)
+### `talkops serve` (Aliases: `webhook`, `webhooks`)
 
-Starts the LangGraph-backed Central Server and inbound webhook ingestion listener (`src/talkops/cli/commands/serve.py`), or lists all registered webhook provider adapters.
-
-```bash
-talkops serve [start|list] [FLAGS]
-talkops webhooks [start|list] [FLAGS]
-```
-
-- **Sub-actions**:
-  - `talkops serve` / `talkops serve start`: Launches the ASGI server hosting `/api/v1/*`, LangGraph `/threads` & `/runs`, OIDC `/.well-known/*`, and `/webhooks/{provider}`.
-  - `talkops serve list` / `talkops webhooks list`: Prints all 9 registered webhook provider adapters (`sns`, `pagerduty`, `alertmanager`, `cloudevents`, `jenkins`, `github`, `datadog`, `servicenow`, `generic`) and their aliases.
-- **Flags**:
-  - `--host <addr>`: Bind address (default `0.0.0.0`, env `TALKOPS_WEBHOOK_HOST`).
-  - `--port <int>`: Primary server port (default `2024`, env `TALKOPS_WEBHOOK_PORT`).
-  - `--webhook-port <int>`: Optional separate port dedicated exclusively to `/webhooks/*` traffic.
-  - `--webhook-host <addr>`: Bind address for the dedicated webhook listener when `--webhook-port` is used.
-  - `--webhook-secret <secret>`: Default shared secret or bearer token for inbound webhooks (`TALKOPS_WEBHOOK_SECRET`).
-  - `--postgres-uri <uri>`: PostgreSQL connection URI for multi-user checkpointing (`TalkOpsPostgresCheckpointer`) and store persistence (`TALKOPS_POSTGRES_URI`).
-  - `--auth-mode {noop,token}`: Client authentication enforcement mode (`TALKOPS_AUTH_MODE`).
-  - `--approval-mode {smart,auto,yolo,manual}`: Tool execution policy for unattended webhook/server runs (default `smart`).
-  - `--workspaces-dir <dir>`: Base workspace directory for server execution (`TALKOPS_WORKSPACES_DIR`).
-  - `--model <name>`: Override the default orchestrator model.
+Starts the shared **Central Server** so teammates can connect from their terminals (`--server-url`) and monitoring tools (like PagerDuty, Datadog, Prometheus, and GitHub) can send live alerts for automated investigation.
 
 ```bash
-# Launch production central server with PostgreSQL and dedicated webhook port
-talkops serve --host 0.0.0.0 --port 2024 --webhook-port 8080 \
-  --postgres-uri postgresql://ops:secret@db:5432/talkops \
-  --auth-mode token --approval-mode smart
+# Start the Central Server on port 2024
+talkops serve --host 0.0.0.0 --port 2024
+
+# See all built-in webhook URLs for PagerDuty, Datadog, GitHub, etc.
+talkops serve list
+
+# See which server features (addons) are enabled
+talkops serve addons
 ```
+
+| Action / Flag | Default | What It Does |
+| :--- | :--- | :--- |
+| `talkops serve [start]` | *(default)* | Starts the Central Server and webhook listener. |
+| `talkops serve list` (`ls`) | — | Prints a table of all 9 built-in webhook integrations and their URLs. |
+| `talkops serve addons` | — | Lists the active server features (`client-gateway`, `core-auth`, `webhooks`, plus any custom addons). |
+| `--host <addr>` / `--port <int>` | `0.0.0.0:2024` | Address and port where the server listens. |
+| `--webhook-port <int>` | Same as `--port` | Optional separate port just for incoming webhooks. |
+| `--postgres-uri <uri>` | SQLite | PostgreSQL database URL for saving team conversations (uses local SQLite if omitted). |
+| `--profile <name>` | `default` | Server mode: `default` (all features), `api-only` (team terminals only), `webhook-worker` (alerts only), or `enterprise-full`. |
+| `--approval-mode <mode>` | `smart` | How server runs approve commands (`smart`, `auto`, `yolo`, or `manual`). |
+| `--read-only` / `--dry-run` | `False` | Safe mode—allows the server to inspect resources but blocks changes or deletions. |
+| `--aws-profile` / `--aws-region` | Default | Default AWS profile and region for server runs. |
+| `-V` / `-q` / `--json` | — | `-V` for debug logs, `-q` to hide live log streaming, `--json` for JSON output on `list`/`addons`. |
+
+<p align="center">
+  <img src="../assets/quickstart-serve-list.png" alt="Running talkops serve list to inspect all registered Central Server webhook endpoints and supported integrations" width="100%">
+</p>
+<p align="center">
+  <sub><b>Viewing Webhook URLs (<code>talkops serve list</code>):</b> Checking all 9 built-in webhook endpoints, shorthand aliases, and supported monitoring/CI tools.</sub>
+</p>
 
 ---
 
 ### `talkops auth`
 
-Manages Central Server JWT sessions, encrypted provider API keys in `~/.talkops/.state/config.db`, and AWS profile defaults (`src/talkops/cli/commands/auth.py`).
+Manages your AI model API keys, your sign-in to a Central Server or Control Plane, and checks your active AWS login.
 
 ```bash
-talkops auth <subcommand> [ARGS]
+# Sign in via your browser or save a Central Server login
+talkops auth login --sso
+talkops auth login --server-url http://talkops.internal:2024 --api-key oc_live_... --user-id alice
+
+# Save an AI provider API key (stored securely in your system keyring)
+talkops auth set anthropic sk-ant-...
+talkops auth set openai sk-proj-...
+
+# Check which AI providers and cloud accounts are connected
+talkops auth status
+talkops auth aws --profile prod-admin --region us-east-1
 ```
 
-- **`talkops auth status`** *(default)*: Displays your active Control Plane / Central Server session, JWT expiration countdown, offline grace status, and configured LLM/cloud credentials.
-- **`talkops auth login`**: Exchanges a long-lived API key (`oc_live_...`) at `POST /api/v1/auth/token` for a short-lived signed JWT (`eyJ...`) and caches it in `~/.talkops/.state/auth.json`.
-  - Flags: `--server-url <url>`, `--api-key <key>`, `--user-id <id>`, `--control-plane-url <url>`.
-- **`talkops auth logout`**: Clears cached JWTs and revokes the local Central Server session.
-- **`talkops auth token [--refresh]`**: Prints the active bearer JWT for scripting (`curl -H "Authorization: Bearer $(talkops auth token)"`) or forces an immediate token refresh (`--refresh`).
-- **`talkops auth list`**: Lists all LLM, Jev, and cloud credentials stored in `config.db` or environment variables with redacted previews.
-- **`talkops auth set <provider> <key>`**: Encrypts and saves a provider API key (`anthropic`, `openai`, `google`, `typesafe`, `openrouter`, `deepseek`, `mistral`, `groq`, `together`, `fireworks`, `cohere`, `perplexity`, `xai`, `cerebras`, `sambanova`, `langsmith`).
-- **`talkops auth remove <provider>`** *(alias: `delete`)*: Removes a stored credential from `config.db`.
-- **`talkops auth aws --profile <name> [--region <region>]`**: Persists the default AWS CLI profile and region used by AWS tools and subagents.
+| Subcommand | Example | What It Does |
+| :--- | :--- | :--- |
+| **`status`** | `talkops auth status` | Shows your sign-in status, which AI providers have keys configured, and your active AWS account. |
+| **`login`** | `talkops auth login [--sso] [--server-url <url>] [--api-key <key>]` | Signs in through your browser (`--sso`) or saves your API key and server URL so you don't have to type them every time. |
+| **`logout`** | `talkops auth logout [--all \| --account \| --provider <name>]` | Signs out of your account or removes saved keys. |
+| **`set`** | `talkops auth set <provider> [api_key]` | Saves an API key for any AI provider (prompts securely if you omit the key on the command line). |
+| **`list`** (`ls`) | `talkops auth list` | Lists all 26+ supported AI model providers and shows which ones are ready to use. |
+| **`remove`** (`rm`) | `talkops auth remove <provider\|all>` | Deletes a saved API key. |
+| **`aws`** | `talkops auth aws [--profile <name>]` | Checks which AWS account and IAM role your terminal is currently using. |
+| **`token`** | `talkops auth token [--refresh]` | Prints your current session token for use in custom scripts. |
+
+<p align="center">
+  <img src="../assets/quickstart-auth-and-doctor.png" alt="Verifying Control Plane session, configured LLM providers, AWS STS identity, and DevOps CLIs with talkops auth status and talkops doctor" width="100%">
+</p>
+<p align="center">
+  <sub><b>Checking Your Setup (<code>talkops auth status</code> &amp; <code>talkops doctor</code>):</b> Verifying your sign-in status, AI provider keys, AWS account identity, and installed DevOps tools (<code>aws</code>, <code>kubectl</code>, <code>terraform</code>, <code>helm</code>, <code>docker</code>, <code>git</code>).</sub>
+</p>
 
 ---
 
 ### `talkops threads`
 
-Lists and deletes persistent conversation threads stored either in the local SQLite database (`~/.talkops/sessions.db`) or on a remote Central Server (`src/talkops/cli/main.py`).
+Lists or deletes saved conversations from your computer (`~/.talkops/sessions.db`) or from a shared Central Server (`--server-url`).
 
 ```bash
-talkops threads list [-n <limit>] [--agent <name>] [--server-url <url>] [--api-key <key>] [--user-id <id>]
-talkops threads delete <thread_id> [--server-url <url>] [--api-key <key>] [--user-id <id>]
-```
+# List your saved conversations
+talkops threads list
 
-```bash
-# List the 20 most recent threads on a remote Central Server
-talkops threads list -n 20 --server-url http://talkops.internal:2024 --user-id alice
+# List your conversations on a shared Central Server
+talkops threads list --server-url http://talkops.internal:2024 --user-id alice
 
-# Delete a specific thread
+# Resume or delete a conversation by its ID
+talkops -r 8f3a9c12
 talkops threads delete 8f3a9c12-4b2e-4d1a-9e5b-123456789abc
 ```
 
 ---
 
-### `talkops mcp`
+### `talkops plugin` (Alias: `plugins`)
 
-Lists, validates, and live-probes external Model Context Protocol (MCP) tool servers (`src/talkops/cli/commands/mcp.py`).
-
-```bash
-talkops mcp <list|status|probe> [FLAGS]
-```
-
-- **`talkops mcp list`** *(alias: `ls`)*: Lists all configured MCP servers merged from user, project (`.mcp.json`), and plugin scopes.
-- **`talkops mcp status`**: Performs static validation of server configurations, checking that local `stdio` binaries exist on `PATH` and remote `sse`/`http` URLs are well-formed.
-- **`talkops mcp probe [--server <name>] [--timeout <sec>]`**: Spawns or connects to each MCP server, completes the JSON-RPC initialization handshake, and lists every discovered tool schema.
-
----
-
-### `talkops plugin` (Alias: `talkops plugins`)
-
-Searches, installs, enables, disables, and manages multi-component DevOps plugins (`src/talkops/plugins/commands_cli.py`).
+Finds and installs ready-made specialist plugins (like AWS FinOps, SRE, Kubernetes, Terraform, and Security agents) from the TalkOps Marketplace or your team's Git repository.
 
 ```bash
-talkops plugin <subcommand> [ARGS]
+# Search for and install specialist plugins
+talkops plugin search finops
+talkops plugin install aws-finops-agent
+talkops plugin install aws-cloud-security-engineer --scope project
+
+# List all available and installed plugins
+talkops plugin list
 ```
 
-- **`talkops plugin list`**: Lists installed plugins, versions, enabled state, and contributed skills/agents/MCP servers.
-- **`talkops plugin search <query>`**: Searches registered plugin marketplaces by keyword or tag.
-- **`talkops plugin install <spec>`**: Installs a plugin by marketplace name, GitHub `owner/repo`, Git URL, or local directory path.
-- **`talkops plugin uninstall <name>`**: Removes an installed plugin.
-- **`talkops plugin enable <name>`** / **`talkops plugin disable <name>`**: Toggles a plugin on or off without deleting its files.
-- **`talkops plugin refresh`**: Refreshes cached marketplace manifests.
-- **`talkops plugin marketplace <list|add|remove>`**: Manages custom Git/HTTP plugin marketplace registries.
+| Subcommand | Syntax | What It Does |
+| :--- | :--- | :--- |
+| **`list`** (`ls`) | `talkops plugin list` | Shows all installed and available plugins. |
+| **`search`** | `talkops plugin search <keyword>` | Searches plugins by topic (such as `finops`, `security`, `eks`, or `terraform`). |
+| **`install`** | `talkops plugin install <name> [--scope {user,project,local}]` | Installs a plugin for yourself (`user`) or for your current repository (`project`). |
+| **`uninstall`** | `talkops plugin uninstall <name>` | Removes an installed plugin. |
+| **`enable` / `disable`** | `talkops plugin <enable\|disable> <name>` | Turns an installed plugin on or off without deleting it. |
+| **`refresh`** | `talkops plugin refresh` | Fetches the latest plugin list from the marketplace. |
+| **`marketplace`** | `talkops plugin marketplace <list\|add <repo>\|remove <name>>` | Adds or manages custom GitHub/Git plugin catalogs for your team. |
+
+<p align="center">
+  <img src="../assets/quickstart-plugin-list-cli.png" alt="Running talkops plugin list to inspect installed and available DevOps marketplace plugins from the CLI" width="100%">
+</p>
+<p align="center">
+  <sub><b>Browsing Plugins from the Terminal (<code>talkops plugin list</code>):</b> Viewing installed plugins alongside available Infrastructure, Platform, Observability, Security, and FinOps specialists.</sub>
+</p>
 
 ---
 
-### `talkops skills` (Alias: `talkops skill`)
+### `talkops skills`, `talkops agents`, `talkops mcp`, `talkops addon` & `talkops doctor`
 
-Creates, inspects, trusts, and deletes reusable `SKILL.md` operational runbooks (`src/talkops/skills/commands.py`).
-
-```bash
-talkops skills <list|create|info|delete|trust> [ARGS] [--project]
-```
-
-- **`talkops skills list [--project]`**: Lists all discovered skills across `~/.talkops/skills/`, `.talkops/skills/`, and active plugins.
-- **`talkops skills create <name> [--project]`**: Scaffolds a new skill directory with a template `SKILL.md` and `scripts/` folder.
-- **`talkops skills info <name>`**: Displays the skill's YAML frontmatter, description, companion scripts, and SHA-256 trust status.
-- **`talkops skills trust <name>`**: Computes and records a cryptographic trust signature for executable scripts bundled inside a project skill.
-- **`talkops skills delete <name> [--project]`**: Deletes a skill directory.
+| Command | Common Usage | What It Does |
+| :--- | :--- | :--- |
+| **`talkops skills`** | `talkops skills list`<br>`talkops skills create <name> --project`<br>`talkops skills info <name>`<br>`talkops skills delete <name>` | Lists, creates, or inspects reusable `SKILL.md` troubleshooting runbooks. |
+| **`talkops agents`** | `talkops agents list` | Lists all specialist agents available in your workspace and installed plugins. |
+| **`talkops mcp`** | `talkops mcp list`<br>`talkops mcp probe` | Lists external MCP tool servers configured in `.mcp.json` or `config.toml`, and tests whether they are online (`probe`). |
+| **`talkops addon`** | `talkops addon list`<br>`talkops addon install <name>` | Lists or installs extra server features (addons) for `talkops serve`. |
+| **`talkops doctor`** | `talkops doctor` | Checks that your AWS login and local DevOps tools (`aws`, `kubectl`, `terraform`, `helm`, `docker`, `git`) are installed and working. |
+| **`talkops benchmark`** | `talkops benchmark run --suite sregym` | Runs automated SRE and DevOps evaluation suites (when optional benchmark packages are installed). |
 
 ---
 
-### `talkops doctor`
+## Chat Shortcuts & Input Prefixes
 
-Runs a comprehensive 9-point diagnostic check (`src/talkops/cli/commands/doctor.py`) verifying Python runtime, LLM provider keys, TypeSafe AI Jev connectivity (`TYPESAFE_API_KEY`), AWS/Azure/GCP/Kubernetes CLI availability, sandbox runtime (`docker`/`kubectl`), MCP server health, and SQLite/PostgreSQL state database permissions.
+When you are inside the interactive `talkops` chat window, you can use these prefixes and keyboard shortcuts at any time:
 
-```bash
-talkops doctor
-```
+| Shortcut / Prefix | What It Does |
+| :--- | :--- |
+| **`/`** | Opens the command menu—type a few letters to filter commands, skills, or agents. |
+| **`!<command>`** | Runs a shell command directly in your terminal and shows the output in chat (for example, `!kubectl get nodes` or `!git status`). |
+| **`@<filename>`** | Searches files in your project so you can attach them to your message. |
+| **`Shift+Tab`** | Switches between **Manual**, **Smart**, and **Auto** approval modes. |
+| **`Ctrl+O`** | Expands or collapses detailed command outputs and specialist agent steps. |
+| **`Ctrl+X`** | Opens your text editor (`$EDITOR`) to write a longer, multi-line prompt. |
+| **`Ctrl+N`** | Opens the notifications panel. |
+| **`Ctrl+L`** | Clears the screen. |
+| **`Esc`** | Stops the current AI response or running command. |
+| **`Ctrl+D`** / **`Ctrl+C`** | Exits TalkOps. |
 
----
-
-### `talkops help`
-
-Displays detailed CLI usage and subcommand syntax.
-
-```bash
-talkops help [subcommand]
-```
-
----
-
-## Interactive Slash Commands (Individual Mini-Sections)
-
-Inside the interactive TUI (and in remote `--server-url` sessions), type `/` to invoke any of the built-in slash commands registered in `src/talkops/ui/command_registry.py`. Each command below is grouped by operational workflow with its exact syntax, aliases, and behavior.
-
-### Approval & Safety Mode Commands
-
-#### `/smart`
-- **Syntax**: `/smart` (Keyboard shortcut: `Shift+Tab`)
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Activates **Jev Smart Mode**, enabling both `<70ms` 3-tier dynamic model and reasoning routing (`fast` with `effort="off"`, `standard` with `effort="medium"`, `powerful` with `effort="max"`) and `<100ms` System One tool safety classification (`is_mutating`, `blast_radius`, `intent_alignment`).
-
-#### `/auto`
-- **Syntax**: `/auto`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Switches the session to **Auto-Approve Mode**, executing routine tool calls automatically while blocking hardcoded catastrophic shell patterns. Restores your baseline model if switching out of `/smart`.
-
-#### `/manual`
-- **Syntax**: `/manual`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Switches the session to **Manual Approval Mode** (every mutating tool call or shell execution requires explicit `[y/n/e]` human confirmation) and automatically restores your pre-Smart baseline model.
-
-#### `/permissions`
-- **Syntax**: `/permissions`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Opens the interactive permission policy inspector showing active allow/ask/deny rules from `permissions.json` and session overrides.
+<p align="center">
+  <img src="../assets/cli-command-palette.png" alt="TalkOps interactive TUI command palette opened with / and fuzzy-filtered with / sma showing smart, pool, manual, resume, and custom project commands" width="100%">
+</p>
+<p align="center">
+  <sub><b>In-Chat <code>/</code> Command Menu:</b> Type <code>/</code> and start typing (like <code>/ sma</code>) to quickly jump to any command, skill, or specialist agent.</sub>
+</p>
 
 ---
 
-### Model, Smart Pool & Reasoning Commands
+## In-Chat Slash Commands
 
-#### `/model`
-- **Syntax**: `/model [provider:model]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Opens the interactive model selector modal (or switches immediately when `[provider:model]` is passed, e.g., `/model anthropic:claude-sonnet-4-6`).
+Every `/slash` command below works both when running locally and when connected to a Central Server (`--server-url`).
 
-#### `/pool` (Alias: `/agent-pool`)
-- **Syntax**: `/pool [fast,standard,powerful]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Configures or inspects the 3-tier **Dynamic Model Pool** (`Tier 0 Fast`, `Tier 1 Standard`, `Tier 2 Powerful`) used by Jev Smart Mode routing, and displays per-tier routing telemetry and cost savings.
+### 1. Approval Mode & Safety
 
-#### `/effort`
-- **Syntax**: `/effort [off|low|medium|high|xhigh|max]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Sets or inspects the thinking/reasoning token budget for reasoning-capable models (`claude-opus-4-6`, `claude-sonnet-4-6`, `o3`, `gpt-5.4`, `gemini-3.1-pro`). Note: In Smart Mode, Jev dynamically overrides effort per turn (`off` on Tier 0, `medium`/`low` on Tier 1, `max`/`xhigh` on Tier 2).
-
-#### `/fast`
-- **Syntax**: `/fast`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Toggles low-latency Fast Mode, pinning the session to your configured Tier 0 fast model with reasoning disabled (`effort="off"`) for rapid interactive lookups.
+| Command | How to Use It | What It Does |
+| :--- | :--- | :--- |
+| **`/smart`** | `/smart` *(or `Shift+Tab`)* | Turns on **Smart Mode**: automatically picks the best AI model for each question and runs safe read-only commands while asking before making risky changes. |
+| **`/auto`** | `/auto` | Automatically runs routine commands without asking, while still blocking destructive commands. |
+| **`/manual`** | `/manual` | Asks for your confirmation (`[y/n/e]`) before running any command or editing any file. |
+| **`/permissions`** | `/permissions` | Opens a window to view or change which tools are allowed to run automatically. |
 
 ---
 
-### Cloud, DevOps, Code Review & Goal Commands
+### 2. Choosing AI Models & Smart Mode Pools
 
-#### `/cloud` (Alias: `/aws`)
-- **Syntax**: `/cloud [profile] [region]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Opens the multi-cloud context switcher or directly updates the active AWS profile/region, Azure subscription, GCP project, and Kubernetes context displayed in the TUI status bar.
+| Command | How to Use It | What It Does |
+| :--- | :--- | :--- |
+| **`/model`** | `/model` or `/model <provider:model>` | Opens a menu to switch AI models, or switches directly to the model you specify (add `--default` to save it as your default). |
+| **`/pool`** | `/pool` | Opens the **Model Pool** window so you can choose which AI models Smart Mode uses for **Fast**, **Standard**, and **Powerful** tasks. |
+| **`/effort`** | `/effort [low\|medium\|high\|max]` | Adjusts how much "thinking time" reasoning models spend before answering. |
+| **`/fast`** | `/fast` | Pins the chat to your fastest model for quick back-and-forth questions. |
 
-#### `/review` (Alias: `/code-review`)
-- **Syntax**: `/review [target]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Dispatches the `code-reviewer` specialist to perform a structured security, reliability, and IaC/code quality review on uncommitted `git diff` changes, a specific branch, or a file path.
-
-#### `/goal`
-- **Syntax**: `/goal [objective]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Launches an autonomous multi-turn goal-verification loop. The agent plans, executes tools, and evaluates its own output against your active `/rubric` until all acceptance criteria pass.
-
-#### `/rubric` (Alias: `/criteria`)
-- **Syntax**: `/rubric [criteria]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Defines or inspects the acceptance rubric used by `/goal` to determine when an operational objective is complete.
-
-#### `/trace`
-- **Syntax**: `/trace [count]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Displays execution trace spans, tool latencies, Jev classification timings, and LangSmith trace URLs for the most recent `[count]` turns.
-
-#### `/doctor`
-- **Syntax**: `/doctor`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Runs the 9-point environment health check directly inside the TUI and renders a diagnostic report card.
+<p align="center">
+  <img src="../assets/overview-smart-mode-pool.png" alt="TalkOps Model Pool Configuration modal (/pool) showing multi-provider Fast, Standard, and Powerful tier selection" width="100%">
+</p>
+<p align="center">
+  <sub><b>Configuring Your Smart Mode Model Pool (<code>/pool</code>):</b> Pick which models handle simple checks (<b>Fast</b>), everyday work (<b>Standard</b>), and deep investigations (<b>Powerful</b>).</sub>
+</p>
 
 ---
 
-### Session, Thread & Context Management Commands
+### 3. Cloud Accounts, Code Review & Multi-Step Goals
 
-#### `/threads` (Aliases: `/resume`, `/continue`)
-- **Syntax**: `/threads`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Opens the interactive thread browser to search, resume, rename, or delete local SQLite threads or remote Central Server threads (including webhook-created incident threads).
+| Command | How to Use It | What It Does |
+| :--- | :--- | :--- |
+| **`/cloud`** | `/cloud` *(aliases: `/aws`, `/azure`, `/gcp`, `/k8s`)* | Opens a window to switch between your **AWS** profiles, **Azure** subscriptions, **GCP** projects, and **Kubernetes** clusters (`~/.kube/config`). |
+| **`/review`** | `/review` | Reviews your uncommitted `git diff` changes for bugs, security risks, and infrastructure issues. |
+| **`/goal`** | `/goal <what you want to achieve>` | Gives TalkOps a multi-step goal to work on until every requirement is met (use `/goal pause`, `/goal resume`, or `/goal clear` to manage it). |
+| **`/rubric`** | `/rubric set <checklist>` | Sets a success checklist that TalkOps verifies before finishing a task. |
+| **`/doctor`** | `/doctor` | Checks your cloud login and local DevOps tools right inside the chat window. |
+| **`/trace`** | `/trace` | Shows the LangSmith trace link for debugging the current conversation. |
 
-#### `/fork` (Alias: `/branch`)
-- **Syntax**: `/fork [new-title]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Clones the current conversation checkpoint into a brand-new thread ID (`POST /api/v1/threads/{id}/fork` in remote mode) so you can explore an alternative debugging path without mutating the original thread.
-
-#### `/compact` (Alias: `/offload`)
-- **Syntax**: `/compact [focus instructions]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Summarizes older conversation turns into a dense operational handoff summary, frees up context window tokens, and prunes superseded checkpoints.
-
-#### `/context`
-- **Syntax**: `/context`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Renders a visual breakdown of your current context window usage across system prompts, `AGENTS.md`, tool schemas, MCP servers, and message history.
-
-#### `/cost` (Alias: `/tokens`)
-- **Syntax**: `/cost`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Displays cumulative input/output/reasoning token counts, prompt cache hit rates, Jev Smart Mode tier distribution, and estimated USD cost for the session.
-
-#### `/btw` (Alias: `/aside`)
-- **Syntax**: `/btw <question>`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Asks a quick epistemic side-question in an ephemeral overlay without polluting the main thread's message history or interrupting an ongoing plan.
-
-#### `/clear` & `/force-clear`
-- **Syntax**: `/clear` or `/force-clear`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Clears the visible terminal viewport and starts a fresh conversation thread (`/force-clear` resets immediately even if a background turn is winding down).
-
-#### `/copy`
-- **Syntax**: `/copy`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Copies the latest assistant response (or selected code block) to your system clipboard.
-
-#### `/tasks`
-- **Syntax**: `/tasks`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Opens the background task manager showing running shell daemons, subagent runs, and scheduled loops.
-
-#### `/loop`
-- **Syntax**: `/loop <interval> <prompt>`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Schedules a recurring prompt inside the session (e.g., `/loop 5m Check rollout status of payment-api in prod-eks and alert if error rate > 1%`).
-
-#### `/exit` (Aliases: `/quit`, `/q`)
-- **Syntax**: `/exit` (Keyboard shortcut: `Ctrl+D`)
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Cleanly saves the session checkpoint and exits the TalkOps TUI.
+<p align="center">
+  <img src="../assets/cli-cloud-context.png" alt="TalkOps Select Cloud Context modal (/cloud) showing AWS, Azure, GCP, and Kubernetes context tabs" width="100%">
+</p>
+<p align="center">
+  <sub><b>Switching Cloud &amp; Kubernetes Accounts (<code>/cloud</code>):</b> Easily switch between AWS profiles, Azure subscriptions, GCP projects, and Kubernetes clusters without leaving the chat.</sub>
+</p>
 
 ---
 
-### Subagents, Skills, Plugins, MCP & Memory Commands
+### 4. Managing Conversations & Context
 
-#### `/agent` (Aliases: `/agents`, `/agent:<name>`)
-- **Syntax**: `/agent` or `/agent:<name> [task]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Opens the subagent catalog showing all discovered plugin subagents, custom `.talkops/agents/*.md` definitions, and `[async_subagents]`, or directly dispatches `<name>` (e.g., `/agent:eks-cluster-operator Check failing pods in kube-system`).
-
-#### `/skills` (Aliases: `/tools`, `/skill:<name>`)
-- **Syntax**: `/skills` or `/skill:<name> [args]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Lists all available `SKILL.md` operational runbooks and active tools, or directly loads and executes a specific skill (e.g., `/skill:eks-upgrade`).
-
-#### `/skill-creator`
-- **Syntax**: `/skill-creator [description]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Launches an interactive workflow that distills your recent troubleshooting commands or operational instructions into a reusable, validated `SKILL.md` file.
-
-#### `/plugins`
-- **Syntax**: `/plugins`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Opens the interactive plugin manager to browse, install, enable, or disable plugins from the marketplace.
-
-#### `/mcp`
-- **Syntax**: `/mcp`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Displays connected Model Context Protocol (MCP) servers, connection latency, and discovered external tools, with options to reconnect or probe servers.
-
-#### `/memory` & `/remember`
-- **Syntax**: `/memory` or `/remember <fact or preference>`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: `/memory` opens the persistent memory viewer (`AGENTS.md` and long-term store items); `/remember <fact>` immediately persists a new architectural rule or operational preference to long-term memory.
+| Command | How to Use It | What It Does |
+| :--- | :--- | :--- |
+| **`/threads`** | `/threads` *(or `/resume`)* | Opens a list of your saved conversations (and shared alert threads on a Central Server) so you can search, resume, or delete them. |
+| **`/fork`** | `/fork` *(or `/branch`)* | Makes a copy of the current conversation so you can test a fix or try another idea without changing the original thread. |
+| **`/compact`** | `/compact` | Summarizes older messages in a long chat to free up memory and keep responses fast. |
+| **`/btw`** | `/btw <quick question>` | Asks a quick side question without interrupting a running task or cluttering the main conversation. |
+| **`/context`** | `/context` | Shows how much conversation memory is currently in use. |
+| **`/cost`** | `/cost` *(or `/tokens`)* | Shows total token usage, cache savings, and estimated AI cost for the session. |
+| **`/tasks`** | `/tasks` | Views or stops background commands and manages the session to-do list. |
+| **`/loop`** | `/loop 5m <prompt>` | Repeats a check automatically on a schedule (for example, `/loop 5m Check rollout status of checkout-api`). |
+| **`/copy`** | `/copy` | Copies the last AI reply to your clipboard. |
+| **`/clear`** | `/clear` *(or `/force-clear`)* | Clears the screen and starts a new conversation (`/force-clear` also stops any running background work). |
+| **`/exit`** | `/exit` *(or `/quit`, `/q`)* | Saves your session and closes TalkOps. |
 
 ---
 
-### Configuration, Authentication & UI Commands
+### 5. Specialist Agents, Plugins, Skills & Memory
 
-#### `/config`
-- **Syntax**: `/config [group|key] [value]`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Opens the interactive settings editor or directly reads/updates any canonical configuration key in `~/.talkops/.state/config.db` (e.g., `/config aws.region us-west-2`).
+| Command | How to Use It | What It Does |
+| :--- | :--- | :--- |
+| **`/agent`** | `/agent` or `/agent:<name> [prompt]` | Opens a menu to pick a specialist agent (or switches directly with `/agent:<name>`). Type `/agent clear` to switch back to the main assistant. |
+| **`/plugins`** | `/plugins` | Opens the **Plugins** window to browse, install, enable, or uninstall specialist DevOps plugins without leaving the chat. |
+| **`/skills`** | `/skills` or `/skill:<name>` | Lists all available tools and `SKILL.md` runbooks, or runs a specific runbook. |
+| **`/skill-creator`** | `/skill-creator [topic]` | Helps you turn a troubleshooting workflow you just did into a reusable `SKILL.md` runbook. |
+| **`/mcp`** | `/mcp` | Opens the MCP Tool Server manager to check tool health or reconnect external servers. |
+| **`/remember`** | `/remember <note>` | Saves a rule or project detail (for example, `/remember Our prod EKS cluster is in ap-south-1`) so TalkOps remembers it in future sessions. |
+| **`/memory`** | `/memory` | Views or edits what TalkOps has saved in project and personal memory. |
 
-#### `/login` (Aliases: `/auth`, `/connect`) & `/logout`
-- **Syntax**: `/login` or `/logout`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Opens the interactive credential & Central Server authentication modal to add provider API keys or exchange a Central Server token, or logs out of the active remote server session.
+<p align="center">
+  <img src="../assets/cli-agent-persona.png" alt="TalkOps interactive TUI activating the aws-cloud-security-engineer persona via /agent:aws-cloud-security-engineer" width="100%">
+</p>
+<p align="center">
+  <sub><b>Switching to a Specialist Agent (<code>/agent:aws-cloud-security-engineer</code>):</b> Loads the specialist's dedicated skills and tools and shows <code>▶ Agent: aws-cloud-security-engineer</code> in the bottom bar.</sub>
+</p>
 
-#### `/reload` & `/restart`
-- **Syntax**: `/reload` (Local & Remote) / `/restart` (Local TUI)
-- **What it does**: `/reload` hot-reloads `config.toml`, `AGENTS.md`, skills, plugins, and MCP servers without dropping your thread; `/restart` performs a full process re-exec of the local TUI.
+<p align="center">
+  <img src="../assets/cli-plugins-modal.png" alt="TalkOps Plugins marketplace modal (/plugins) showing 39 available specialist DevOps plugins" width="100%">
+</p>
+<p align="center">
+  <sub><b>Installing Plugins Inside the Chat (<code>/plugins</code>):</b> Browse and install AWS, Kubernetes, Terraform, SRE, FinOps, and Security plugins with a single keystroke.</sub>
+</p>
 
-#### `/install`, `/update`, & `/auto-update`
-- **Syntax**: `/install`, `/update` (Local TUI), `/auto-update` (Local & Remote)
-- **What it does**: Checks for and installs new TalkOps releases, or toggles background automatic updates.
+---
 
-#### `/theme`, `/notifications`, `/timestamps`, & `/scrollbar`
-- **Syntax**: `/theme [name]`, `/notifications`, `/timestamps`, `/scrollbar`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Customizes TUI appearance—switching color themes (`dark`, `light`, `dracula`, `nord`, `monokai`), desktop completion notifications, message timestamps, and scrollbar visibility.
+### 6. Settings, Login, Updates & Appearance
 
-#### `/version`, `/bug` (Alias: `/feedback`), & `/help`
-- **Syntax**: `/version`, `/bug`, `/help`
-- **Supported Modes**: Local TUI & Remote Server Client
-- **What it does**: Prints version/build metadata, submits diagnostics or bug feedback, or opens the interactive keyboard shortcut and command reference modal.
+| Command | How to Use It | What It Does |
+| :--- | :--- | :--- |
+| **`/login` & `/logout`** | `/login` *(or `/auth`)* and `/logout` | Opens the sign-in window to add AI provider keys or log in to a server, or signs out. |
+| **`/config`** | `/config` | Opens the settings window to view or change TalkOps preferences. |
+| **`/reload` & `/restart`** | `/reload` and `/restart` | `/reload` refreshes your config files, plugins, skills, and MCP tools; `/restart` restarts the background engine. |
+| **`/update` & `/install`** | `/update` and `/install <package>` | Checks for new TalkOps versions (`/update`) or installs optional add-on packages (`/install`). |
+| **`/theme`** | `/theme` | Switches between dark, light, and custom color themes. |
+| **`/notifications`, `/timestamps`, `/scrollbar`** | `/notifications`, `/timestamps`, `/scrollbar` | Customizes notifications, toggles message timestamps, or shows/hides the scrollbar. |
+| **`/version`, `/bug`, `/help`** | `/version`, `/bug`, `/help` | Shows version info, reports an issue, or displays the help guide. |

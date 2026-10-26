@@ -328,10 +328,11 @@ COMMAND_DESCRIPTORS: tuple[CommandDescriptor, ...] = (
     CommandDescriptor(
         name="/logout",
         handler_type=LogoutHandler,
-        description="Revoke stored API credentials for current session",
-        bypass_tier=BypassTier.QUEUED,
-        ui_mode="inline",
-        hidden_keywords="auth logout disconnect revoke credentials",
+        description="Log out, revoke session/API credentials, and reset active conversation",
+        bypass_tier=BypassTier.IMMEDIATE_UI,
+        ui_mode="modal",
+        argument_hint="[provider | all | account]",
+        hidden_keywords="auth logout disconnect revoke credentials signout",
     ),
     CommandDescriptor(
         name="/loop",

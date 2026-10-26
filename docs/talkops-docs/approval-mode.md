@@ -1,158 +1,168 @@
-# Approval Modes & Jev Smart Mode
+# Approval Modes & Smart Routing
 
-TalkOps controls how models are selected and how tool calls are authorized through four runtime modes: **Manual**, **Smart**, **Auto**, and **YOLO**.
+When you are working with cloud infrastructure or local code, not every action carries the same risk—and not every question needs your slowest, most expensive AI model.
 
-While Manual, Auto, and YOLO apply static approval rules on a fixed model, **Smart Mode** (`talkops --smart`, `/smart`, or `Shift+Tab`) activates a dual-engine **TypeSafe AI Jev** pipeline that simultaneously optimizes **model cost and latency (`<70ms`)** and **tool execution safety (`<100ms`)**.
+Checking pod status (`kubectl get pods`) or viewing `git diff` shouldn't interrupt your flow with confirmation prompts. On the other hand, deleting resources, changing production settings, or running destructive shell commands should never happen silently behind your back.
+
+TalkOps gives you four approval modes—**Smart**, **Manual**, **Auto**, and **YOLO**—so you can choose how much autonomy the agent has in every session.
+
+---
+
+## Choosing a Mode at a Glance
+
+| Mode | CLI Flag | TUI Command | Model Selection | How Tool Approvals Work | Best For |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Smart Mode** | `--smart` | `/smart` | **Automatic** (routes between Fast, Standard, and Powerful models) | Safe reads and routine edits run automatically; risky, destructive, or production changes pause for your confirmation | Daily cloud operations, troubleshooting, and coding |
+| **Manual Mode** | `--manual` *(TUI default)* | `/manual` | **Fixed** (uses your selected model) | Read-only lookups run automatically; **every** file edit, shell command, or cloud change asks for your approval first | High-stakes production maintenance and step-by-step review |
+| **Auto Mode** | `--auto` *(Headless `-p` default)* | `/auto` | **Fixed** (uses your selected model) | Uses your active AI model to review actions—approving routine work, blocking unsafe commands, and asking you when unsure | Hands-off coding and refactoring when Smart Mode isn't configured |
+| **YOLO Mode** | `--auto-approve` | *Headless / Server only* | **Fixed** (uses your selected model) | **No prompts**—every tool call and command runs immediately without confirmation | Isolated sandboxes (`--sandbox daytona`), CI/CD jobs, and automated webhooks |
 
 > [!NOTE]
-> 📸 **Image Placeholder — `docs/assets/smart-mode-dual-engine.png`**
-> **What to capture:** TUI screenshot showing a conversation in `Smart Mode` where a quick status check (`kubectl get nodes`) routes to `Tier 0 Fast [effort=off]` in `42ms` and auto-executes via Jev System One (`blast_radius=0.04`), followed by an incident RCA prompt that automatically escalates to `Tier 2 Powerful [effort=max]` and pauses for approval before applying a production Kubernetes patch.
+> **Why isn't YOLO Mode available in the interactive TUI?**
+> To protect your local machine and live cloud accounts, interactive terminal sessions only allow **Manual**, **Smart**, and **Auto**. YOLO Mode is restricted to non-interactive CLI runs (`talkops -p ... --auto-approve`) and background webhook servers (`talkops serve`).
 
 ---
 
-## Compare the four modes
+## Switching Modes
 
-| Mode | CLI Flag | Slash Command | Model & Reasoning Selection | Tool Approval Policy | Best For |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Smart Mode** *(Recommended)* | `--smart` (`-s`) | `/smart` (`Shift+Tab`) | **Dynamic 3-Tier Jev Router (`<70ms`)**: Automatically routes across `fast` (`effort=off`), `standard` (`effort=medium`), and `powerful` (`effort=max`). | **Jev System One Safety Gate (`<100ms`)**: Auto-approves aligned read-only & controlled dev actions; pauses on production mutations or high blast radius. | Daily engineering, incident triage, and unattended `talkops serve` / webhook runs. |
-| **Manual Mode** *(Default)* | *(none)* | `/manual` | Fixed to your selected baseline model (`/model`) and `/effort`. | Prompts `[y/n/e]` before every shell command, file write, or mutating cloud/MCP call. | High-scrutiny production changes where you want to inspect every command before execution. |
-| **Auto Mode** | `--auto-approve` (`-y`) | `/auto` | Fixed to your selected baseline model (`/model`) and `/effort`. | Auto-approves all routine tools; still blocks hardcoded catastrophic destructors (`rm -rf /`, `mkfs`, fork bombs). | Rapid local iteration in non-production repositories. |
-| **YOLO Mode** | `--yolo` | *(CLI flag only)* | Fixed to your selected baseline model (`/model`) and `/effort`. | Bypasses all interactive approval gates. | Ephemeral Docker or Kubernetes sandboxes (`--sandbox docker`). |
+You can switch modes at any time without restarting your session:
+
+- **Keyboard Shortcut (`Shift+Tab`)**: Press `Shift+Tab` inside the TUI to cycle through the interactive modes:
+  **Manual** $\rightarrow$ **Auto** $\rightarrow$ **Smart** $\rightarrow$ **Manual**
+- **Slash Commands**: Type `/smart`, `/manual`, or `/auto` in the chat box.
+- **From an Approval Prompt**: Whenever TalkOps pauses to ask for permission, press `s` to approve the action and switch to **Smart Mode** for the rest of the session.
+- **From the Command Line**:
+  ```bash
+  # Start the interactive TUI in Smart Mode
+  talkops --smart
+
+  # Run a one-off prompt in Smart Mode
+  talkops --smart -p "Audit our S3 buckets for public access"
+
+  # Run a headless task in an isolated sandbox with no approval prompts
+  talkops --sandbox daytona --auto-approve -p "Run the test suite and fix failing snapshots"
+  ```
 
 ---
 
-## Inside Smart Mode: Cost, Latency & Safety
-
-Smart Mode solves two of the biggest operational bottlenecks in agentic DevOps:
-1. **The Cost & Latency Trap**: Using a heavy frontier reasoning model (`claude-opus-4-6`, `o3-pro`, `gemini-3.1-pro`) with high thinking budgets on every turn wastes thousands of reasoning tokens and 5–15 seconds of latency on simple lookups—yet pinning a cheap model fails when an alert requires multi-service root-cause correlation.
-2. **The Approval Fatigue Trap**: Prompting `[y/n]` on every read-only `kubectl get`, `aws describe-*`, or `terraform validate` slows investigations to a crawl—yet blind `--auto-approve` risks unreviewed production mutations.
+## How Each Mode Works
 
 ```mermaid
-flowchart TB
-    subgraph Engine1["Engine 1: Jev Dynamic Model &amp; Reasoning Router (&lt;70ms)"]
-        In["User Prompt / Webhook Payload\n+ routing_state (role, capabilities, workspace_profile)"] --> JevR["TypeSafe AI Jev ModelRouterMiddleware"]
-        JevR -->|Tier 0: Fast| R0["Lightweight Model (Haiku / Mini / Flash-Lite)\nReasoning Effort = 'off'\n80-90% cost reduction • 0ms thinking delay"]
-        JevR -->|Tier 1: Standard| R1["Balanced Model (Sonnet / GPT-5.4 / Flash)\nReasoning Effort = 'medium' or 'low'"]
-        JevR -->|Tier 2: Powerful| R2["Frontier Model (Opus / o3-pro / Gemini Pro)\nReasoning Effort = 'max' or 'xhigh'"]
-    end
+flowchart LR
+    Prompt["Your Prompt"] --> Mode{"Active Mode?"}
+    Mode -- "Manual" --> Ask["Ask You Before Any Change"]
+    Mode -- "Smart" --> SmartGate["Pick Best Model Tier +<br/>Auto-Run Safe Actions"]
+    Mode -- "Auto" --> AutoGate["AI Safety Review +<br/>Auto-Run Routine Tasks"]
+    Mode -- "YOLO (Headless)" --> Run["Run Immediately"]
 
-    subgraph Engine2["Engine 2: Jev System One Tool Safety Classifier (&lt;100ms)"]
-        R0 & R1 & R2 --> Tool["Proposed Tool Call\n(Shell AST Tier, MCP Hints, Subagent, File Edit)"]
-        Tool --> JevS["JevSecurityClassifier\n1. is_mutating (Noul)\n2. blast_radius (Score 0-2)\n3. intent_alignment (Noul)"]
-        JevS -->|Aligned &amp; Controlled| Allow["Auto-Execute (Zero Prompt Token Overhead)"]
-        JevS -->|Prod Mutation / Blast &gt;= 1.2 / Low Confidence| Ask["Interrupt for Human Approval [y/n/e]"]
-    end
+    SmartGate -- "High Risk / Production Change" --> Ask
+    SmartGate -- "Safe & Aligned" --> Run
+    AutoGate -- "Needs Confirmation" --> Ask
+    AutoGate -- "Routine & Safe" --> Run
 ```
 
----
+### 1. Smart Mode (Recommended)
+Powered by **TypeSafe Jev**, Smart Mode does two things for you in the background with virtually zero delay:
 
-## Engine 1: Dynamic Model & Reasoning Routing (`<70ms`)
+- **Picks the Right Model for Each Turn**:
+  - **Fast Tier**: Used for quick questions, reading files, or checking status. Turns off deep reasoning so you get instant replies at a fraction of the cost.
+  - **Standard Tier**: Used for everyday coding, single-file edits, and standard cloud queries.
+  - **Powerful Tier**: Used for complex root-cause analysis, multi-agent investigations, FinOps/security audits, and multi-file refactoring.
+- **Guards Your Environment Automatically**:
+  - Read-only commands, status checks, and routine project file edits run without interrupting you.
+  - TalkOps **always pauses and asks you** if a command could delete data, modify a production environment, change IAM/security rules, or stray outside what you asked for.
 
-Implemented in `src/talkops/middleware/jev_model_router.py` (`JevDynamicModelRouterMiddleware`) and `src/talkops/model/pool.py` (`DynamicModelPoolManager`), Smart Mode evaluates every incoming user message before invoking an LLM.
+### 2. Manual Mode
+Manual Mode is the default when you launch `talkops`.
+- The agent can read files, search your repo, and run read-only cloud status checks freely.
+- The moment it wants to edit a file, run a shell command, or modify infrastructure, it pauses and shows you the exact command or diff so you have the final say.
 
-### How the 3-tier pool cuts token costs and latency
-
-| Tier | Pool Slot | Reasoning Effort Applied | Routing Criteria (`ORCHESTRATOR_ROUTE_CRITERIA`) | Cost & Latency Impact |
-| :--- | :--- | :--- | :--- | :--- |
-| **Tier 0** | **`fast`** | **`effort = "off"`** | Greetings, acknowledgements (`ok`, `thanks`), status checks, single-item lookups (`kubectl get pods`, `git status`), reading a single file, or simple factual questions. | **Cuts token cost by 80–90%** and **eliminates reasoning latency** by disabling chain-of-thought thinking tokens completely. |
-| **Tier 1** | **`standard`** | **`effort = "medium"`** *(or `"low"` for lighter models)* | Focused single-domain DevOps or coding tasks: writing a Dockerfile, modifying a single Terraform resource, explaining an error log, or running a standard CLI workflow. | Optimal price-to-performance balance with bounded thinking overhead. |
-| **Tier 2** | **`powerful`** | **`effort = "max"`** / **`"xhigh"`** / **`"high"`** | Complex multi-step synthesis: delegating to multiple subagents, FinOps/cloud cost optimization, SRE incident root-cause correlation (`CrashLoopBackOff`, `OOMKilled`), cross-service refactoring, or IAM security audits. | Allocates deep reasoning strictly when high-stakes architectural or incident synthesis is required. |
-
-### Context-aware `routing_state`
-
-Unlike naive keyword routers, `JevDynamicModelRouterMiddleware` passes structured runtime telemetry into Jev on every turn:
-- **`agent_role`**: Distinguishes between the top-level `orchestrator` (`ORCHESTRATOR_ROUTE_CRITERIA`) and specialized `subagent` workers (`SUBAGENT_ROUTE_CRITERIA`). A subagent tasked with fetching CloudWatch logs can execute on Tier 0/1 even when the parent orchestrator is synthesizing on Tier 2.
-- **`workspace_profile`**: Automatically detects whether the current workspace contains Infrastructure as Code (`has_iac`: `.tf`, `terragrunt.hcl`, `Pulumi.yaml`), Kubernetes manifests (`has_kubernetes`), and the active `cloud_provider`.
-- **`active_capabilities` & `available_subagents`**: Informs the router which domain tools and specialists are online.
-
-### Confidence escalation safeguards
-
-To guarantee that ambiguous operational prompts are never under-routed to a weaker model, `_apply_confidence_safeguards()` enforces two deterministic promotion rules:
-1. **High-Complexity Marker Escalation**: If Jev classification confidence is `< 0.55` and the prompt contains operational complexity markers (`optimi`, `cost`, `finop`, `crashloop`, `oomkill`, `incident`, `outage`, `architect`, `refactor`, `secur`), the orchestrator automatically escalates to **Tier 2 (`powerful`)** (and subagents escalate to at least **Tier 1 (`standard`)**).
-2. **Low-Confidence Fast Promotion**: If a turn is classified as `fast` (Tier 0) with confidence `< 0.55`, TalkOps automatically promotes it to **`standard` (Tier 1)** so nuanced edge cases are never missed.
-
-### Automatic baseline model restoration
-
-When you switch out of Smart Mode back to Manual (`/manual`) or Auto (`/auto`), TalkOps automatically restores your pre-Smart baseline model (and clears any sticky dynamic route in the LangGraph checkpoint) so manual sessions always run on the exact model you configured.
+### 3. Auto Mode
+Auto Mode is great when you want a hands-off experience without setting up a separate TypeSafe API key.
+- Routine file edits inside your project and read-only Git commands (`git status`, `git diff`, `git log`) run immediately.
+- Other commands are checked by your active AI model against your prompt. Actions that match your request are approved; dangerous actions (like deleting resources, touching `.env` or `.ssh` files, or force-pushing) are blocked.
+- If the agent gets blocked several times in a row or isn't sure whether an action is safe, it automatically falls back and asks you in the terminal.
 
 ---
 
-## Engine 2: System One Tool Safety Classifier (`<100ms`)
+## Approving or Rejecting Actions in the TUI
 
-Implemented in `src/talkops/security/jev_classifier.py` (`JevSecurityClassifier`), Smart Mode evaluates every tool call proposed by the agent in `<100ms` **without making a secondary LLM call or consuming prompt tokens**.
+Whenever TalkOps pauses for your confirmation, it displays a **Tool Approval** card right in the chat stream:
 
-### What context is evaluated?
+![TalkOps TUI Tool Approval Card](../assets/approval-tui-hitl-card.png)
 
-Before scoring, TalkOps enriches the tool call with deterministic metadata:
-- **Shell Commands (`execute`)**: Pre-parsed by TalkOps's AST shell analyzer into safety tiers (`SAFE`, `CAUTIOUS`, `DANGEROUS`, `CATASTROPHIC`), detecting subshells, pipes, redirects, and cloud CLI verbs.
-- **MCP Tools**: Enriched with Model Context Protocol annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`).
-- **Subagent Dispatches (`task`)**: Enriched with the target subagent's domain (`aws`, `k8s`, `iac`, `security`) and capability boundaries (`can_mutate_cloud`, `can_execute_shell`).
-- **Environment Context**: Includes the active `environment` (`development`, `staging`, `production`) and recent user intent.
-
-### The three calibrated Jev primitives
-
-`JevSecurityClassifier` evaluates three calibrated primitives simultaneously:
-
-1. **`is_mutating` (`Noul` binary probability)**:
-   - Estimates the probability that the action alters files, infrastructure, or service state.
-   - Treated as mutating when `p_yes >= 0.30`.
-2. **`blast_radius` (`Score` 0–2 expected value)**:
-   - `0` = **Negligible**: Read-only queries, local scratch files, ephemeral dry-runs (`terraform plan`, `kubectl diff`).
-   - `1` = **Controlled**: Scoped, reversible changes in development or staging environments.
-   - `2` = **Critical**: Production mutations, IAM/security policy modifications, database drops, or multi-resource deletions.
-3. **`intent_alignment` (`Noul` binary probability)**:
-   - Estimates whether the proposed tool call directly and proportionally serves the user's explicit request.
-   - Immediately interrupts if `p_aligned < 0.60`.
-
-### Deterministic fail-closed rules
-
-Smart Mode **auto-approves** a tool call only when it is aligned (`>= 0.60`), classifier confidence is `>= 0.65`, and its blast radius is negligible or controlled outside production. It **always pauses for human approval (`[y/n/e]`)** if any of the following conditions hold:
-
-- **Unaligned Intent**: `intent_alignment < 0.60`
-- **Critical Blast Radius**: Expected `blast_radius >= 1.2` or probability of critical impact `p_2 >= 0.35`
-- **Production Mutation**: `environment == "production"` and `is_mutating == True` (`p_yes >= 0.30`)
-- **High-Risk Mutating Score**: `is_mutating == True` and `blast_radius >= 0.9`
-- **Low Classifier Confidence**: Overall confidence `< 0.65`
-- **Missing Credential**: `TYPESAFE_API_KEY` is not configured (fails closed to Manual approval)
+You can respond with a single keystroke:
+- **`y`** — **Approve once** (or approve the current batch of actions).
+- **`s`** — **Enable Smart Mode** for this session so routine follow-up steps don't keep prompting you.
+- **`n` or `Esc`** — **Reject** the action immediately.
+- **`Tab`** — **Reject with a reason**: Type a quick note (for example, *"Use the staging profile instead"*) so the agent knows how to adjust its plan.
+- **`e` / `f`** — Expand a long shell command (`e`) or view the full file diff (`f`).
 
 ---
 
-## Configuring Smart Mode
+## Customizing Scoped Permissions (`/permissions`)
 
-### 1. Set your `TYPESAFE_API_KEY`
+If you want finer control over specific categories of actions—such as allowing all file edits while still requiring confirmation for shell commands—use the **Permissions Manager**.
 
-Smart Mode requires a TypeSafe AI API key for sub-100ms Jev routing and safety evaluation:
+![TalkOps Interactive Permissions Manager Modal](../assets/approval-tui-permissions-modal.png)
 
-```bash
-export TYPESAFE_API_KEY="ts-..."
-# Or store it encrypted in ~/.talkops/.state/config.db:
-talkops auth set typesafe ts-...
+Type `/permissions` in the TUI to open the interactive modal, or use slash commands to update rules on the fly:
+
+```text
+/permissions                              # Open the interactive Permissions Manager
+/permissions mode acceptEdits             # Presets: default, acceptEdits, plan, auto, strict
+/permissions grant file:write             # Auto-allow a scope (file:read, file:write, shell:read, shell:write, infra:plan, infra:apply)
+/permissions grant Shell(kubectl get *)   # Auto-allow a specific command pattern
+/permissions revoke shell:write           # Require approval for shell writes again
+/permissions reset                        # Restore default permission rules
 ```
 
-### 2. Configure the 3-tier model pool (`config.toml` or `/pool`)
+> [!TIP]
+> **Need a strict read-only session?**
+> Launch TalkOps with `talkops --read-only` (or run `/cloud mode read-only` in the TUI) to enforce a hard read-only lock across all cloud tools, regardless of which approval mode you are in.
 
-TalkOps automatically builds a 3-tier pool (`fast`, `standard`, `powerful`) from your available provider credentials. You can customize the exact models assigned to each tier in `~/.talkops/config.toml` or `.talkops/config.toml`:
+---
+
+## Setting Up Smart Mode & Your Model Pool
+
+### Step 1: Add Your TypeSafe API Key
+Smart Mode's automatic model routing and safety checks require a `TYPESAFE_API_KEY`:
+
+1. **In the TUI**: Run `/auth`, choose **TypeSafe AI**, and paste your key.
+2. **From the CLI**:
+   ```bash
+   talkops auth set typesafe ts-...
+   ```
+3. **Via Environment Variable**:
+   ```bash
+   export TYPESAFE_API_KEY="ts-..."
+   ```
+
+### Step 2: Configure Your Fast, Standard, and Powerful Models (`/pool`)
+By default, TalkOps automatically picks the best **Fast**, **Standard**, and **Powerful** models from whichever AI provider you have connected.
+
+If you want to choose the exact models for each tier—or mix providers (for example, OpenAI for Fast, Gemini for Standard, and Claude for Powerful)—run `/pool` in the TUI:
+
+![TalkOps Interactive Agent Model Pool Configuration Modal](../assets/approval-tui-pool-modal.png)
+
+You can also inspect or set your model pool with commands or in `~/.talkops/config.toml`:
+
+```text
+/pool                  # Open the visual Model Pool Configuration modal
+/pool status           # View the active models for Fast, Standard, and Powerful tiers
+/pool clear            # Reset back to automatic model selection
+```
 
 ```toml
-[models]
-default = "anthropic:claude-sonnet-4-6"
-pool = [
-  "anthropic:claude-haiku-4-5",   # Tier 0 (fast)     -> effort = "off"
-  "anthropic:claude-sonnet-4-6",  # Tier 1 (standard) -> effort = "medium"
-  "anthropic:claude-opus-4-6"     # Tier 2 (powerful) -> effort = "max"
-]
+# ~/.talkops/config.toml
 
 [security]
+# Default mode on startup: "manual", "smart", or "auto"
 approval_mode = "smart"
-environment = "production"        # Enforces strict fail-closed approval on any mutating action
+
+[agent_pool]
+provider = "multi"
+fast = "openai:gpt-5.4-mini"
+standard = "google_vertexai:gemini-3.8-flash"
+powerful = "anthropic:claude-opus-4-6"
 ```
-
-Inside the TUI, run **`/pool`** at any time to inspect or override the active `fast`, `standard`, and `powerful` slots, or press **`Shift+Tab`** to cycle between Manual, Smart, and Auto modes.
-
----
-
-## Next steps
-
-- **[Model Providers](model-providers.md)** — Configure multi-provider pools across Anthropic, OpenAI, Gemini, Bedrock, and Azure
-- **[`config.toml` Reference](config.toml.md)** — Layer deterministic `[security]` rules (`shell_allow_list`, `blocked_commands`) on top of Smart Mode
-- **[Central Server & Multi-Client Architecture](central-server.md)** — Run `talkops serve --approval-mode smart` for governed team and webhook execution

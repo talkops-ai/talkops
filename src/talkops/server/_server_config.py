@@ -74,6 +74,10 @@ class ServerConfig:
     disable_addons: tuple[str, ...] | None = None
     custom_addons: tuple[str, ...] | None = None
     addons_config_path: str | None = None
+    sandbox_type: str | None = None
+    sandbox_id: str | None = None
+    sandbox_snapshot_name: str | None = None
+    sandbox_setup: str | None = None
 
     def to_env(self) -> dict[str, str]:
         """Convert instance to env."""
@@ -143,6 +147,18 @@ class ServerConfig:
             env["TALKOPS_CUSTOM_ADDONS"] = ",".join(self.custom_addons)
         if self.addons_config_path:
             env["TALKOPS_ADDONS_CONFIG"] = self.addons_config_path
+        if self.sandbox_type and self.sandbox_type not in ("none", "local"):
+            env[f"{SERVER_ENV_PREFIX}SANDBOX_TYPE"] = self.sandbox_type
+            env["TALKOPS_SANDBOX_PROVIDER"] = self.sandbox_type
+        if self.sandbox_id:
+            env[f"{SERVER_ENV_PREFIX}SANDBOX_ID"] = self.sandbox_id
+            env["TALKOPS_SANDBOX_ID"] = self.sandbox_id
+        if self.sandbox_snapshot_name:
+            env[f"{SERVER_ENV_PREFIX}SANDBOX_SNAPSHOT_NAME"] = self.sandbox_snapshot_name
+            env["TALKOPS_SANDBOX_SNAPSHOT"] = self.sandbox_snapshot_name
+        if self.sandbox_setup:
+            env[f"{SERVER_ENV_PREFIX}SANDBOX_SETUP"] = self.sandbox_setup
+            env["TALKOPS_SANDBOX_SETUP_SCRIPT"] = self.sandbox_setup
         return env
 
     @classmethod
@@ -204,6 +220,16 @@ class ServerConfig:
             disable_addons=disable_addons,
             custom_addons=custom_addons,
             addons_config_path=os.environ.get("TALKOPS_ADDONS_CONFIG"),
+            sandbox_type=_read_env_str("SANDBOX_TYPE") or os.environ.get("TALKOPS_SANDBOX_PROVIDER"),
+            sandbox_id=_read_env_str("SANDBOX_ID") or os.environ.get("TALKOPS_SANDBOX_ID"),
+            sandbox_snapshot_name=(
+                _read_env_str("SANDBOX_SNAPSHOT_NAME")
+                or os.environ.get("TALKOPS_SANDBOX_SNAPSHOT")
+            ),
+            sandbox_setup=(
+                _read_env_str("SANDBOX_SETUP")
+                or os.environ.get("TALKOPS_SANDBOX_SETUP_SCRIPT")
+            ),
         )
 
     @classmethod
@@ -248,6 +274,10 @@ class ServerConfig:
         custom_addons: tuple[str, ...] | list[str] | None = None,
         addons_config: str | None = None,
         addons_config_path: str | None = None,
+        sandbox_type: str | None = None,
+        sandbox_id: str | None = None,
+        sandbox_snapshot_name: str | None = None,
+        sandbox_setup: str | None = None,
     ) -> ServerConfig:
         """Construct instance from cli args."""
         from talkops.state.postgres_session import get_postgres_session_uri
@@ -305,6 +335,10 @@ class ServerConfig:
             disable_addons=tuple(disable_addons) if disable_addons else None,
             custom_addons=tuple(custom_addons) if custom_addons else None,
             addons_config_path=addons_config or addons_config_path or os.environ.get("TALKOPS_ADDONS_CONFIG"),
+            sandbox_type=sandbox_type if sandbox_type not in ("none", "local", "") else None,
+            sandbox_id=sandbox_id,
+            sandbox_snapshot_name=sandbox_snapshot_name,
+            sandbox_setup=sandbox_setup,
         )
 
 

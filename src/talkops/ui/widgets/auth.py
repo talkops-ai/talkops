@@ -759,16 +759,34 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
 
             storage = get_credential_storage()
             if self._provider == "talkops" and cleaned:
+                from talkops._constants import DEFAULT_CONTROL_PLANE_URL
+                from talkops.state.remote_session import (
+                    exchange_api_key_for_temporary_token,
+                    set_remote_client_context,
+                )
+
                 prev = storage.load_session()
+                saved_cp_hint = ""
+                if hasattr(storage, "_read_auth_json"):
+                    try:
+                        saved_cp_hint = str(
+                            storage._read_auth_json().get("saved_control_plane_url") or ""
+                        ).strip()
+                    except Exception:
+                        pass
+                effective_srv_url = base_url or (prev.server_url if prev else "")
+                effective_cp_url = (
+                    os.environ.get("TALKOPS_CONTROL_PLANE_URL", "").strip()
+                    or (prev.control_plane_url if prev else "")
+                    or saved_cp_hint
+                    or DEFAULT_CONTROL_PLANE_URL
+                )
                 storage.save_session(
                     StoredSession(
                         api_key=cleaned,
                         api_key_prefix=mask_api_key(cleaned),
-                        server_url=base_url or (prev.server_url if prev else ""),
-                        control_plane_url=(
-                            os.environ.get("TALKOPS_CONTROL_PLANE_URL", "").strip()
-                            or (prev.control_plane_url if prev else "")
-                        ),
+                        server_url=effective_srv_url,
+                        control_plane_url=effective_cp_url,
                         user_id=(prev.user_id if prev else ""),
                         email=(prev.email if prev else ""),
                         org_id=(prev.org_id if prev else ""),
@@ -778,6 +796,34 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
                     ),
                     sync_dotenv=True,
                 )
+                set_remote_client_context(
+                    effective_srv_url or None,
+                    api_key=cleaned,
+                    user_id=(prev.user_id if prev and prev.user_id else None),
+                )
+                try:
+                    import asyncio
+
+                    app_ref = self.app
+
+                    async def _bg_exchange_and_refresh() -> None:
+                        try:
+                            await exchange_api_key_for_temporary_token(
+                                effective_srv_url or None,
+                                api_key=cleaned,
+                                control_plane_url=effective_cp_url or None,
+                                timeout=4.0,
+                                force_refresh=True,
+                            )
+                            from talkops.ui.widgets.welcome import WelcomeBanner
+
+                            app_ref.query_one(WelcomeBanner).refresh_auth()
+                        except Exception:
+                            pass
+
+                    asyncio.create_task(_bg_exchange_and_refresh())
+                except Exception:
+                    pass
             elif cleaned or base_url:
                 storage.set_provider_key(
                     self._provider,

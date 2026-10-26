@@ -260,6 +260,12 @@ class AuthManagerScreen(OpsModalScreen[None]):
         def _on_prompt_closed(result: AuthResult | None) -> None:
             if result == AuthResult.SAVED:
                 self.post_message(self.CredentialSaved(provider))
+                try:
+                    from talkops.ui.widgets.welcome import WelcomeBanner
+
+                    self.app.query_one(WelcomeBanner).refresh_auth()
+                except Exception:
+                    pass
                 if hasattr(self.app, "maybe_start_deferred_server"):
                     import asyncio
                     import contextlib

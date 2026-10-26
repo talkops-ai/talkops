@@ -1,220 +1,277 @@
-# Central Server & Multi-Client Architecture
+# Central Server & Team Collaboration
 
-TalkOps can run as a centralized, multi-tenant execution server (`talkops serve`) that hosts the LangGraph agent runtime, persists threads and long-term memory in PostgreSQL, ingests production webhooks, and accepts concurrent connections from multiple terminal UI (TUI) and headless CLI clients.
+Running TalkOps on your own laptop is great when you are working solo. Wait until an incident hits at 2 AM, though, and working on separate laptops quickly gets messy: one person has the right cloud permissions, another person is looking at the wrong logs, and nobody can see what the last person already tried.
 
-Instead of isolating operational context on individual engineer laptops, deploying a Central Server gives your entire SRE, DevOps, and platform team a shared operational control plane where engineers can inspect live webhook-triggered incident threads, attach from their local terminal, fork investigations (`/fork`), and run headless CI/CD checks against a single governed runtime.
-
-> [!NOTE]
-> 📸 **Image Placeholder — `docs/assets/central-server-multi-client.png`**
-> **What to capture:** Split-screen screenshot showing `talkops serve` running in a server terminal (logging incoming `/api/v1/threads` and `/webhooks/pagerduty` requests) alongside two connected operator terminals (`talkops --server-url http://talkops.internal:2024 --user-id alice` and `--user-id bob`) viewing and resuming threads via `/threads`.
+**`talkops serve` turns TalkOps into a shared server for your team.** Instead of everyone configuring AI keys, cloud credentials, and tools on their own machine, you set them up once on a central server. Your teammates—and your automated CI/CD jobs or monitoring alerts—can then connect to that server from anywhere, share the same workspace, and pick up investigations right where someone else left off.
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <h3>🌐 Shared LangGraph Runtime</h3>
-      <p>Centralize LLM credentials, cloud IAM roles, MCP servers, and Jev Smart Mode routing behind a single hardened server endpoint on port <code>2024</code>.</p>
+      <h3>One Shared Setup</h3>
+      <p>Configure your AI models, cloud access (AWS, GCP, Azure, Kubernetes), and tools in one place instead of on every laptop.</p>
     </td>
     <td width="50%" valign="top">
-      <h3>🐘 PostgreSQL State &amp; Store</h3>
-      <p>Persist conversation checkpoints (<code>TalkOpsPostgresCheckpointer</code>) and long-term cross-thread memory in PostgreSQL with automatic SQLite fallback for single-node setups.</p>
+      <h3>Shared Incident History</h3>
+      <p>Save all conversations and findings in <b>PostgreSQL</b> (for teams) or <b>SQLite</b> (for a single machine) so nothing is lost when someone closes their terminal.</p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <h3>🔐 1-Step JWT Token Exchange</h3>
-      <p>Clients exchange long-lived API keys (<code>oc_live_...</code>) once at <code>POST /api/v1/auth/token</code> for short-lived signed JWTs (<code>eyJ...</code>) verified locally in <code>&lt;1ms</code>.</p>
+      <h3>Private Work + Shared Alerts</h3>
+      <p>Each team member's day-to-day chats stay private to them, while automated alert investigations (from PagerDuty, Datadog, or GitHub) are visible to the whole on-call team.</p>
     </td>
     <td width="50%" valign="top">
-      <h3>🛡️ Per-User Tenant Isolation</h3>
-      <p>Every thread is stamped with <code>metadata["owner"] = user_id</code>, and memory store namespaces are automatically isolated per user (<code>(user_id, ...)</code>).</p>
+      <h3>Simple, Secure Sign-In</h3>
+      <p>Team members sign in once with <code>talkops auth login</code>. TalkOps handles session tokens and renewals automatically in the background.</p>
     </td>
   </tr>
 </table>
 
 ---
 
-## Architecture overview
+## How It Works
 
-When you launch `talkops serve`, TalkOps starts a unified ASGI server (powered by LangGraph Server and Starlette) that exposes four logical surfaces:
+When you run `talkops serve`, the server handles four jobs behind the scenes so your terminal stays fast and lightweight:
 
 ```mermaid
 flowchart LR
-    subgraph Clients["Operator &amp; CI Clients"]
-        C1["TUI Client (Alice)\ntalkops --server-url ..."]
-        C2["TUI Client (Bob)\ntalkops --server-url ..."]
-        C3["CI Pipeline (Headless)\ntalkops -p ... --server-url ..."]
+    subgraph Clients["Your Team & Tools"]
+        C1["Engineer A (Terminal UI)\ntalkops --server-url ..."]
+        C2["Engineer B (Terminal UI)\ntalkops --server-url ..."]
+        C3["CI/CD Pipeline\ntalkops -p ... --server-url ..."]
+        WH["Monitoring & Alerts\nPagerDuty · Alertmanager · Datadog · GitHub · AWS"]
     end
 
-    subgraph CentralServer["Central TalkOps Server (talkops serve :2024)"]
-        Auth["TalkOpsAuthMiddleware\nPOST /api/v1/auth/token\n/.well-known/openid-configuration"]
-        ThreadAPI["Session Management API\n/api/v1/server/info\n/api/v1/threads/*"]
-        GraphAPI["LangGraph Execution API\n/threads, /runs, /assistants"]
-        WebhookAPI["Webhook Dispatcher\n/webhooks/{provider}"]
+    subgraph Server["TalkOps Central Server (Port 2024)"]
+        Auth["Sign-In & Access\nVerifies team members"]
+        Gateway["Session Manager\nLists, resumes & branches chats"]
+        Webhooks["Webhook Receiver\nTurns incoming alerts into investigations"]
+        Agent["TalkOps AI Engine\nRuns cloud & DevOps tools safely"]
     end
 
-    subgraph Storage["Persistence Layer"]
-        PG[("PostgreSQL\nCheckpointer &amp; Store")]
+    subgraph Storage["Database"]
+        DB[("PostgreSQL or SQLite\nSaved Chats & Team Memory")]
     end
 
-    Clients -->|Bearer JWT / API Key| Auth
-    Auth --> ThreadAPI & GraphAPI
-    ThreadAPI & GraphAPI <--> PG
-    WebhookAPI --> GraphAPI
+    C1 & C2 & C3 --> Auth
+    Auth --> Gateway & Agent
+    WH --> Webhooks
+    Webhooks --> Agent
+    Gateway & Agent <--> DB
 ```
 
-1. **LangGraph Execution API (`/threads`, `/runs`, `/assistants`, `/store`)**: Streams real-time agent turns, tool calls, subagent delegations, and human-in-the-loop interrupts to connected TUI and CLI clients via `RemoteAgentClient`.
-2. **Session & Thread Management API (`/api/v1/*`)**: Provides high-speed thread listing, title updates, checkpoint pruning, and thread forking (`RemoteSessionBackend`) with strict owner filtering.
-3. **Authentication & OIDC Discovery (`/api/v1/auth/token`, `/.well-known/*`)**: Handles 1-step API-key-to-JWT token exchange and publishes OpenID Connect / JWKS metadata for cloud workload identity federation.
-4. **Inbound Webhook Listener (`/webhooks/*`)**: Ingests real-time DevOps events on the same port (`2024`) or an isolated `--webhook-port`.
+1. **Runs the AI & Cloud Tools**: Executes cloud checks, Kubernetes commands, and infrastructure tasks on the server using the server's configured permissions.
+2. **Manages Conversations**: Lets you list past sessions, resume an investigation (`-r`), or branch a teammate's session (`/fork`) to try a different idea safely.
+3. **Handles Team Sign-In**: Verifies who is connecting and keeps each person's personal threads separate.
+4. **Listens for Live Alerts (Webhooks)**: Receives alerts from PagerDuty, Alertmanager, Datadog, GitHub, Jenkins, ServiceNow, and AWS SNS, and automatically starts an investigation before an engineer even opens their laptop.
 
 ---
 
-## Launching the central server
+## Step 1: Start the Central Server
 
-Run `talkops serve` on a VM, Kubernetes pod, or ECS service to start the central runtime.
+You can run `talkops serve` on any virtual machine, Docker container, or Kubernetes cluster—or right on your own machine to try it out.
+
+### Quick start (single machine, no database setup needed)
+
+If you just want to test the server or run it on a single host, TalkOps automatically saves everything in a local SQLite file (`~/.talkops/sessions.db`):
+
+```bash
+talkops serve --host 0.0.0.0 --port 2024
+```
+
+### Production setup (with PostgreSQL for teams)
+
+For a shared team server, pass `--postgres-uri` so conversations and long-term memory are stored in PostgreSQL:
 
 ```bash
 talkops serve \
   --host 0.0.0.0 \
   --port 2024 \
   --postgres-uri "postgresql://talkops:password@postgres.internal:5432/talkops" \
-  --auth-mode token \
-  --approval-mode smart \
-  --workspaces-dir /var/lib/talkops/workspaces
+  --approval-mode smart
 ```
 
-### Server CLI flags & environment variables
-
-| Flag | Environment Variable | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `--host` | `TALKOPS_WEBHOOK_HOST` | `0.0.0.0` | Bind address for the Central Server HTTP listener. |
-| `--port` | `TALKOPS_WEBHOOK_PORT` | `2024` | Primary port for LangGraph client connections, `/api/v1/*`, and `/webhooks/*`. |
-| `--webhook-port` | — | Same as `--port` | Optional separate port dedicated exclusively to inbound `/webhooks/*` traffic. |
-| `--webhook-host` | — | Same as `--host` | Optional bind address when `--webhook-port` is set. |
-| `--postgres-uri` | `TALKOPS_POSTGRES_URI` / `POSTGRES_URI` | `None` (SQLite) | PostgreSQL connection string for multi-user checkpointing and store persistence. |
-| `--auth-mode` | `TALKOPS_AUTH_MODE` | `noop` (`token` if keys set) | Authentication enforcement mode: `token` (enforces JWT/API key auth) or `noop` (trusted local network). |
-| `--approval-mode` | `TALKOPS_SERVER_APPROVAL_MODE` | `smart` | Tool safety policy for unattended server/webhook runs (`smart`, `auto`, `yolo`, `manual`). |
-| `--workspaces-dir` | `TALKOPS_WORKSPACES_DIR` | Current directory | Root directory for per-project or per-tenant execution workspaces. |
-| `--model` | `TALKOPS_MODEL` | Active default | Override the default LLM model used by the server's orchestrator graph. |
-
 > [!TIP]
-> **Isolating public webhook ingress from internal operator traffic:** Pass `--port 2024 --webhook-port 8080` to `talkops serve`. You can then expose port `8080` to your public API gateway or load balancer for PagerDuty/GitHub webhooks while keeping port `2024` strictly on your private tailnet or VPN for engineer TUI clients.
+> **Want to keep your team port private while receiving public alerts?**
+> Pass `--port 2024 --webhook-port 8080`. This lets you open port `8080` to receive webhooks from PagerDuty or GitHub, while keeping port `2024` locked down to your company VPN for engineer connections.
+
+### Checking active features and webhook URLs
+
+Before or after starting the server, you can check which server features (called **addons**) and webhook URLs are enabled:
+
+```bash
+# See which server addons are enabled
+talkops serve addons
+
+# See all built-in webhook URLs for PagerDuty, Datadog, GitHub, etc.
+talkops serve list
+```
+
+<p align="center">
+  <img src="../assets/central-server-startup.png" alt="Running talkops serve addons and starting the TalkOps Central Server with talkops serve" width="100%">
+</p>
+<p align="center">
+  <sub><b>Starting the Central Server (<code>talkops serve addons</code> &amp; <code>talkops serve</code>):</b> Checking the enabled server features (<code>client-gateway</code>, <code>core-auth</code>, <code>webhooks</code>) and launching the Central Server on port <code>2024</code>.</sub>
+</p>
+
+<p align="center">
+  <img src="../assets/quickstart-serve-list.png" alt="Running talkops serve list to inspect all registered Central Server webhook endpoints and supported integrations" width="100%">
+</p>
+<p align="center">
+  <sub><b>Viewing Webhook URLs (<code>talkops serve list</code>):</b> Listing all 9 built-in alert and CI/CD integrations ready to receive events on port <code>2024</code>.</sub>
+</p>
 
 ---
 
-## Connecting multiple clients to the server
+## Step 2: Connect from Your Terminal
 
-Once `talkops serve` is running, any number of engineers or CI/CD runners can connect their local `talkops` binary to the central server. Connected clients run a thin local UI while delegating graph execution, tool calls, and checkpoint storage to the remote server.
+Once the server is running, anyone on your team can connect their local `talkops` CLI to it. You get the exact same interactive terminal experience as running locally, except all the heavy lifting happens on the central server.
 
-### Step 1: Log in once with `talkops auth login`
+### Connect directly
 
-Persist your server URL and exchange your API key for a cached, auto-refreshing JWT:
+Pass `--server-url` when starting `talkops`:
+
+```bash
+talkops --server-url http://localhost:2024
+```
+
+<p align="center">
+  <img src="../assets/central-server-client-tui.png" alt="TalkOps Client TUI connected to the Central Server showing central mode and server URL on the Welcome Banner" width="100%">
+</p>
+<p align="center">
+  <sub><b>Connected to the Central Server (<code>talkops --server-url http://localhost:2024</code>):</b> Notice the left side of the welcome banner—it shows <code>v0.3.0b16 · ● ready · central</code> and <code>server · http://localhost:2024</code> so you always know you are connected to a central server rather than running locally (which shows <code>local</code>).</sub>
+</p>
+
+### Save your server login (so you don't have to type flags every time)
+
+Instead of passing `--server-url` and `--api-key` on every command, sign in once:
 
 ```bash
 talkops auth login \
-  --server-url https://talkops.internal:2024 \
+  --server-url http://talkops.internal:2024 \
   --api-key oc_live_9f8e7d6c5b4a... \
-  --user-id alice@company.com
+  --user-id alice
 ```
 
-Verify your active session and JWT expiration at any time:
+You can verify your saved connection at any time with:
 
 ```bash
 talkops auth status
 ```
 
-### Step 2: Launch interactive TUI or headless CLI sessions
+---
 
-If you logged in via `talkops auth login` or exported `TALKOPS_SERVER_URL`, simply run `talkops`. You can also pass connection flags explicitly per invocation:
+## Step 3: Work Together on Investigations
+
+Connecting to a central server makes it easy to hand off work between teammates or inspect automated runs:
 
 ```bash
-# Launch interactive TUI connected to the central server
-talkops --server-url https://talkops.internal:2024 --user-id alice@company.com
+# 1. Open an interactive session as yourself
+talkops --server-url http://talkops.internal:2024 --user-id alice
 
-# Resume a specific remote thread (including a thread created by a webhook alert!)
-talkops --server-url https://talkops.internal:2024 -r 4e8b12a0-9c3d-4f11-8a22-7b6c5d4e3f21
+# 2. Jump straight into an existing conversation (or an automated alert investigation) by its ID
+talkops --server-url http://talkops.internal:2024 -r 4e8b12a0
 
-# Run a headless check in CI/CD against the central server
-talkops -p "Verify staging Kubernetes deployments after release v2.14.0" \
-  --server-url https://talkops.internal:2024 \
-  --api-key "$TALKOPS_API_KEY" \
-  --user-id ci-deploy-bot
+# 3. Run a one-off check from a CI/CD pipeline using the central server
+talkops -p "Check if all pods in production are healthy after deployment" \
+  --server-url http://talkops.internal:2024
 ```
 
-### Step 3: Manage remote threads across the team
+### Helpful commands inside the Terminal UI
 
-Use `talkops threads` from your shell or `/threads` and `/fork` inside the TUI to collaborate on remote sessions:
+While connected to the central server, you can use these slash commands in the chat box:
+- **`/threads`** *(or `/resume`)* — Browse and switch between your past conversations and shared alert investigations.
+- **`/fork`** — Make a copy of the current conversation so you can test a fix or explore a theory without interrupting a teammate who is looking at the same thread.
+- **`/compact`** — Summarize a long conversation to free up context space.
+- **`/tasks`** — Watch or stop long-running background commands running on the server.
+
+---
+
+## Choosing a Server Mode (`--profile`)
+
+By default, `talkops serve` turns on everything you need: team sign-in, interactive terminal connections, and incoming webhooks. If you run a larger environment and want to split those jobs across different servers, you can pick a profile with `--profile`:
+
+| Profile | What It Runs | When to Use It |
+| :--- | :--- | :--- |
+| **`default`** | Team connections + Webhooks | Best for most teams. One server handles both engineer terminals and incoming alerts. |
+| **`api-only`** | Team connections only | Use when you want a dedicated server just for engineers and CI pipelines (no webhooks). |
+| **`webhook-worker`** | Webhooks only | Use when you want dedicated background servers that only process incoming alerts. |
+| **`enterprise-full`** | Everything + Enterprise Addons | Enables all built-in features plus any extra enterprise or custom addons you have installed. |
 
 ```bash
-# List threads stored on the central server
-talkops threads list --server-url https://talkops.internal:2024 --user-id alice@company.com -n 20
-
-# Delete a remote thread
-talkops threads delete 4e8b12a0-9c3d-4f11-8a22-7b6c5d4e3f21 --server-url https://talkops.internal:2024
+# Example: Run a server dedicated only to engineer terminal sessions
+talkops serve --profile api-only --port 2024 --postgres-uri "$TALKOPS_POSTGRES_URI"
 ```
 
-Inside an active TUI session connected to the central server:
-- Run **`/threads`** to browse and switch between your remote threads or inspect webhook-created incident threads.
-- Run **`/fork [new-title]`** to clone the current remote thread checkpoint into a new independent branch (`POST /api/v1/threads/{id}/fork`) so you can test an alternative remediation hypothesis without disrupting a teammate's session.
-- Run **`/compact`** to summarize conversation history and prune superseded remote checkpoints (`POST /api/v1/threads/{id}/prune`).
+<details>
+<summary><b>Installing or creating custom server addons (Optional)</b></summary>
+
+If your team wants to add custom features to the server—such as a custom Slack bot or an internal audit logger—you can manage server addons with `talkops addon`:
+
+```bash
+# List available addons
+talkops addon list
+
+# Start the server with a custom Python addon or an addons.json config file
+talkops serve --custom-addon ./addons/audit_sink.py:AuditSinkAddon
+talkops serve --addons-config ./.talkops/addons.json
+```
+
+</details>
 
 ---
 
-## Multi-tier authentication & JWT token exchange
+## Common `talkops serve` Options
 
-When `--auth-mode token` is enabled (or when `TALKOPS_SERVER_API_KEYS` / `TALKOPS_JWT_SECRET` / `TALKOPS_CONTROL_PLANE_URL` is set), `TalkOpsAuthMiddleware` protects all client endpoints using a high-performance multi-tier authentication pipeline (`src/talkops/server/auth.py`).
+| Option | Environment Variable | Default | What It Does |
+| :--- | :--- | :--- | :--- |
+| `start` / `list` / `addons` | — | `start` | `start` launches the server; `list` shows webhook URLs; `addons` shows enabled server features. |
+| `--host <ip>` | `TALKOPS_WEBHOOK_HOST` | `0.0.0.0` | Network address the server listens on. |
+| `--port <port>` | `TALKOPS_WEBHOOK_PORT` | `2024` | Main port for client connections and webhooks. |
+| `--webhook-port <port>` | — | Same as `--port` | Optional separate port just for incoming webhooks. |
+| `--postgres-uri <uri>` | `TALKOPS_POSTGRES_URI` | SQLite | PostgreSQL database URL for saving team conversations and memory. |
+| `--approval-mode <mode>` | `TALKOPS_APPROVAL_MODE` | `smart` | Controls how commands are approved (`smart`, `auto`, or `manual`). |
+| `--read-only` / `--dry-run` | `TALKOPS_READ_ONLY` | `False` | Safe mode—allows the AI to inspect resources but blocks any changes or deletions. |
+| `-M`, `--model <spec>` | `TALKOPS_MODEL` | Configured default | Sets the default AI model used by the server (for example, `anthropic:claude-sonnet-4-5`). |
+| `--aws-profile` / `--aws-region` | `AWS_PROFILE` / `AWS_REGION` | Configured default | Sets the default AWS profile and region for server runs. |
+| `--profile <name>` | — | `default` | Chooses which server features to run (`default`, `api-only`, `webhook-worker`, `enterprise-full`). |
+| `-V` / `-q` | `TALKOPS_LOG_LEVEL` | `INFO` | `-V` shows detailed debug logs; `-q` hides live log output in the terminal. |
 
-### How the 1-step API key → JWT exchange works
+<details>
+<summary><b>Advanced: How Server Authentication &amp; HTTP Endpoints Work</b></summary>
 
-1. **Initial Exchange (`POST /api/v1/auth/token`)**: When a client authenticates with a long-lived API key (`oc_live_...`), `TalkOpsClientAuth` exchanges it once at `/api/v1/auth/token` for a short-lived signed JWT (`eyJ...`, default TTL `900s` / 15 minutes).
-2. **Local Cache & Offline Grace Period**: The client stores the JWT in `~/.talkops/.state/auth.json` (`0600` permissions) with a 7-day offline grace period (`TALKOPS_AUTH_GRACE_SECONDS=604800`).
-3. **Sub-Millisecond Verification (`<1ms`)**: On every subsequent request, the client sends `Authorization: Bearer eyJ...` and `X-TalkOps-User-Id: <user_id>`. The server verifies the JWT cryptographic signature locally in `<1ms` without hitting an external database.
-4. **Transparent Auto-Refresh**: When the JWT is within 60 seconds of expiry or receives a `401 Unauthorized`, the client transparently exchanges its stored API key for a fresh JWT and retries the request.
+### How authentication works under the hood
 
-### Supported server authentication backends
+When you connect with an API key (`talkops auth login` or `--api-key`), TalkOps automatically exchanges your long-lived API key at `POST /api/v1/auth/token` for a short-lived session token (15-minute JWT) and renews it in the background.
 
-| Tier | Environment Variables | How Verification Works |
-| :--- | :--- | :--- |
-| **Tier 1: Signed JWT (`<1ms` local)** | `TALKOPS_CONTROL_PLANE_JWKS_URL`, `TALKOPS_JWT_PUBLIC_KEY`, or `TALKOPS_JWT_SECRET` | Verifies `RS256`/`ES256` tokens against cached Control Plane JWKS or a static PEM public key, or `HS256` tokens using `TALKOPS_JWT_SECRET`. Extracts `sub`, `org_id`, `roles`, and `tier`. |
-| **Tier 2: Control Plane Introspection** | `TALKOPS_CONTROL_PLANE_URL` | Validates opaque `oc_live_...` API keys against `POST {CONTROL_PLANE_URL}/v1/auth/introspect` and caches valid identities for `TALKOPS_AUTH_CACHE_TTL` (default `300s`). |
-| **Tier 3: Static Multi-User API Keys** | `TALKOPS_SERVER_API_KEYS` or `TALKOPS_SERVER_API_KEY` | Maps static keys directly to user IDs (e.g., `TALKOPS_SERVER_API_KEYS="alice:oc_key_1,bob:oc_key_2"`) and issues local `HS256` JWTs on `/api/v1/auth/token`. |
+For self-hosted teams without an external auth service, you can configure per-user API keys directly on the server using `TALKOPS_SERVER_API_KEYS`:
 
----
+```bash
+export TALKOPS_SERVER_API_KEYS="alice:oc_live_key_for_alice,bob:oc_live_key_for_bob"
+talkops serve --port 2024
+```
 
-## Multi-tenant thread & memory isolation
+### Built-in HTTP Endpoints
 
-When multiple engineers connect to the same Central Server, TalkOps enforces tenant boundaries across both conversation threads and the LangGraph long-term store:
+If you are integrating external tools or load balancer health checks with `talkops serve`, these are the main HTTP endpoints exposed by the server:
 
-- **Thread Ownership Stamping**: When a user creates or runs a thread, the server stamps `metadata["owner"] = user_id` (and `org_id` when present). Calls to `GET /api/v1/threads` filter results to the authenticated `user_id` unless the caller holds the `admin` role or belongs to the `system` namespace.
-- **Per-User Store Namespace Isolation**: Long-term memory operations (`/store`) automatically scope non-system namespaces under `(user_id, ...)` while allowing read access to shared namespaces (`system`, `global`, `shared`, `skills`, `plugins`).
+| Endpoint | Purpose |
+| :--- | :--- |
+| `GET /api/v1/server/info` | Returns server status, storage type (`postgres` or `sqlite`), and active addons. |
+| `GET /api/v1/addons` | Returns health status for all enabled server addons. |
+| `POST /api/v1/auth/token` | Exchanges an API key for a short-lived session token. |
+| `GET /api/v1/threads` | Lists saved conversations for the signed-in user (plus shared webhook threads). |
+| `POST /api/v1/threads/{id}/fork` | Creates a copy of a conversation so another engineer can branch off safely. |
+| `GET /webhooks/health` | Health check endpoint (`{"status": "ok"}`) for load balancers and Kubernetes probes. |
+| `POST /webhooks/{provider}` | Receives incoming alerts from `pagerduty`, `alertmanager`, `datadog`, `github`, `jenkins`, `servicenow`, `sns`, `cloudevents`, or `generic`. |
 
----
-
-## HTTP API endpoints reference
-
-In addition to standard LangGraph Server routes (`/threads`, `/runs`, `/assistants`, `/store`), `talkops serve` exposes the following TalkOps native endpoints:
-
-| Method & Path | Auth Required | Description |
-| :--- | :--- | :--- |
-| `GET /api/v1/server/info` | Optional | Returns server version, `checkpoint_backend` (`postgres` or `sqlite`), `auth_mode`, and multi-tenant capabilities. |
-| `POST /api/v1/auth/token` | API Key (`Bearer`) | Exchanges a long-lived API key (`oc_live_...`) for a short-lived signed JWT (`eyJ...`). |
-| `GET /api/v1/threads` | Yes (`token` mode) | Lists threads owned by the caller with title, updated timestamp, model, and message count. |
-| `GET /api/v1/threads/{thread_id}` | Yes (`token` mode) | Retrieves metadata and message history for a specific thread. |
-| `PATCH /api/v1/threads/{thread_id}/title` | Yes (`token` mode) | Renames a remote thread (`{"title": "..."}`). |
-| `POST /api/v1/threads/{thread_id}/fork` | Yes (`token` mode) | Clones a remote thread's latest checkpoint into a new `thread_id`. |
-| `POST /api/v1/threads/{thread_id}/prune` | Yes (`token` mode) | Deletes superseded checkpoints while keeping the latest `keep_latest` states. |
-| `DELETE /api/v1/threads/{thread_id}` | Yes (`token` mode) | Permanently deletes a remote thread and all associated checkpoints. |
-| `GET /.well-known/openid-configuration` | Public | OpenID Connect discovery metadata for cloud workload federation (AWS STS / GCP / Azure). |
-| `GET /.well-known/jwks.json` | Public | JSON Web Key Set (`JWKS`) public keys for verifying server-issued tokens. |
-| `GET /webhooks` | Public | Lists all registered inbound webhook provider adapters (`sns`, `pagerduty`, `alertmanager`, etc.). |
-| `GET /webhooks/health` | Public | Health check for the webhook ingestion subsystem. |
-| `GET /webhooks/deliveries` | Public / Token | Lists the 100 most recent webhook deliveries, status codes, and spawned LangGraph `thread_id`s. |
-| `POST /webhooks/{provider}` | Provider Secret / HMAC | Ingests an inbound event from a supported DevOps or observability platform. |
+</details>
 
 ---
 
-## Next steps
+## Next Steps
 
-- **[Webhooks & Event-Driven Automation](webhooks.md)** — Configure PagerDuty, Alertmanager, Datadog, AWS SNS, and GitHub webhook ingestion on your Central Server
-- **[Approval Modes & Jev Smart Mode](approval-mode.md)** — Understand how `--approval-mode smart` governs unattended server runs and optimizes model costs
-- **[Credentials & Authentication](credentials.md)** — Configure `talkops auth login`, Control Plane JWKS, and cloud provider credentials
+- **[Webhooks & Event-Driven Automation](webhooks.md)** — Connect PagerDuty, Alertmanager, Datadog, AWS SNS, ServiceNow, Jenkins, and GitHub to your server
+- **[Approval Modes & Jev Smart Mode](approval-mode.md)** — Learn how Smart Mode keeps automated runs safe while lowering AI model costs
+- **[CLI & Slash Command Reference](cli-reference.md)** — Everyday command guide for the terminal and chat box
+- **[Credentials & Authentication](credentials.md)** — Set up AI provider keys, team login, and cloud access

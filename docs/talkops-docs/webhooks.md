@@ -1,106 +1,141 @@
-# Webhooks & Event-Driven Automation
+# Webhooks & Automated Incident Response
 
-TalkOps listens on HTTP webhooks (`/webhooks/{provider}`) to transform real-time production alerts, CI/CD pipeline failures, and ITSM tickets into autonomous LangGraph investigations—and writes structured Root Cause Analysis (RCA) findings back to your incident management tools.
+> Turn live alerts from PagerDuty, Datadog, Prometheus, AWS, ServiceNow, and GitHub into clear root-cause reports—posted automatically to your tickets and chat channels.
 
-When an alert fires in PagerDuty, Prometheus Alertmanager, Datadog, AWS SNS/CloudWatch, CloudEvents, ServiceNow, Jenkins, GitHub Actions, or Azure Monitor, TalkOps verifies the cryptographic signature, deduplicates alert storms, maps related events for the same incident into a stateful conversation thread, executes diagnostic subagents under Jev Smart Mode guardrails, and posts the RCA back to the originating ticket, pull request, or Slack channel.
+When a production alert goes off at 3 AM or a deployment fails, an on-call engineer usually spends the first 15 to 30 minutes just gathering facts: checking which servers or containers crashed, reading recent logs, seeing what code or configuration changed recently, and posting updates in Slack or PagerDuty.
 
-> [!NOTE]
-> 📸 **Image Placeholder — `docs/assets/webhooks-pipeline-overview.png`**
-> **What to capture:** Screenshot showing `talkops serve` receiving a `POST /webhooks/pagerduty` event, dispatching the investigation in a LangGraph thread with Jev Smart Mode, and posting the formatted Root Cause Analysis back to a PagerDuty Incident Note and Slack channel.
+**TalkOps Webhooks** automate that entire first-responder step. When you run TalkOps in server mode (`talkops serve`), your monitoring, ticketing, and CI/CD tools can send alerts directly to TalkOps. Within seconds, TalkOps starts a safe investigation, finds the root cause, and posts a clear **Root Cause Analysis (RCA)** report back to your team in Slack, Microsoft Teams, Discord, PagerDuty, ServiceNow, or GitHub.
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <h3>🔌 9 Built-in Provider Adapters</h3>
-      <p>Out-of-the-box normalization for <code>sns</code>, <code>pagerduty</code>, <code>alertmanager</code>, <code>cloudevents</code>, <code>jenkins</code>, <code>github</code>, <code>datadog</code>, <code>servicenow</code>, and <code>generic</code> (including native Azure Monitor Common Alert Schema, Opsgenie, Jira, ArgoCD, and GitLab).</p>
+      <h3>Works with Your Existing Tools</h3>
+      <p>Connects out of the box with <b>PagerDuty, Prometheus Alertmanager, Grafana, AWS SNS/CloudWatch, Datadog, ServiceNow, GitHub, Jenkins, Azure Monitor, Opsgenie, Jira, Argo CD, and GitLab</b>.</p>
     </td>
     <td width="50%" valign="top">
-      <h3>🛡️ Storm Deduplication &amp; Throttling</h3>
-      <p>Suppresses duplicate webhook bursts within a configurable TTL window (default <code>300s</code>) and bounds concurrent background agent runs (default <code>5</code>).</p>
+      <h3>Stops Alert Storms &amp; Wasted Spend</h3>
+      <p>If a major outage triggers dozens of identical alerts in a few minutes, TalkOps automatically groups them and runs <b>one</b> investigation instead of paying for 50 duplicate AI runs.</p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <h3>🧵 Stateful Incident-to-Thread Mapping</h3>
-      <p>Routes follow-up alerts sharing the same <code>incident_id</code> into the existing LangGraph thread via <code>ThreadStore</code> so the agent retains full historical context across an evolving outage.</p>
+      <h3>One Continuous Thread per Incident</h3>
+      <p>If an outage evolves—or if an engineer adds a note in PagerDuty—TalkOps routes the new information into the <b>same</b> ongoing investigation so full context is preserved.</p>
     </td>
     <td width="50%" valign="top">
-      <h3>🔄 Bidirectional RCA Write-Backs</h3>
-      <p>Automatically posts completed Root Cause Analysis reports back to PagerDuty Incident Notes, ServiceNow <code>work_notes</code>, GitHub PR/commit comments, Slack webhooks, and custom HTTP callbacks.</p>
+      <h3>Updates Chat &amp; Tickets Automatically</h3>
+      <p>Posts an immediate <code>Investigating...</code> card in Slack, Discord, or Teams, replies in the same thread with the full root-cause report, and writes findings straight into PagerDuty notes, ServiceNow tickets, or GitHub PRs.</p>
     </td>
   </tr>
 </table>
 
 ---
 
-## Starting the webhook listener
+## How Automated Incident Triage Works
 
-Launch the webhook listener via `talkops serve` (or its aliases `talkops webhooks` and `talkops webhook`):
-
-```bash
-# Start central server & webhook listener on port 2024
-talkops serve --host 0.0.0.0 --port 2024 --webhook-secret "$TALKOPS_WEBHOOK_SECRET"
-
-# Or run the alias directly
-talkops webhooks --port 2024 --approval-mode smart
-
-# List all registered webhook providers and endpoint paths
-talkops webhooks list
-```
-
-### Dedicated webhook port (`--webhook-port`)
-
-If you want connected operator TUI clients on an internal port (`2024`) while exposing only `/webhooks/*` to an external API gateway on port `8080`, pass `--webhook-port`:
-
-```bash
-talkops serve \
-  --host 0.0.0.0 \
-  --port 2024 \
-  --webhook-port 8080 \
-  --postgres-uri "postgresql://ops:secret@db:5432/talkops"
-```
-
----
-
-## How the webhook ingestion pipeline works
-
-Every `POST /webhooks/{provider}` request flows through the 8-stage `WebhookDispatcher` pipeline (`src/talkops/webhooks/dispatcher.py`):
+When an alert is sent to TalkOps (`/webhooks/{provider}`), it goes through five simple steps:
 
 ```mermaid
-flowchart TD
-    Req["POST /webhooks/{provider}"] --> Verify["1. Verify HMAC Signature / Bearer Token"]
-    Verify --> Handshake{"2. Challenge Handshake?\n(SNS Confirm / GitHub Ping)"}
-    Handshake -->|Yes| Ack200["Auto-Confirm &amp; Return 200 OK"]
-    Handshake -->|No| Parse["3. Parse &amp; Normalize to WebhookEvent"]
-    Parse --> Filter{"4. Actionable Check\n(Ignore Resolved / Passed Builds)"}
-    Filter -->|Resolved / Ignored| Skip200["Return 200 (status: ignored)"]
-    Filter -->|Actionable| Dedupe{"5. Deduplication Cache\n(TTL: 300s) &amp; Max Concurrent (5)"}
-    Dedupe -->|Duplicate / Throttled| Dedup200["Return 200 (status: deduplicated)"]
-    Dedupe -->|Accepted| Map["6. Resolve Stateful Thread ID (incident_id)\n&amp; RBAC IdentityMapper"]
-    Map --> Run["7. Spawn Background LangGraph Run (202 Accepted)\n+ Fire 'webhook.received' Hook"]
-    Run --> Sink["8. Dispatch Outbound RCA Sinks\n(PagerDuty / ServiceNow / GitHub / Slack / Callback)\n+ Fire 'webhook.completed' Hook"]
+flowchart LR
+    Alert["1. Alert Fires\nPagerDuty · Datadog\nAlertmanager · AWS · GitHub"] --> Filter["2. Verify & Filter Noise\nCheck security secret,\nignore 'Resolved' & duplicates"]
+    Filter --> ChatCard["3. Notify Team in Chat\nPost 'Investigating...' card\nin Slack, Discord, or Teams"]
+    ChatCard --> Investigate["4. Safe AI Investigation\nCheck logs, cloud state & recent\nchanges under Smart Mode guardrails"]
+    Investigate --> Report["5. Deliver Root-Cause Report\nReply in chat thread + update\nPagerDuty, ServiceNow, or GitHub"]
 ```
 
-1. **Cryptographic Verification**: Validates provider-specific HMAC signatures (`X-PagerDuty-Signature`, `X-Hub-Signature-256`, `X-Gitlab-Token`) or shared bearer/query tokens (`Authorization: Bearer <secret>`, `X-Webhook-Secret`, or `?token=<secret>`).
-2. **Protocol Handshakes**: Automatically confirms AWS SNS `SubscriptionConfirmation` requests via HTTP `GET` (`webhooks.sns_auto_confirm = true`) and responds to GitHub `ping` events.
-3. **Normalization (`WebhookEvent`)**: Extracts `event_type`, `severity` (`critical`, `high`, `warning`, `info`), `title`, `summary`, `source_service`, `incident_id`, `dedupe_key`, `repository`, `branch`, `commit_sha`, and constructs a structured DevOps investigation prompt.
-4. **Actionable Filtering**: Automatically ignores `resolved`/`ok` alerts (`ignore_resolved=True`) and successful CI runs (`ignore_non_actionable_ci=True`) so agent compute is spent strictly on active incidents.
-5. **Alert Storm Deduplication & Throttling**: Drops duplicate `dedupe_key` deliveries within `webhooks.dedupe_ttl_seconds` (`300s` default) and caps simultaneous webhook-triggered agent runs at `webhooks.max_concurrent_runs` (`5` default).
-6. **Stateful Thread Mapping & RBAC**: `ThreadStore` maps the event's `incident_id` to a persistent LangGraph `thread_id`. If an incident triggers 5 cascading alerts over 20 minutes, all 5 alerts append to the **same** investigation thread. `IdentityMapper` assigns the appropriate RBAC role and allowed subagent capabilities.
-7. **Asynchronous Execution (`202 Accepted`)**: Immediately returns `202 Accepted` with the `delivery_id` and `thread_id` while executing the LangGraph run in the background. Fires the `webhook.received` lifecycle hook.
-8. **Bidirectional RCA Write-Back**: Upon completion, `dispatch_completion_sinks` posts the agent's Root Cause Analysis back to the originating platform and fires the `webhook.completed` hook.
+1. **Verifies the sender**: Checks the security secret or signature from PagerDuty, GitHub, Datadog, or your monitoring tool to make sure the alert is genuine.
+2. **Filters out noise and duplicates**:
+   - **Ignores recovery messages**: When an alert flips back to `"OK"` or `"Resolved"`, or when a CI build passes, TalkOps skips it so you only spend AI budget on actual problems.
+   - **Blocks alert storms**: Repeated alerts for the same issue within 5 minutes (`300s` by default) are automatically deduplicated, and TalkOps caps how many investigations can run at the exact same time (`5` by default).
+3. **Keeps related events together**: Every incident ID is linked to a saved conversation thread. If 5 cascading alerts fire for the same outage, TalkOps adds them to the existing investigation instead of starting over from scratch.
+4. **Runs a safe investigation**: TalkOps inspects logs, metrics, Kubernetes pods, cloud resources, and recent deployments using your configured safety mode (**Smart Mode** or **Read-Only Mode**).
+5. **Posts the findings where your team works**: As soon as the investigation finishes, TalkOps writes a clean summary and remediation plan back to your chat channel and incident ticket.
 
 ---
 
-## Supported webhook providers
+## What Your Team Sees in Slack, Discord, or Teams
 
-### 1. PagerDuty (`POST /webhooks/pagerduty`)
+When you connect a chat channel (`TALKOPS_WEBHOOK_NOTIFY_CHANNELS`), your team gets a clean, two-step update without cluttering the main channel:
 
-Ingests PagerDuty v3 webhook subscriptions (`incident.triggered`, `incident.escalated`, `incident.reopened`).
+1. **Stage 1 (Main Channel Card)**: As soon as the alert arrives, TalkOps posts an incident summary card showing `Status: Investigating...`. When the investigation finishes, TalkOps updates that same card in place to **`RCA Complete (in thread)`** and adds a **Root Cause Takeaway** summary.
+2. **Stage 2 (Detailed Thread Reply)**: Inside the message thread, TalkOps posts the complete **Automated RCA** report—including the executive summary, affected scope matrix, diagnostic evidence, and recommended fix.
 
-- **Inbound Verification**: `TALKOPS_WEBHOOK_PAGERDUTY_SECRET` (verifies `X-PagerDuty-Signature: v1=<hmac_sha256>`).
-- **Stateful Threading**: Maps `data.id` (`incident_id`) to a persistent LangGraph thread.
-- **Automated Write-Back**: Set `TALKOPS_WEBHOOK_PAGERDUTY_API_KEY` and `TALKOPS_WEBHOOK_PAGERDUTY_FROM_EMAIL` to automatically post the agent's RCA as a **PagerDuty Incident Note** (`POST https://api.pagerduty.com/incidents/{id}/notes`).
+<p align="center">
+  <img src="../assets/webhooks-slack-incident-card.png" alt="Slack parent incident card updated in-place to RCA Complete (in thread) with Alert Summary, Active Signals, Root Cause Takeaway, and Thread ID" width="100%">
+</p>
+<p align="center">
+  <sub><b>Stage 1 — Incident Card in the Main Channel:</b> TalkOps summarizes the incoming alert, lists the active failure signals, updates the status to <code>RCA Complete (in thread)</code>, and highlights the <b>Root Cause Takeaway</b> right on the main card.</sub>
+</p>
+
+<p align="center">
+  <img src="../assets/webhooks-slack-rca-thread.png" alt="Detailed TalkOps Automated RCA posted as a threaded reply inside the Slack incident thread" width="72%">
+</p>
+<p align="center">
+  <sub><b>Stage 2 — Full Root Cause Analysis Inside the Thread:</b> Clicking into the thread shows the full executive summary, incident scope table, and step-by-step diagnostic evidence gathered from your cloud and Kubernetes environment.</sub>
+</p>
+
+---
+
+## Starting the Webhook Server
+
+Your platform or SRE team can start the webhook server with a single command (`talkops serve` or `talkops webhooks`):
+
+```bash
+# 1. Start the server on port 2024 in Smart Mode
+export TALKOPS_WEBHOOK_SECRET="your-shared-webhook-secret"
+talkops serve --host 0.0.0.0 --port 2024 --approval-mode smart
+
+# 2. Or run in strict Read-Only Mode (guarantees the AI can only inspect, never modify, cloud resources)
+talkops webhooks --port 2024 --smart --read-only
+
+# 3. View all supported webhook URLs and their security status
+talkops serve list
+```
+
+<p align="center">
+  <img src="../assets/central-server-startup.png" alt="Starting the TalkOps Central Server and viewing all 9 built-in webhook endpoints" width="100%">
+</p>
+<p align="center">
+  <sub><b>Launching the Webhook Server (<code>talkops serve</code>):</b> Starting the server on port <code>2024</code> in Smart Mode and displaying the ready-to-use webhook URLs for all 9 built-in integrations.</sub>
+</p>
+
+> [!TIP]
+> **Keeping internal team traffic separate from external alerts:** If you want your engineers to connect on a private internal port (`2024`) while opening a separate port (`8080`) on your firewall solely for incoming webhooks, add `--webhook-port 8080`:
+> ```bash
+> talkops serve --host 0.0.0.0 --port 2024 --webhook-port 8080 --smart
+> ```
+
+---
+
+## Supported Alert & CI/CD Integrations
+
+TalkOps includes **9 built-in webhook adapters** (plus **22 shorthand URL aliases**) so you can point almost any monitoring, ticketing, or CI/CD tool straight at your server:
+
+| Integration | Webhook URL Path | Shorthand Aliases | What Triggers an Investigation | Where TalkOps Replies Automatically |
+| :--- | :--- | :--- | :--- | :--- |
+| **PagerDuty** | `/webhooks/pagerduty` | `/webhooks/pd` | Triggered, escalated, or reopened incidents + human notes added to an incident | **PagerDuty Incident Notes** + Slack / Discord / Teams |
+| **Prometheus & Grafana** | `/webhooks/alertmanager` | `/webhooks/prometheus`, `/webhooks/grafana`, `/webhooks/mimir`, `/webhooks/loki`, `/webhooks/vmalert` | Firing alert groups | Slack / Discord / Teams + Custom Callback URL |
+| **AWS SNS, CloudWatch & EventBridge** | `/webhooks/sns` | `/webhooks/cloudwatch`, `/webhooks/eventbridge`, `/webhooks/aws-sns`, `/webhooks/aws` | CloudWatch `ALARM` states, EventBridge failure events, and SNS notifications (auto-confirms AWS topic subscriptions) | Slack / Discord / Teams + Custom Callback URL |
+| **Datadog** | `/webhooks/datadog` | `/webhooks/dd` | Triggered Datadog Monitor and Synthetics alerts | Slack / Discord / Teams + Custom Callback URL |
+| **ServiceNow ITSM** | `/webhooks/servicenow` | `/webhooks/snow`, `/webhooks/itsm` | New or active ServiceNow incidents | **ServiceNow Incident `work_notes`** + Slack / Discord / Teams |
+| **GitHub** | `/webhooks/github` | `/webhooks/gh`, `/webhooks/github-actions` | Failed GitHub Actions runs, failed deployments, new issues, or any PR/issue comment mentioning `@talkops` | **GitHub Issue / PR Comments** + Slack / Discord / Teams |
+| **Jenkins** | `/webhooks/jenkins` | `/webhooks/ci`, `/webhooks/jenkins-ci` | Failed, unstable, or aborted pipeline builds | Slack / Discord / Teams + Custom Callback URL |
+| **CloudEvents (Kubernetes / GitOps)** | `/webhooks/cloudevents` | `/webhooks/argo-events`, `/webhooks/flux`, `/webhooks/tekton`, `/webhooks/knative` | Flux CD, Argo Events, Tekton, and Knative failure events | Slack / Discord / Teams + Custom Callback URL |
+| **Azure Monitor, Opsgenie, Jira, Argo CD & GitLab** | `/webhooks/generic` | `/webhooks/azure-monitor`, `/webhooks/opsgenie`, `/webhooks/jira`, `/webhooks/argocd`, `/webhooks/gitlab`, `/webhooks/custom` | Fired Azure Monitor alerts, Opsgenie alerts, Jira incidents, Argo CD sync failures, GitLab hooks, or custom JSON | Slack / Discord / Teams + Custom Callback URL |
+
+---
+
+## Setup Guide by Tool
+
+### 1. PagerDuty (`/webhooks/pagerduty` or `/webhooks/pd`)
+
+Connects to **PagerDuty v3 Webhooks** (and legacy v2 webhooks).
+
+- **How it works**: Starts an investigation when an incident is triggered, escalated, or reopened. If a responder types a note on the PagerDuty incident (for example, *"Check the recent payment-service deployment"*), PagerDuty sends that note to TalkOps and TalkOps continues the investigation in the same thread—while automatically ignoring its own `[TalkOps Automated RCA]` notes so it never loops.
+- **Automatic PagerDuty Note write-back**: Set `TALKOPS_WEBHOOK_PAGERDUTY_API_KEY` and `TALKOPS_WEBHOOK_PAGERDUTY_FROM_EMAIL` to have TalkOps post the finished RCA directly onto the PagerDuty incident timeline.
+
+<details>
+<summary><b>Example PagerDuty test command (<code>curl</code>)</b></summary>
 
 ```bash
 curl -X POST http://localhost:2024/webhooks/pagerduty \
@@ -108,157 +143,269 @@ curl -X POST http://localhost:2024/webhooks/pagerduty \
   -H "X-PagerDuty-Signature: v1=..." \
   -d '{
     "event": {
-      "id": "01B2C3D4",
+      "id": "01H8X9Z2A3B4C5D6E7",
       "event_type": "incident.triggered",
       "data": {
-        "id": "Q123456789",
+        "id": "Q1A2B3C4D5E6F7",
+        "number": 4821,
         "title": "High 5xx Error Rate on checkout-service (prod-us-east-1)",
         "urgency": "high",
-        "service": {"summary": "checkout-service"}
+        "status": "triggered",
+        "service": {"summary": "checkout-service"},
+        "priority": {"summary": "P1"}
       }
     }
   }'
 ```
 
-### 2. Prometheus Alertmanager (`POST /webhooks/alertmanager`)
+</details>
 
-Ingests Alertmanager group webhook payloads (`firing` alerts), extracting labels (`alertname`, `severity`, `namespace`, `pod`, `service`, `cluster`) and annotations (`summary`, `description`, `runbook_url`).
+### 2. Prometheus Alertmanager & Grafana (`/webhooks/alertmanager` or `/webhooks/grafana`)
 
-- **Inbound Verification**: `TALKOPS_WEBHOOK_SECRET` via `Authorization: Bearer <secret>` or `?token=<secret>`.
-- **Stateful Threading**: Uses `groupKey` / `fingerprint` to correlate grouped alerts into a single thread.
+Connects to Prometheus Alertmanager, Grafana Unified Alerting, VictoriaMetrics, Mimir, and Loki.
 
-### 3. AWS SNS & CloudWatch Alarms (`POST /webhooks/sns`)
+- **How it works**: Groups related firing alerts (such as multiple crashing pods in the same Kubernetes namespace) into a single investigation thread and ignores `"resolved"` notifications automatically.
 
-Ingests AWS SNS HTTP/HTTPS notifications, automatically unwrapping embedded **CloudWatch Alarm** JSON payloads (`AlarmName`, `NewStateValue`, `NewStateReason`, `Namespace`, `MetricName`, `Dimensions`).
+<details>
+<summary><b>Example Alertmanager test command (<code>curl</code>)</b></summary>
 
-- **Automatic Subscription Confirmation**: When you subscribe `https://talkops.company.com/webhooks/sns` to an SNS topic, TalkOps automatically fetches the `SubscribeURL` when `Type == "SubscriptionConfirmation"` (`webhooks.sns_auto_confirm = true`).
+```bash
+curl -X POST http://localhost:2024/webhooks/alertmanager \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TALKOPS_WEBHOOK_SECRET" \
+  -d '{
+    "status": "firing",
+    "groupKey": "{}:{alertname=\"KubePodCrashLooping\", namespace=\"prod-payments\"}",
+    "commonLabels": {
+      "alertname": "KubePodCrashLooping",
+      "severity": "critical",
+      "namespace": "prod-payments",
+      "service": "payments-checkout-api"
+    },
+    "commonAnnotations": {
+      "summary": "Pod payments-checkout-api-6d8f9b7c4-x9k2m in prod-payments is CrashLoopBackOff (exit code 137 / OOMKilled)"
+    },
+    "alerts": [
+      {
+        "status": "firing",
+        "labels": {"pod": "payments-checkout-api-6d8f9b7c4-x9k2m", "severity": "critical"},
+        "annotations": {"description": "Container checkout-worker exceeded memory limit (512Mi)"}
+      }
+    ]
+  }'
+```
 
-### 4. Datadog (`POST /webhooks/datadog` or `/webhooks/dd`)
+</details>
 
-Ingests Datadog Monitor and Synthetics alert webhooks (`alert_transition: Triggered`, `No Data`), extracting monitor tags, host, query, and snapshot links.
+### 3. AWS SNS, CloudWatch Alarms & EventBridge (`/webhooks/sns` or `/webhooks/cloudwatch`)
 
-- **Inbound Verification**: `TALKOPS_WEBHOOK_SECRET` or `TALKOPS_WEBHOOK_SECRET_DATADOG`.
-- **Stateful Threading**: Correlates by `alert_id` or `event_id`.
+Connects to Amazon SNS topics, CloudWatch Alarms, and Amazon EventBridge rules.
 
-### 5. ServiceNow ITSM (`POST /webhooks/servicenow`, `/webhooks/snow`, `/webhooks/itsm`)
+- **Zero-touch AWS setup**: When you add `https://your-server/webhooks/sns` as an HTTPS subscriber in AWS SNS, TalkOps automatically verifies that the confirmation link belongs to AWS (`amazonaws.com`) and confirms the subscription for you.
+- **How it works**: Unwraps CloudWatch Alarm details (metric name, dimensions, account, region, and threshold reason) and EventBridge events, and automatically ignores `"OK"` recovery states.
 
-Ingests ServiceNow Incident webhook payloads (`number`, `sys_id`, `priority`, `urgency`, `short_description`, `cmdb_ci`, `assignment_group`).
+<details>
+<summary><b>Example AWS CloudWatch / SNS test command (<code>curl</code>)</b></summary>
 
-- **Automated Write-Back**: When the payload includes `instance_url` and `sys_id` (and `SERVICENOW_USER` / `SERVICENOW_PASSWORD` or `SERVICENOW_TOKEN` is configured), TalkOps automatically patches the incident's **`work_notes`** (`PATCH {instance_url}/api/now/table/incident/{sys_id}`) with the completed RCA.
+```bash
+curl -X POST http://localhost:2024/webhooks/cloudwatch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "Type": "Notification",
+    "MessageId": "a1b2c3d4-5678-90ab-cdef-111122223333",
+    "TopicArn": "arn:aws:sns:us-east-1:123456789012:prod-cloudwatch-alarms",
+    "Message": "{\"AlarmName\":\"prod-rds-high-cpu\",\"NewStateValue\":\"ALARM\",\"NewStateReason\":\"CPUUtilization exceeded 85%\",\"Region\":\"us-east-1\",\"AWSAccountId\":\"123456789012\",\"Trigger\":{\"Namespace\":\"AWS/RDS\",\"MetricName\":\"CPUUtilization\"}}"
+  }'
+```
 
-### 6. GitHub Actions, Issues & PRs (`POST /webhooks/github`)
+</details>
 
-Ingests GitHub `workflow_run` failures, `check_suite` failures, `issues`, and `pull_request` events.
+### 4. Datadog (`/webhooks/datadog` or `/webhooks/dd`)
 
-- **Inbound Verification**: `TALKOPS_WEBHOOK_GITHUB_SECRET` (verifies `X-Hub-Signature-256: sha256=<hmac_sha256>`).
-- **Automated Write-Back**: Set `TALKOPS_WEBHOOK_GITHUB_TOKEN` (or `GITHUB_TOKEN`) to automatically post the RCA comment back to the originating **Pull Request** (`/issues/{pr}/comments`) or **Commit** (`/commits/{sha}/comments`).
+Connects to Datadog Monitors and Synthetics tests.
 
-### 7. Jenkins CI/CD (`POST /webhooks/jenkins`)
+- **How it works**: Reads the monitor title, priority (`P1`–`P5`), metric query, affected host/service scope, and Datadog alert link. Automatically ignores `"Recovered"` transitions.
 
-Ingests Jenkins Notification Plugin and Pipeline build webhooks (`FAILED`, `UNSTABLE`, `ABORTED`), extracting job name, build number, Git branch/commit, and console failure logs.
+### 5. ServiceNow ITSM (`/webhooks/servicenow` or `/webhooks/snow`)
 
-- **Inbound Verification**: `TALKOPS_WEBHOOK_JENKINS_TOKEN` via `Authorization: Bearer <token>` or `X-Webhook-Token`.
+Connects to ServiceNow Incident webhooks.
 
-### 8. CNCF CloudEvents 1.0 (`POST /webhooks/cloudevents`)
+- **How it works**: Reads the incident number (`INC...`), priority, affected service (`cmdb_ci`),assignment group, and description.
+- **Automatic `work_notes` write-back**: Set `SERVICENOW_URL` and `SERVICENOW_TOKEN` so TalkOps automatically writes the completed `[TalkOps Automated RCA]` back into the ServiceNow ticket's **`work_notes`**.
 
-Ingests standard CNCF CloudEvents (`specversion: "1.0"`) both in structured JSON mode and binary header mode (`ce-id`, `ce-type`, `ce-source`, `ce-subject`)—ideal for **Argo Events**, **Knative Eventing**, **Keptn**, and **Kubernetes Event Exporters**.
+### 6. GitHub Actions, Deployments & `@talkops` Mentions (`/webhooks/github`)
 
-### 9. Generic & Multi-Platform Adapter (`POST /webhooks/{alias}`)
+Connects to GitHub repository and organization webhooks.
 
-The universal adapter handles custom JSON webhooks as well as dedicated aliases:
-- **`POST /webhooks/azure-monitor`**: Native parser for the **Azure Monitor Common Alert Schema** (`data.essentials.alertRule`, `severity`, `monitorCondition`, `alertTargetIDs`, `alertContext`).
-- **`POST /webhooks/opsgenie`**: Opsgenie alert webhooks.
-- **`POST /webhooks/argocd`**: ArgoCD Application sync/health failure notifications.
-- **`POST /webhooks/gitlab`**: GitLab CI pipeline and merge request hooks (verified via `TALKOPS_WEBHOOK_GITLAB_TOKEN` / `X-Gitlab-Token`).
-- **`POST /webhooks/jira`**: Jira issue/incident automation webhooks.
-- **`POST /webhooks/generic`** / **`POST /webhooks/custom`**: Any custom JSON payload (automatically extracts `title`, `summary`, `message`, `severity`, `service`, `incident_id`, and `callback_url`).
+- **What it handles**:
+  1. **Failed CI/CD workflows & deployments**: Automatically investigates failed GitHub Actions runs (`workflow_run`, `check_run`, `check_suite`) and failed `deployment_status` events.
+  2. **`@talkops` on Pull Requests & Issues**: Developers can comment `@talkops why did the staging Terraform plan fail?` on any PR or Issue to trigger an investigation.
+- **Automatic PR/Issue comment write-back**: Set `TALKOPS_WEBHOOK_GITHUB_TOKEN` (or `GITHUB_TOKEN`) and TalkOps replies directly on the GitHub Pull Request or Issue with `### [TalkOps Automated Analysis]`.
+
+### 7. Jenkins CI/CD (`/webhooks/jenkins` or `/webhooks/ci`)
+
+Connects to the Jenkins Notification Plugin or Pipeline `httpRequest` steps.
+
+- **How it works**: Investigates failed, unstable, or aborted builds using the job name, build number, Git branch/commit, and failure log excerpt, while ignoring queued or passing builds.
+
+### 8. Kubernetes & GitOps CloudEvents (`/webhooks/cloudevents`, `/webhooks/flux`, `/webhooks/argo-events`)
+
+Connects to any tool that sends **CNCF CloudEvents 1.0**—including Flux CD, Argo Events, Tekton, and Knative.
+
+### 9. Azure Monitor, Opsgenie, Jira, Argo CD, GitLab & Custom Webhooks (`/webhooks/generic`)
+
+- **Azure Monitor (`/webhooks/azure-monitor`)**: Built-in support for the **Azure Monitor Common Alert Schema**.
+- **Opsgenie, Jira, Argo CD, GitLab & Custom JSON**: Point any internal script or tool to `/webhooks/custom` (or `/webhooks/opsgenie`, `/webhooks/jira`, `/webhooks/argocd`, `/webhooks/gitlab`) with a simple JSON body containing `title`, `summary`, and `severity`.
 
 ---
 
-## Outbound RCA write-back sinks
+## Setting Up Chat & Ticket Notifications
 
-When a webhook-triggered LangGraph investigation finishes, `dispatch_completion_sinks()` (`src/talkops/webhooks/sinks.py`) delivers the formatted Root Cause Analysis to all configured sinks in parallel:
+### 1. Sending threaded updates to Slack, Discord, or Microsoft Teams
 
-| Sink | Configuration Key / Env Var | Behavior |
+To get the two-stage threaded chat experience shown above (`Investigating...` card $\rightarrow$ threaded RCA reply + updated `RCA Complete` card), set `TALKOPS_WEBHOOK_NOTIFY_CHANNELS` along with your chat bot token:
+
+```bash
+# Send webhook alerts and RCA reports to a Slack channel, Discord channel, or Microsoft Teams thread
+export TALKOPS_WEBHOOK_NOTIFY_CHANNELS="slack:C0123456789,discord:112233445566778899,teams:19:ops_alerts@thread.tacv2"
+
+# Add the token for the chat platform(s) you use:
+export SLACK_BOT_TOKEN="xoxb-..."
+export DISCORD_BOT_TOKEN="..."
+export TEAMS_APP_ID="..."
+export TEAMS_APP_PASSWORD="..."
+```
+
+> [!TIP]
+> **Want a simple Slack Incoming Webhook URL instead of a Bot Token?**
+> If you don't want to set up a Slack Bot Token, you can simply set `TALKOPS_WEBHOOK_SLACK_URL="https://hooks.slack.com/services/..."` (or `slack_url` in `config.toml`) and TalkOps will post a single Block Kit RCA card when each investigation finishes.
+
+<details>
+<summary><b>Advanced: Route critical alerts to one channel and CI failures to another (<code>.talkops/addons.json</code>)</b></summary>
+
+You can route different alert sources or severities to separate chat channels in `.talkops/addons.json`:
+
+```json
+{
+  "addons": {
+    "webhooks": {
+      "enabled": true,
+      "max_concurrent_runs": 10,
+      "dedup_ttl_seconds": 300,
+      "outbound_channels": [
+        {
+          "channel": "slack",
+          "conversation_id": "C0123456789",
+          "providers": ["pagerduty", "alertmanager", "sns", "datadog"],
+          "severities": ["critical", "high"],
+          "notify_on": ["received", "completed"]
+        },
+        {
+          "channel": "discord",
+          "conversation_id": "112233445566778899",
+          "providers": ["github", "jenkins"],
+          "severities": ["*"],
+          "notify_on": ["completed"]
+        }
+      ]
+    }
+  }
+}
+```
+
+</details>
+
+### 2. Sending RCA reports back to tickets, PRs, or custom webhooks
+
+| Destination | What to Configure | What Happens When the Investigation Finishes |
 | :--- | :--- | :--- |
-| **PagerDuty Incident Notes** | `webhooks.pagerduty_api_key` (`TALKOPS_WEBHOOK_PAGERDUTY_API_KEY`) + `webhooks.pagerduty_from_email` (`TALKOPS_WEBHOOK_PAGERDUTY_FROM_EMAIL`) | Posts `[TalkOps Automated RCA]` directly to `POST /incidents/{incident_id}/notes` when `provider == "pagerduty"`. |
-| **ServiceNow Work Notes** | `SERVICENOW_TOKEN` or `SERVICENOW_USER` + `SERVICENOW_PASSWORD` | Updates `work_notes` on `/api/now/table/incident/{sys_id}` when `provider == "servicenow"`. |
-| **GitHub PR / Commit Comments** | `webhooks.github_token` (`TALKOPS_WEBHOOK_GITHUB_TOKEN` or `GITHUB_TOKEN`) | Posts `### 🤖 TalkOps Automated Root Cause Analysis` on the PR or commit when `provider == "github"`. |
-| **Slack Incoming Webhook** | `webhooks.slack_url` (`TALKOPS_WEBHOOK_SLACK_URL` or `SLACK_WEBHOOK_URL`) | Posts severity-badged (`🚨 CRITICAL`, `🔥 HIGH`, `⚠️ WARNING`) RCA summary with provider, service, and `thread_id` to Slack for **any** webhook provider. |
-| **Custom HTTP Callback** | `webhooks.callback_url` (`TALKOPS_WEBHOOK_CALLBACK_URL`) or per-payload `"callback_url"` | Sends a structured JSON `POST` containing `delivery_id`, `thread_id`, `provider`, `incident_id`, `severity`, `status`, and `response` to your custom endpoint. |
+| **PagerDuty Incident Notes** | `TALKOPS_WEBHOOK_PAGERDUTY_API_KEY` + `TALKOPS_WEBHOOK_PAGERDUTY_FROM_EMAIL` | Adds `[TalkOps Automated RCA]` as a note on the PagerDuty incident. |
+| **ServiceNow Work Notes** | `SERVICENOW_URL` + `SERVICENOW_TOKEN` | Adds `[TalkOps Automated RCA]` to the ServiceNow incident's `work_notes`. |
+| **GitHub Pull Requests & Issues** | `TALKOPS_WEBHOOK_GITHUB_TOKEN` (or `GITHUB_TOKEN`) | Posts `### [TalkOps Automated Analysis]` as a comment on the Issue or PR. |
+| **Custom HTTP Callback** | `TALKOPS_WEBHOOK_CALLBACK_URL` (or `"callback_url"` in the webhook payload) | Sends a JSON `POST` with the `incident_id`, `thread_id`, `status`, and `analysis` to your internal portal or event bus. |
 
 ---
 
-## Configuring `[webhooks]` in `config.toml`
+## How Engineers Can Jump Into an Alert Thread
 
-You can configure all webhook listener settings, verification secrets, and outbound write-back sinks in `~/.talkops/config.toml` or `.talkops/config.toml`:
+Every Slack card, ticket note, and webhook response includes a **Thread ID** (for example, `ee321cdc-aea6-594b-96cd-d3710ed3bc81`).
+
+If an on-call engineer reads the automated RCA in Slack and wants to ask follow-up questions or apply the fix, they don't have to start over. They can open that exact investigation in their terminal with one command:
+
+```bash
+# Open the webhook's investigation thread in the interactive terminal UI
+talkops --server-url http://talkops.internal:2024 -r ee321cdc
+```
+
+Inside the terminal, the engineer sees every log query and command TalkOps already ran, and can either continue chatting or type **`/fork`** to branch the investigation into their own private workspace.
+
+You can also check recent webhook deliveries at any time over HTTP:
+
+```bash
+curl -s http://localhost:2024/webhooks/deliveries | jq .
+```
+
+---
+
+## Configuration Reference (`config.toml` & Environment Variables)
+
+You can store your webhook settings in `~/.talkops/config.toml` (or `.talkops/config.toml`) instead of passing environment variables on every run:
 
 ```toml
 [webhooks]
 host = "0.0.0.0"
 port = 2024
-dedupe_ttl_seconds = 300
-max_concurrent_runs = 5
-sns_auto_confirm = true
+dedupe_ttl_seconds = 300       # Ignore duplicate alert bursts within 5 minutes
+max_concurrent_runs = 5        # Max simultaneous background investigations
+sns_auto_confirm = true        # Automatically confirm AWS SNS subscriptions
 
-# Inbound verification secrets (prefer env vars or `talkops auth` in production)
+# Inbound security secrets (verifies webhook senders)
 secret = "env:TALKOPS_WEBHOOK_SECRET"
 pagerduty_secret = "env:TALKOPS_WEBHOOK_PAGERDUTY_SECRET"
 github_secret = "env:TALKOPS_WEBHOOK_GITHUB_SECRET"
 gitlab_token = "env:TALKOPS_WEBHOOK_GITLAB_TOKEN"
 jenkins_token = "env:TALKOPS_WEBHOOK_JENKINS_TOKEN"
 
-# Outbound RCA write-back sinks
-slack_url = "https://hooks.slack.com/services/T000/B000/XXXX"
+# Outbound write-back credentials
+slack_url = "env:TALKOPS_WEBHOOK_SLACK_URL"
 pagerduty_api_key = "env:TALKOPS_WEBHOOK_PAGERDUTY_API_KEY"
 pagerduty_from_email = "talkops-bot@company.com"
 github_token = "env:TALKOPS_WEBHOOK_GITHUB_TOKEN"
-callback_url = "https://internal-event-bus.company.com/talkops/rca"
+callback_url = "https://internal-portal.company.com/api/talkops-rca"
 ```
 
----
+<details>
+<summary><b>Complete list of webhook settings and environment variables</b></summary>
 
-## Inspecting deliveries & attaching to webhook threads
+| Setting (`config.toml`) | Environment Variable | Default | Purpose |
+| :--- | :--- | :--- | :--- |
+| `webhooks.host` | `TALKOPS_WEBHOOK_HOST` | `"0.0.0.0"` | Network address the server listens on. |
+| `webhooks.port` | `TALKOPS_WEBHOOK_PORT` | `2024` | Port the server listens on. |
+| `webhooks.secret` | `TALKOPS_WEBHOOK_SECRET` | `None` | Default shared secret (`Authorization: Bearer <secret>`, `X-Webhook-Token`, or `?token=`). |
+| `webhooks.pagerduty_secret` | `TALKOPS_WEBHOOK_PAGERDUTY_SECRET` | `None` | PagerDuty webhook signing secret (`X-PagerDuty-Signature`). |
+| `webhooks.github_secret` | `TALKOPS_WEBHOOK_GITHUB_SECRET` | `None` | GitHub webhook signing secret (`X-Hub-Signature-256`). |
+| `webhooks.gitlab_token` | `TALKOPS_WEBHOOK_GITLAB_TOKEN` | `None` | GitLab webhook token (`X-Gitlab-Token`). |
+| `webhooks.jenkins_token` | `TALKOPS_WEBHOOK_JENKINS_TOKEN` | `None` | Jenkins webhook token (`X-Jenkins-Token` or Bearer). |
+| — | `TALKOPS_WEBHOOK_SECRET_<PROVIDER>` | `None` | Custom secret for any specific provider (e.g., `TALKOPS_WEBHOOK_SECRET_DATADOG`). |
+| `webhooks.dedupe_ttl_seconds` | `TALKOPS_WEBHOOK_DEDUPE_TTL_SECONDS` | `300` | Window (in seconds) to ignore duplicate alerts during an alert storm. |
+| `webhooks.max_concurrent_runs` | `TALKOPS_WEBHOOK_MAX_CONCURRENT_RUNS` | `5` | Maximum number of webhook investigations allowed to run at the same time. |
+| `webhooks.sns_auto_confirm` | `TALKOPS_WEBHOOK_SNS_AUTO_CONFIRM` | `true` | Automatically confirm new AWS SNS topic subscriptions. |
+| — | `TALKOPS_WEBHOOK_IGNORE_RESOLVED` | `true` | Skip `"Resolved"` / `"OK"` alerts and passing CI builds. |
+| — | `TALKOPS_WEBHOOK_INSTRUCTIONS` | Built-in SRE prompt | Custom instructions added to every webhook investigation prompt. |
+| — | `TALKOPS_WEBHOOK_NOTIFY_CHANNELS` | `None` | Threaded chat targets (`slack:<channel>,discord:<channel>,teams:<conv>`). |
+| `webhooks.slack_url` | `TALKOPS_WEBHOOK_SLACK_URL` | `None` | One-step Slack Incoming Webhook URL. |
+| `webhooks.pagerduty_api_key` | `TALKOPS_WEBHOOK_PAGERDUTY_API_KEY` | `None` | PagerDuty API key for posting incident notes. |
+| `webhooks.pagerduty_from_email` | `TALKOPS_WEBHOOK_PAGERDUTY_FROM_EMAIL` | `None` | PagerDuty user email required when posting incident notes. |
+| — | `SERVICENOW_URL` & `SERVICENOW_TOKEN` | `None` | ServiceNow instance URL and token for updating incident `work_notes`. |
+| `webhooks.github_token` | `TALKOPS_WEBHOOK_GITHUB_TOKEN` | `None` | GitHub token for commenting on Issues and Pull Requests. |
+| `webhooks.callback_url` | `TALKOPS_WEBHOOK_CALLBACK_URL` | `None` | Custom URL to receive completed JSON RCA reports. |
 
-You can query recent webhook deliveries and attach an interactive TUI session directly to a webhook-spawned investigation thread:
-
-1. **Query recent deliveries via HTTP**:
-
-   ```bash
-   curl -s http://localhost:2024/webhooks/deliveries | jq .
-   ```
-
-   ```json
-   {
-     "deliveries": [
-       {
-         "delivery_id": "wh_9a8b7c6d5e4f",
-         "provider": "pagerduty",
-         "event_type": "incident.triggered",
-         "severity": "critical",
-         "title": "High 5xx Error Rate on checkout-service",
-         "incident_id": "Q123456789",
-         "thread_id": "3f9d2a11-8c4b-4e7a-9b12-0a1b2c3d4e5f",
-         "status": "completed",
-         "received_at": "2026-10-16T13:20:05Z"
-       }
-     ],
-     "count": 1
-   }
-   ```
-
-2. **Attach your interactive TUI to the webhook's LangGraph thread**:
-
-   ```bash
-   talkops --server-url http://localhost:2024 -r 3f9d2a11-8c4b-4e7a-9b12-0a1b2c3d4e5f
-   ```
-
-   Once attached, you see the full webhook prompt, every diagnostic command and subagent run executed during the autonomous RCA, and can immediately issue follow-up remediation commands or `/fork` the thread.
+</details>
 
 ---
 
-## Next steps
+## Next Steps
 
-- **[Central Server & Multi-Client Architecture](central-server.md)** — Scale `talkops serve` with PostgreSQL and multi-user authentication
-- **[Hooks](hooks.md)** — Trigger local scripts on `webhook.received` and `webhook.completed` events
-- **[Approval Modes & Jev Smart Mode](approval-mode.md)** — Learn how Smart Mode governs tool execution during unattended webhook runs
+- **[Central Server & Team Collaboration](central-server.md)** — Learn how multiple engineers share `talkops serve` with PostgreSQL and single sign-on
+- **[Approval Modes & Smart Mode](approval-mode.md)** — See how Smart Mode keeps automated investigations fast, affordable, and safe in production
+- **[Hooks](hooks.md)** — Run custom local scripts whenever `webhook.received` or `webhook.completed` fires

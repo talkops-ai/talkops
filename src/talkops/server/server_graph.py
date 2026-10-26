@@ -89,6 +89,14 @@ def _build_default_runtime_sync() -> ServerRuntime:
         os.environ["TALKOPS_READ_ONLY"] = "true"
     if config.shell_allow_list:
         os.environ["TALKOPS_SHELL_ALLOW_LIST"] = ",".join(config.shell_allow_list)
+    if config.sandbox_type and config.sandbox_type not in ("none", "local"):
+        os.environ["TALKOPS_SANDBOX_PROVIDER"] = config.sandbox_type
+    if config.sandbox_id:
+        os.environ["TALKOPS_SANDBOX_ID"] = config.sandbox_id
+    if config.sandbox_snapshot_name:
+        os.environ["TALKOPS_SANDBOX_SNAPSHOT"] = config.sandbox_snapshot_name
+    if config.sandbox_setup:
+        os.environ["TALKOPS_SANDBOX_SETUP_SCRIPT"] = config.sandbox_setup
 
     from talkops.model.factory import create_model
 
@@ -107,6 +115,7 @@ def _build_default_runtime_sync() -> ServerRuntime:
         enable_shell=config.enable_shell,
         cwd=effective_cwd,
         project_context=project_context,
+        sandbox_type=config.sandbox_type,
         _defer_mcp_preload=True,
     )
     return ServerRuntime(
@@ -166,6 +175,14 @@ async def _build_default_runtime_async(
         os.environ["TALKOPS_READ_ONLY"] = "true"
     if config.shell_allow_list:
         os.environ["TALKOPS_SHELL_ALLOW_LIST"] = ",".join(config.shell_allow_list)
+    if config.sandbox_type and config.sandbox_type not in ("none", "local"):
+        os.environ["TALKOPS_SANDBOX_PROVIDER"] = config.sandbox_type
+    if config.sandbox_id:
+        os.environ["TALKOPS_SANDBOX_ID"] = config.sandbox_id
+    if config.sandbox_snapshot_name:
+        os.environ["TALKOPS_SANDBOX_SNAPSHOT"] = config.sandbox_snapshot_name
+    if config.sandbox_setup:
+        os.environ["TALKOPS_SANDBOX_SETUP_SCRIPT"] = config.sandbox_setup
 
     from talkops.agent.factory import create_talkops_agent_async
     from talkops.model.factory import create_model
@@ -184,6 +201,7 @@ async def _build_default_runtime_async(
         project_context=project_context,
         checkpointer=checkpointer,
         store=store,
+        sandbox_type=config.sandbox_type,
         defer_mcp_preload=True,
     )
     return ServerRuntime(agent=agent, backend=composite_backend)

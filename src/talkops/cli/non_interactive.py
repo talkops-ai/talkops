@@ -108,6 +108,10 @@ async def _run_headless(
     no_subagents: bool = False,
     tnr: bool = False,
     agent: str | None = None,
+    sandbox_type: str | None = None,
+    sandbox_id: str | None = None,
+    sandbox_snapshot_name: str | None = None,
+    sandbox_setup: str | None = None,
 ) -> int:
     """Execute a single headless run against the server session."""
     # 1. Startup command
@@ -182,6 +186,14 @@ async def _run_headless(
         config_kwargs["no_subagents"] = True
     if tnr:
         config_kwargs["tnr"] = True
+    if sandbox_type and sandbox_type not in ("none", "local"):
+        config_kwargs["sandbox_type"] = sandbox_type
+    if sandbox_id:
+        config_kwargs["sandbox_id"] = sandbox_id
+    if sandbox_snapshot_name:
+        config_kwargs["sandbox_snapshot_name"] = sandbox_snapshot_name
+    if sandbox_setup:
+        config_kwargs["sandbox_setup"] = sandbox_setup
     config = ServerConfig.from_cli_args(**config_kwargs)
 
     if thread_id:
@@ -576,6 +588,10 @@ def run_non_interactive(
     no_subagents: bool = False,
     tnr: bool = False,
     agent: str | None = None,
+    sandbox_type: str | None = None,
+    sandbox_id: str | None = None,
+    sandbox_snapshot_name: str | None = None,
+    sandbox_setup: str | None = None,
 ) -> int:
     """Synchronous entrypoint for running TalkOps non-interactively with timeout and signals."""
     headless_kwargs: dict[str, Any] = {
@@ -616,6 +632,14 @@ def run_non_interactive(
         headless_kwargs["tnr"] = True
     if agent:
         headless_kwargs["agent"] = agent
+    if sandbox_type and sandbox_type not in ("none", "local"):
+        headless_kwargs["sandbox_type"] = sandbox_type
+    if sandbox_id:
+        headless_kwargs["sandbox_id"] = sandbox_id
+    if sandbox_snapshot_name:
+        headless_kwargs["sandbox_snapshot_name"] = sandbox_snapshot_name
+    if sandbox_setup:
+        headless_kwargs["sandbox_setup"] = sandbox_setup
     coro = _run_headless(prompt, **headless_kwargs)
     if timeout is not None:
         coro = asyncio.wait_for(coro, timeout=timeout)
