@@ -151,10 +151,10 @@ When you run a custom command, TalkOps runs a four-stage expansion pipeline befo
 
 ```mermaid
 flowchart LR
-    RAW["Markdown Template\n(.talkops/commands/*.md)"] --> ARGS["1. Argument Substitution\n$ARGUMENTS, $0, $name"]
-    ARGS --> ENV["2. Environment Variables\n${TALKOPS_PROJECT_DIR}, etc."]
-    ENV --> SHELL["3. Inline Shell Execution\n!`cmd` and ```! blocks"]
-    SHELL --> FILES["4. @file Mentions & Directives\nTool rules, model, context: fork"]
+    RAW["Markdown Template<br/>(.talkops/commands/*.md)"] --> ARGS["1. Argument Substitution<br/>$ARGUMENTS, $0, $name"]
+    ARGS --> ENV["2. Environment Variables<br/>${TALKOPS_PROJECT_DIR}, etc."]
+    ENV --> SHELL["3. Inline Shell Execution<br/>!`cmd` and fenced !bash blocks"]
+    SHELL --> FILES["4. @file Mentions & Directives<br/>Tool rules, model, context: fork"]
 ```
 
 ### 1. Positional and Named Arguments

@@ -71,22 +71,22 @@ Whether you run TalkOps on your laptop, in a script, or on a team server, it use
 ```mermaid
 flowchart LR
     subgraph Inputs["How You Use TalkOps"]
-        TUI["Your Terminal\ntalkops --smart"]
-        CI["CI/CD Scripts\ntalkops -p ..."]
-        Remote["Teammates\ntalkops --server-url ..."]
-        Hooks["Live Alerts\nPagerDuty · Datadog · GitHub · AWS"]
+        TUI["Your Terminal<br/>talkops --smart"]
+        CI["CI/CD Scripts<br/>talkops -p ..."]
+        Remote["Teammates<br/>talkops --server-url ..."]
+        Hooks["Live Alerts<br/>PagerDuty · Datadog · GitHub · AWS"]
     end
 
     subgraph Runtime["TalkOps Engine"]
-        Router["Smart Mode\nPicks the right AI model & checks safety"]
-        Orch["Main Assistant\nPlans steps & coordinates work"]
-        Subs["Specialist Agents\nSRE · FinOps · Kubernetes · Terraform · Security"]
+        Router["Smart Mode<br/>Picks the right AI model & checks safety"]
+        Orch["Main Assistant<br/>Plans steps & coordinates work"]
+        Subs["Specialist Agents<br/>SRE · FinOps · Kubernetes · Terraform · Security"]
     end
 
     subgraph Execution["Where Commands Run"]
-        Tools["Cloud CLIs & Tools\nAWS · Azure · GCP · K8s · Terraform"]
-        Sandbox["Isolated Containers (Optional)\nDocker · Modal · Daytona"]
-        State[("Saved History\nSQLite or PostgreSQL")]
+        Tools["Cloud CLIs & Tools<br/>AWS · Azure · GCP · K8s · Terraform"]
+        Sandbox["Isolated Containers (Optional)<br/>Docker · Modal · Daytona"]
+        State[("Saved History<br/>SQLite or PostgreSQL")]
     end
 
     TUI & CI --> Router

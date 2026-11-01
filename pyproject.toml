@@ -1,7 +1,7 @@
 [project]
 name = "talkops-ai"
-version = "0.3.0b17"
-description = "Autonomous Multi-Agent Framework for Software & Infrastructure Coding, Cloud Operations, DevOps, SRE, FinOps & Event-Driven Automation"
+version = "0.3.0"
+description = "Open-Source AI Platform for DevOps, SRE, Cloud, and Platform Engineering"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

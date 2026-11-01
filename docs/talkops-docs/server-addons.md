@@ -36,18 +36,18 @@ TalkOps combines **three built-in default addons**—so remote CLI/TUI sessions,
 ```mermaid
 flowchart TB
     subgraph Sources["1. Addon Sources"]
-        B["Default Built-in Addons\n• core-auth\n• client-gateway\n• webhooks"]
-        MP["Addon Marketplace (.talkops/marketplace.json)\n• channels (Slack, Teams, Discord)\n• webhooks (Standalone package)\n• Custom Org Addons"]
-        EXT["Local & External Addons\n• .talkops/addons.json (package / path)\n• Python entry_points ('talkops.addons')\n• .talkops/addons/*.py & --custom-addon"]
+        B["<b>Default Built-in Addons</b><br/>• core-auth (JWT &amp; SSO)<br/>• client-gateway (SSE &amp; Threads)<br/>• webhooks (9+ Alert Providers)"]
+        MP["<b>Addon Marketplace</b><br/>• .talkops/marketplace.json<br/>• channels (Slack, Teams, Discord)<br/>• webhooks &amp; Custom Org Addons"]
+        EXT["<b>Local &amp; External Addons</b><br/>• .talkops/addons.json (package / path)<br/>• Python entry_points ('talkops.addons')<br/>• .talkops/addons/*.py &amp; --custom-addon"]
     end
 
     subgraph Runtime["2. TalkOps Server Microkernel (talkops serve)"]
-        AM["AddonManager\n• 4-Tier Config & .talkops/.env Secret Resolution\n• Auto-Installs Missing pythonDependencies\n• Dependency DAG Sort & Multi-Port uvicorn Listeners"]
-        GW["AgentRunGateway (In-Memory LangGraph)\n• submit_run() / trigger_run() / stream_run()\n• resume_run() (Interactive HITL Approvals)\n• Deterministic UUIDv5 Thread Mapping"]
-        BUS["HookEventBus (Async Pub/Sub)\n• webhook.received / webhook.completed\n• addon.run.started / interrupted / completed"]
+        AM["<b>AddonManager</b><br/>• 4-Tier Config &amp; .talkops/.env Secret Resolution<br/>• Auto-Installs Missing pythonDependencies<br/>• Dependency DAG Sort &amp; Multi-Port uvicorn Listeners"]
+        GW["<b>AgentRunGateway (In-Memory LangGraph)</b><br/>• submit_run() / trigger_run() / stream_run()<br/>• resume_run() (Interactive HITL Approvals)<br/>• Deterministic UUIDv5 Thread Mapping"]
+        BUS["<b>HookEventBus (Async Pub/Sub)</b><br/>• webhook.received / webhook.completed<br/>• addon.run.started / interrupted / completed"]
     end
 
-    Sources --> AM
+    B & MP & EXT --> AM
     AM <--> GW
     GW <--> BUS
 ```
@@ -61,7 +61,7 @@ When you run `talkops serve` with no extra flags, TalkOps automatically loads an
 | Addon Name | Class | Enabled by Default | Mounted HTTP Endpoints | What It Does |
 | :--- | :--- | :--- | :--- | :--- |
 | **`core-auth`** | [`CoreAuthAddon`](../../src/talkops/addons/builtin/core_auth.py) | **Yes** | `POST /api/v1/auth/token`<br>`GET /.well-known/openid-configuration`<br>`GET /.well-known/jwks.json` | Verifies static API keys (`TALKOPS_SERVER_API_KEYS`), exchanges API keys for short-lived signed JWTs, serves OIDC/JWKS discovery metadata, and enforces per-user thread owner isolation. |
-| **`client-gateway`** | [`ClientGatewayAddon`](../../src/talkops/addons/builtin/client_gateway.py) | **Yes** *(depends on `core-auth`)* | `GET /api/v1/server/info`<br>`GET /api/v1/threads`<br>`GET /api/v1/threads/recent`<br>`GET /api/v1/threads/similar`<br>`GET /api/v1/threads/{thread_id}`<br>`PATCH /api/v1/threads/{thread_id}/title`<br>`POST /api/v1/threads/{thread_id}/fork`<br>`POST /api/v1/threads/{thread_id}/prune`<br>`DELETE /api/v1/threads/{thread_id}`<br>`GET /api/v1/threads/{thread_id}/tasks`<br>`GET /api/v1/threads/{thread_id}/tasks/stream`<br>`GET /api/v1/threads/{thread_id}/tasks/{task_id}/logs`<br>`POST /api/v1/threads/{thread_id}/tasks/{task_id}/action` | Powers remote `talkops --server-url ...` terminal sessions, multi-user conversation history, thread forking/pruning, and real-time Server-Sent Events (SSE) streaming for background shell tasks. |
+| **`client-gateway`** | [`ClientGatewayAddon`](../../src/talkops/addons/builtin/client_gateway.py) | **Yes** *(depends on `core-auth`)* | `GET /api/v1/server/info`<br>`GET /api/v1/threads` (`recent`, `similar`, `{thread_id}`)<br>`POST /api/v1/threads/{thread_id}/{fork,prune}` & `PATCH / DELETE`<br>`GET / POST /api/v1/threads/{thread_id}/tasks` (`stream`, `logs`, `action`) | Powers remote `talkops --server-url ...` terminal sessions, multi-user conversation history, thread forking/pruning, and real-time Server-Sent Events (SSE) streaming for background shell tasks. |
 | **`webhooks`** | [`WebhookAddon`](../../src/talkops/addons/builtin/webhooks.py) | **Yes** | `GET /webhooks`<br>`GET /webhooks/health`<br>`GET /webhooks/deliveries`<br>`POST /webhooks/{provider}` | Ingests alerts from **PagerDuty v3**, **Prometheus Alertmanager / Grafana**, **AWS SNS / CloudWatch / EventBridge**, **CNCF CloudEvents**, **Jenkins**, **GitHub**, **Datadog**, **ServiceNow**, and **Azure Monitor / Generic JSON**. Verifies HMAC signatures, deduplicates alert storms, runs autonomous Root Cause Analysis (RCA), and publishes `webhook.received` and `webhook.completed` events. |
 
 > [!NOTE]

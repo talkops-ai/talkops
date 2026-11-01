@@ -114,10 +114,10 @@ When writing a `matcher` pattern for `PreToolUse`, `PostToolUse`, or `Permission
 
 ```mermaid
 flowchart LR
-    Call["Agent Calls Tool\n(e.g. Bash or Write)"] --> Sanitize["Sanitize Environment\n(Strip Secret Env Vars)"]
+    Call["Agent Calls Tool<br/>(e.g. Bash or Write)"] --> Sanitize["Sanitize Environment<br/>(Strip Secret Env Vars)"]
     Sanitize --> Hook["Run Matching Hook"]
     Hook -->|"Allowed (Exit 0)"| Execute["Execute Tool"]
-    Hook -->|"Denied (Non-Zero / Deny)"| Block["Cancel Tool & Return\nFeedback to Agent"]
+    Hook -->|"Denied (Non-Zero / Deny)"| Block["Cancel Tool & Return<br/>Feedback to Agent"]
 ```
 
 ---

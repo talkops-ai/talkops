@@ -1,0 +1,49 @@
+# Copy this file to .github/workflows/talkops-rubric-pr-check.yml in your repository
+name: TalkOps Infra, Security & FinOps Rubric Check
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "**.tf"
+      - "**.tfvars"
+      - "**.hcl"
+      - "**.yaml"
+      - "**.yml"
+      - "Dockerfile*"
+
+jobs:
+  talkops-rubric-grade:
+    name: Grade PR against Security & FinOps Rubric
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run TalkOps Rubric PR Check
+        uses: talkops-ai/talkops@main
+        with:
+          talkops-api-key: ${{ secrets.TALKOPS_API_KEY }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Optional: use a self-hosted model endpoint (Ollama, vLLM, LiteLLM, or internal OpenAI gateway)
+          # model: "openai:Qwen/Qwen2.5-Coder-32B-Instruct"
+          # model-base-url: ${{ secrets.LLM_BASE_URL }}
+          # model-api-key: ${{ secrets.LLM_API_KEY }}
+          # Optional: enable Jev Smart routing & safety gate
+          # typesafe-api-key: ${{ secrets.TYPESAFE_API_KEY }}
+          # approval-mode: "smart"
+          prompt: >
+            Review the pull request diff and changed Kubernetes, Helm, Docker, and Terraform files.
+            Evaluate every item in the rubric and output a Markdown compliance table with exact file
+            and line references plus minimal remediation snippets for any failing checks.
+          rubric: "@examples/rubrics/k8s-security-rubric.md"
+          read-only: "true"
+          diff-only: "true"
+          post-pr-comment: "true"
+          fail-on-violation: "true"

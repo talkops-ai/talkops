@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # TalkOps — PyPI Release Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
-# Trigger: Push a tag like `v0.3.0b5` or manual workflow_dispatch
+# Trigger: Push a tag like `v0.3.0` or manual workflow_dispatch
 # Result:  Test ➔ Build ➔ Asset Verification ➔ Publish to PyPI
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag (e.g., v0.3.0b5)"
+        description: "Release tag (e.g., v0.3.0)"
         required: true
         type: string
 

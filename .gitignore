@@ -53,3 +53,4 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .langgraph_api*
+docs/research.md

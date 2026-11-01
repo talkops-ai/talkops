@@ -25,19 +25,16 @@ curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/ins
 
 ```bash
 # Using uv (recommended if you already manage Python 3.12+ with uv)
-uv tool install --prerelease=allow talkops-ai
+uv tool install talkops-ai
 
 # Include optional remote sandbox SDKs (Modal, Daytona, Runloop)
-uv tool install --prerelease=allow "talkops-ai[sandboxes]"
+uv tool install "talkops-ai[sandboxes]"
 
 # Using pipx
-pipx install --pip-args="--pre" talkops-ai
+pipx install talkops-ai
 
 # Using pip inside a Python 3.12+ virtual environment
-pip install --pre -U talkops-ai
-
-# Install a pinned release via install.sh
-curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- 0.3.0b17
+pip install -U talkops-ai
 
 # Upgrade an existing installation
 curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- --upgrade
@@ -56,35 +53,40 @@ ops --version
 
 ## 2. Sign In & Configure Credentials
 
-Setting up TalkOps takes three quick steps: authenticating your CLI session, adding at least one model provider key (plus an optional **TypeSafe AI Jev** key for Smart Mode), and pointing to your cloud environment.
+Setting up TalkOps takes three quick steps: signing in once, choosing a local model (`ollama`) or adding your own LLM provider key, and pointing to your cloud environment.
 
-### Step 2a. Authenticate with TalkOps
+### Step 2a. Free One-Click Sign-In
 
-TalkOps requires an active Control Plane or Central Server session before launching the TUI or headless CLI. If you launch `talkops` in an interactive terminal without logging in first, it automatically opens **Browser-Loopback PKCE SSO** for you.
-
-You can also sign in explicitly from the terminal:
+TalkOps uses a lightweight, free sign-in before launching the TUI or headless CLI. If you launch `talkops` in an interactive terminal without logging in first, it automatically opens **Browser-Loopback PKCE SSO** for you.
 
 ```bash
 # Option 1: Interactive Browser SSO (PKCE)
 talkops auth login --sso
 
-# Option 2: Authenticate with a Control Plane or Central Server API key (oc_live_...)
+# Option 2: Authenticate with a free API key (oc_live_...) for CI/CD or headless servers
 talkops auth login --api-key oc_live_...
 ```
 
-### Step 2b. Add an LLM Provider Key & TypeSafe AI Jev Key
+> [!NOTE]
+> **Why does TalkOps ask for a free sign-in?**
+> We are a small engineering team building TalkOps in the open under the Apache-2.0 license. This lightweight sign-in is only used for usage tracking and connecting with early adopters for direct feedback so we can make the framework stable. **We do nothing with your personal details, and your cloud credentials (`~/.aws`, `~/.kube`), source code, and LLM API keys never leave your machine.**
 
-Configure at least one LLM provider (such as Anthropic, OpenAI, Google Gemini, OpenRouter, or AWS Bedrock) and a **TypeSafe AI Jev** key (`typesafe`) to enable `<70ms` Smart Mode model routing and `<100ms` tool safety checks.
+### Step 2b. Choose a Local Model (Ollama) or Add an LLM Provider Key
+
+Configure a local **Ollama** model (`talkops -M ollama:llama3.3`) or at least one cloud LLM provider (such as Anthropic, OpenAI, Google Gemini, OpenRouter, or AWS Bedrock).
 
 `talkops auth set` stores credentials securely in your OS Keyring and `~/.talkops/.state/auth.json` (`0600` permissions):
 
 ```bash
-# Store your primary LLM provider key (choose one or more)
+# Option A: Run 100% locally with Ollama (no LLM API key needed)
+talkops --default-model ollama:llama3.3
+
+# Option B: Store your primary LLM provider key (choose one or more)
 talkops auth set anthropic sk-ant-...
 # talkops auth set openai sk-proj-...
 # talkops auth set google_genai AIza...
 
-# Store your TypeSafe AI Jev key for <70ms Smart Mode routing & <100ms safety checks
+# Optional: Add a free TypeSafe AI Jev key for <70ms Smart Mode routing & <100ms safety checks
 talkops auth set typesafe ts-...
 ```
 

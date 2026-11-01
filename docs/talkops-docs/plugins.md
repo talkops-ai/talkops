@@ -23,11 +23,11 @@ TalkOps automatically classifies each plugin based on the components inside its 
 
 ```mermaid
 flowchart LR
-    MP["Marketplace Catalog\n(talkops-ai/devops-plugins)"] --> CACHE["Shared Versioned Cache\n(~/.talkops/plugins/cache/)"]
-    CACHE --> SCOPE{"Enabled in\nCurrent Scope?"}
+    MP["Marketplace Catalog<br/>(talkops-ai/devops-plugins)"] --> CACHE["Shared Versioned Cache<br/>(~/.talkops/plugins/cache/)"]
+    CACHE --> SCOPE{"Enabled in<br/>Current Scope?"}
 
-    SCOPE -- "Agent Plugin\n(has agents/*.md)" --> SUB["Specialist Subagent\n• Scoped skills & memory\n• Isolated MCP servers"]
-    SCOPE -- "Skill Pack / Integration\n(no agents/*.md)" --> MAIN["Main TalkOps Agent\n• Domain skills\n• Custom /commands & MCP tools"]
+    SCOPE -- "Agent Plugin<br/>(has agents/*.md)" --> SUB["Specialist Subagent<br/>• Scoped skills & memory<br/>• Isolated MCP servers"]
+    SCOPE -- "Skill Pack / Integration<br/>(no agents/*.md)" --> MAIN["Main TalkOps Agent<br/>• Domain skills<br/>• Custom /commands & MCP tools"]
 ```
 
 ### Official TalkOps DevOps Plugin Marketplace
