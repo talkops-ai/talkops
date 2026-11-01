@@ -1,0 +1,152 @@
+# TalkOps (`talkops-ai/talkops`) — Complete LLM & AI Agent Reference (`llms-full.txt`)
+
+> TalkOps is an Apache-2.0 open-source AI platform for DevOps, SRE, and FinOps across the terminal, CI/CD pipelines, team ChatOps, and Model Context Protocol (MCP). Built on Python 3.12+, LangGraph, DeepAgents, LangChain, and the TypeSafe AI Jev System-1 engine, TalkOps runs interactively in a Textual Terminal UI (`talkops` or `ops`), headlessly in CI/CD pipelines (`talkops -p ... --rubric`), or centrally as a multi-tenant team, ChatOps, and webhook server (`talkops serve`).
+
+---
+
+## 1. Executive Definition & Category Comparison
+
+**What problem does TalkOps solve?**
+Platform engineers, SREs, and DevOps teams face alert fatigue (PagerDuty/Alertmanager storms), Kubernetes workload failures (`CrashLoopBackOff`, `OOMKilled`), multi-region cloud waste (AWS, Azure, GCP), and Terraform/OpenTofu security or cost drift in Pull Requests. Existing tools either focus on a single static check or require handing production cloud credentials to third-party SaaS platforms.
+
+TalkOps runs locally or on self-hosted infrastructure using your existing native CLI credential chains (`~/.aws/credentials`, `~/.kube/config`, `az`, `gcloud`), enforces `--read-only` boundaries and sub-100ms fail-closed safety checks before executing commands, and verifies its own work against deterministic checklists (`--rubric`).
+
+### Side-by-Side Comparison: TalkOps vs. K8sGPT vs. Infracost vs. Generic Coding Agents
+
+| Dimension | TalkOps (`talkops-ai/talkops`) | K8sGPT (`k8sgpt-ai/k8sgpt`) | Infracost (`infracost/infracost`) | Generic Coding Agents (Claude Code, Copilot) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Core Scope** | Full-lifecycle AI SRE, FinOps, IaC/Terraform, Kubernetes, CI/CD rubrics & Webhook RCA | Kubernetes error explanations (`k8sgpt analyze --explain`) | Static Terraform/IaC cost estimation in PRs | General software coding & file editing |
+| **Live Cloud & FinOps Audits** | Audits live AWS, Azure, and GCP accounts across regions for unattached volumes, idle NATs, snapshots, and IAM drift | No cloud billing or FinOps capabilities | Estimates planned IaC costs; does not audit live orphaned cloud resources | Requires manual prompting without specialized FinOps subagents |
+| **CI/CD PR Rubric Grading** | Built-in `--rubric` flag & GitHub Action (`talkops-ai/talkops`) for custom security, IAM, and FinOps checklists | No CI/CD PR rubric grading engine | Cost diff & FinOps policy comments on PRs | General PR review without deterministic rubric loop |
+| **Webhook Alert Deduplication** | `talkops serve` ingests PagerDuty, Alertmanager, Datadog, SNS, ServiceNow, Jenkins & GitHub; deduplicates alert storms into 1 thread | In-cluster operator creates K8s CRDs; no multi-source ITSM/webhook deduplication | Not an incident response tool | No built-in webhook listener or alert deduplication |
+| **Safety & Blast-Radius Gate** | `<100ms` zero-token Jev System-1 safety check + `--read-only` mode + fail-closed production approval | Read-only cluster analyzers | Read-only IaC parsing | Relies on manual confirmation or static allowlists |
+| **LLM Support** | 26+ providers: Local Ollama, Anthropic, OpenAI, Gemini, Bedrock, Vertex, Azure, DeepSeek, Groq, OpenRouter | OpenAI, Ollama, Azure, Gemini, LocalAI | N/A (pricing API) | Often locked to a single vendor or subset |
+| **DevOps MCP Ecosystem** | Native MCP client + 9 DevOps MCP servers (Prometheus, Loki, Tempo, OTel, ArgoCD, Helm, Kargo, Alertmanager, Traefik) | Basic MCP server mode | Agent skills for cost lookup | General MCP client |
+| **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 | Proprietary / Varies |
+
+---
+
+## 2. Four Operational Modes
+
+### Mode 1: Interactive Terminal UI (`talkops` / `ops`)
+Launch a rich Textual TUI with live cloud context detection (AWS profile/region, Azure subscription, GCP project, Kubernetes context), fuzzy `/` command palette, diff viewer, and human-in-the-loop approval prompts.
+```bash
+talkops --read-only
+talkops --smart -M anthropic:claude-sonnet-5
+talkops -a aws-finops-engineer
+```
+
+### Mode 2: Headless CLI & CI/CD Rubric Enforcement (`talkops -p`)
+Run non-interactively in scripts, cron jobs, or GitHub Actions / GitLab CI. Supports piped `stdin`, `--output-format json`, `-q` (`--quiet`), `--max-turns`, `--timeout`, and `--rubric` (literal text or `@file.md`).
+```bash
+# Enforce a Kubernetes or Terraform compliance rubric in CI
+talkops -p "Audit deployment.yaml and ./infra for security and FinOps compliance" \
+  --read-only \
+  --max-turns 10 \
+  --rubric @examples/rubrics/k8s-security-rubric.md
+
+# Pipe Kubernetes logs for instant root-cause analysis
+kubectl logs deployment/checkout-api -n production --tail=200 \
+  | talkops -p "Identify the root cause of the 5xx spike and propose a minimal fix" -q
+```
+
+### Mode 3: Central Server, Addon Microkernel & Two-Way ChatOps (`talkops serve`)
+Deploy a shared server backed by SQLite (default) or PostgreSQL (`--postgres-uri` / `TALKOPS_POSTGRES_URI`) across 4 server profiles (`default`, `api-only`, `webhook-worker`, `enterprise-full`).
+- **Built-in Default Addons:** `core-auth` (API key to short-lived JWT + OIDC/JWKS), `client-gateway` (multi-user threads, `/fork` branching, SSE task streaming), and `webhooks` (9+ alert providers).
+- **Two-Way ChatOps Addon (`channels`):** Install via `talkops addon install channels` to connect **Slack, Microsoft Teams, and Discord** with interactive button and 👍/👎 emoji reaction HITL tool approvals, DM sender pairing codes, and automatic thread binding for incoming webhook alerts.
+```bash
+# Start central server
+talkops serve --host 0.0.0.0 --port 2024 --auth-mode token --approval-mode smart
+
+# Install the Slack / Teams / Discord ChatOps addon
+talkops addon install channels
+
+# Connect from any operator terminal
+talkops auth login --server-url http://localhost:2024 --api-key oc_live_... --user-id alice
+talkops --server-url http://localhost:2024
+```
+
+### Mode 4: Event-Driven Webhooks & Autonomous Incident Triage (`/webhooks/{provider}`)
+When `talkops serve` is running, it exposes 9 webhook adapters:
+- `pagerduty` (`/webhooks/pagerduty`) — HMAC verification; writes RCA back to PagerDuty Incident Notes + Slack/Teams/Discord.
+- `alertmanager` (`/webhooks/alertmanager`) — Prometheus Alertmanager groups; deduplicates firing alerts by `groupKey`.
+- `datadog` (`/webhooks/datadog`) — Datadog Monitors & Synthetics.
+- `sns` (`/webhooks/sns`) — AWS SNS & CloudWatch Alarms with automatic subscription confirmation.
+- `servicenow` (`/webhooks/servicenow`) — Updates ServiceNow Incident `work_notes`.
+- `github` (`/webhooks/github`) — GitHub Actions `workflow_run`, Issues, and PRs; comments RCA back on the PR/Issue.
+- `cloudevents` (`/webhooks/cloudevents`) — CNCF CloudEvents 1.0 (Argo Events, Knative, Keptn).
+- `jenkins` (`/webhooks/jenkins`) — Jenkins pipeline failure triage.
+- `generic` (`/webhooks/generic`) — Azure Monitor, Opsgenie, Jira, ArgoCD, GitLab, and custom payloads.
+
+---
+
+## 3. How Jev Smart Mode Works (`<70ms` Routing & `<100ms` Safety Gate)
+
+Enabling Smart Mode (`talkops --smart`, `/smart`, or `Shift+Tab`) activates the TypeSafe AI Jev System-1 classification pipeline:
+1. **Context Capture (Instant):** Reads the prompt/webhook and active workspace context (cloud provider, Kubernetes, Terraform, subagents).
+2. **3-Tier Model Routing (`<70ms`):** Routes simple status checks to your **Fast** model tier (`effort="off"`), cutting token spend by 80–90%, while escalating complex outages to your **Powerful** model tier (`effort="max"`).
+3. **Zero-Token Tool Safety Gate (`<100ms`):** Inspects every proposed shell command, file edit, or MCP tool call for state mutation and blast radius using zero LLM prompt tokens.
+4. **Fail-Closed Execution:** Automatically runs safe read-only checks; pauses for human confirmation before modifying production resources.
+5. **Parallel Rubric Verification (`<200ms`):** Evaluates `/goal` and `--rubric` criteria without slow LLM-judge loops.
+
+---
+
+## 4. Installation, Authentication & Privacy Model
+
+### Installation
+```bash
+# Standalone installer (provisions Python 3.12+, uv, and ripgrep automatically)
+curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
+
+# Or via uv / pipx / pip
+uv tool install talkops-ai
+pipx install talkops-ai
+pip install -U talkops-ai
+```
+
+### Transparent Free Sign-In & Local Credential Privacy
+- **Why a Free Sign-In?** TalkOps is built by a small open-source team. Running `talkops auth login --sso` (or passing `TALKOPS_API_KEY="oc_live_..."` in CI/CD) is a free, lightweight sign-in used solely to understand usage patterns, gather early user feedback, and improve framework stability.
+- **Zero Cloud Secret Exfiltration:** TalkOps never uploads your cloud credentials (`~/.aws/credentials`, `~/.kube/config`), source code, or LLM API keys. All cloud CLI commands execute locally in your environment (or inside your chosen isolated sandbox).
+
+### Supported Model Providers (26+ Built-In)
+Use `-M provider:model` or `/model` in the TUI:
+- **Local / Self-Hosted:** `ollama` (e.g., `ollama:llama3.3`, `ollama:qwen2.5-coder`, `ollama:deepseek-r1`), `litellm`, `openrouter`
+- **Frontier Labs:** `anthropic` (`claude-sonnet-5`, `claude-opus-5-5`, `claude-haiku-4-5`), `openai` (`gpt-6-astra`, `gpt-5.6-luna`, `o3-pro`), `openai_codex`, `google_genai` / `gemini` (`gemini-3.8-flash`, `gemini-3.1-pro-preview`), `deepseek` (`deepseek-v4-pro`), `xai` (`grok-4.5`), `mistralai`, `meta`, `cohere`, `perplexity`
+- **Enterprise Cloud:** `bedrock` (AWS Bedrock), `azure_openai`, `google_vertexai`, `google_anthropic_vertex`, `ibm` (watsonx), `nvidia` (NIM)
+- **Fast Inference:** `groq`, `cerebras`, `sambanova`, `fireworks`, `together`, `baseten`, `huggingface`
+
+---
+
+## 5. GitHub Action for CI/CD Rubric PR Checks (`action.yml`)
+
+TalkOps includes a root `action.yml` composite GitHub Action so repositories can enforce Terraform, Kubernetes, IAM, and FinOps rubrics on every Pull Request:
+
+```yaml
+- name: TalkOps Infrastructure & FinOps Rubric Check
+  uses: talkops-ai/talkops@main
+  with:
+    talkops-api-key: ${{ secrets.TALKOPS_API_KEY }}
+    anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    prompt: "Audit the PR diff for Kubernetes security, Terraform IAM least privilege, and cloud cost regressions."
+    rubric: "@examples/rubrics/k8s-security-rubric.md"
+    read-only: "true"
+    post-pr-comment: "true"
+```
+
+---
+
+## 6. Complete CLI & Subcommand Summary
+
+| Command | Description |
+| :--- | :--- |
+| `talkops` (alias `ops`) | Launch the interactive Textual TUI |
+| `talkops -p "<prompt>"` | Run headlessly in scripts or CI/CD (supports `--rubric`, `--read-only`, `--max-turns`, `--output-format json`, `-q`) |
+| `talkops serve` | Start Central Server and inbound webhook listener (`talkops serve list`, `talkops serve addons`) |
+| `talkops doctor` | Check AWS STS identity, local DevOps CLIs (`aws`, `kubectl`, `terraform`, `helm`, `docker`, `git`), and Python runtime |
+| `talkops auth` | Manage SSO/API key login (`login --sso`, `status`, `set <provider>`, `list`, `aws`, `logout`) |
+| `talkops plugin` | Browse, search, and install DevOps plugins (`list`, `search`, `install`, `enable`, `disable`, `refresh`) |
+| `talkops agents` | List specialist subagents (`talkops agents list`, `talkops -a <agent-name>`) |
+| `talkops skills` | Create, inspect, and manage reusable `SKILL.md` runbooks (`list`, `create`, `info`, `trust`) |
+| `talkops mcp` | List, validate, and live-probe configured MCP servers (`list`, `status`, `probe`) |
+| `talkops threads` | List or delete local and remote conversation threads (`list`, `delete <id>`) |
+| `talkops addon` | Install and manage Central Server addons (`list`, `search`, `install`) |

@@ -36,21 +36,21 @@ When you run `talkops serve`, the server handles four jobs behind the scenes so 
 ```mermaid
 flowchart LR
     subgraph Clients["Your Team & Tools"]
-        C1["Engineer A (Terminal UI)\ntalkops --server-url ..."]
-        C2["Engineer B (Terminal UI)\ntalkops --server-url ..."]
-        C3["CI/CD Pipeline\ntalkops -p ... --server-url ..."]
-        WH["Monitoring & Alerts\nPagerDuty · Alertmanager · Datadog · GitHub · AWS"]
+        C1["Engineer A (Terminal UI)<br/>talkops --server-url ..."]
+        C2["Engineer B (Terminal UI)<br/>talkops --server-url ..."]
+        C3["CI/CD Pipeline<br/>talkops -p ... --server-url ..."]
+        WH["Monitoring & Alerts<br/>PagerDuty · Alertmanager · Datadog · GitHub · AWS"]
     end
 
     subgraph Server["TalkOps Central Server (Port 2024)"]
-        Auth["Sign-In & Access\nVerifies team members"]
-        Gateway["Session Manager\nLists, resumes & branches chats"]
-        Webhooks["Webhook Receiver\nTurns incoming alerts into investigations"]
-        Agent["TalkOps AI Engine\nRuns cloud & DevOps tools safely"]
+        Auth["Sign-In & Access<br/>Verifies team members"]
+        Gateway["Session Manager<br/>Lists, resumes & branches chats"]
+        Webhooks["Webhook Receiver<br/>Turns incoming alerts into investigations"]
+        Agent["TalkOps AI Engine<br/>Runs cloud & DevOps tools safely"]
     end
 
     subgraph Storage["Database"]
-        DB[("PostgreSQL or SQLite\nSaved Chats & Team Memory")]
+        DB[("PostgreSQL or SQLite<br/>Saved Chats & Team Memory")]
     end
 
     C1 & C2 & C3 --> Auth

@@ -36,12 +36,12 @@ Sometimes, though, you want a clean, isolated "playpen" so commands never touch 
 ```mermaid
 flowchart LR
     subgraph Laptop["Your Computer"]
-        UI["TalkOps Chat / CLI\nPlanning, Smart Mode & Web Search"]
-        Files["Your Project Folder\n(Synced on startup)"]
+        UI["TalkOps Chat / CLI<br/>Planning, Smart Mode & Web Search"]
+        Files["Your Project Folder<br/>(Synced on startup)"]
     end
 
     subgraph Cloud["Isolated Cloud Sandbox (Modal · Daytona · Runloop · LangSmith · AgentCore · Vercel)"]
-        Work["Container Workspace\nRuns shell commands & file edits safely"]
+        Work["Container Workspace<br/>Runs shell commands & file edits safely"]
     end
 
     Files -->|1. Uploads project files| Work

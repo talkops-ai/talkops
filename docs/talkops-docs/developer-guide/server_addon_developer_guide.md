@@ -25,30 +25,27 @@ TalkOps Server Mode (`talkops serve`) is built around a pluggable **Server Addon
 ```mermaid
 flowchart TB
     subgraph Discovery["1. Runtime Addon Discovery (AddonManager.discover_addons)"]
-        D1["1. Built-in OSS Addons\n(core-auth, client-gateway, webhooks)"]
-        D2["2. Python Entry Points\n(entry_points group='talkops.addons')"]
-        D3["3. Drop-in Directories\n(~/.talkops/addons/*.py & .talkops/addons/*.py)"]
-        D4["4. Marketplace Addons\n(.talkops/marketplace.json & .talkops/addon.json)"]
-        D5["5. Declarative Config\n(.talkops/addons.json: package / module / path)"]
-        D6["6. CLI & Programmatic\n(--custom-addon / @register_addon)"]
+        D1["<b>1–2. Built-in &amp; Entry Points</b><br/>• Built-in (core-auth, client-gateway, webhooks)<br/>• Python entry_points ('talkops.addons')"]
+        D2["<b>3–4. Drop-in &amp; Marketplace</b><br/>• ~/.talkops/addons/*.py &amp; .talkops/addons/*.py<br/>• .talkops/marketplace.json &amp; addon.json"]
+        D3["<b>5–6. Declarative &amp; CLI</b><br/>• .talkops/addons.json (package / module / path)<br/>• --custom-addon / @register_addon"]
     end
 
-    subgraph Config["2. 4-Tier Config & Dependency Resolution"]
-        C1["Tier 1: AddonSettings Pydantic Defaults"]
-        C2["Tier 2: Server Profile (default, api-only, webhook-worker, custom)"]
-        C3["Tier 3: addons.json, settings.json & Marketplace State"]
-        C4["Tier 4: .talkops/.env + TALKOPS_ADDON_* + CLI Flags"]
-        DEP["Auto-Install Missing pythonDependencies\ninto Active sys.executable"]
+    subgraph Config["2. 4-Tier Config &amp; Dependency Resolution"]
+        C1["<b>Tiers 1–2: Defaults &amp; Profile</b><br/>• AddonSettings Pydantic Defaults<br/>• Server Profile (default, api-only, webhook-worker)"]
+        C2["<b>Tiers 3–4: Manifests &amp; Secrets</b><br/>• addons.json, settings.json &amp; Marketplace State<br/>• .talkops/.env + TALKOPS_ADDON_* + CLI Flags"]
+        DEP["<b>Dependency Installer</b><br/>• Auto-Installs Missing pythonDependencies<br/>into Active sys.executable"]
     end
 
     subgraph Kernel["3. TalkOps Server Microkernel (AddonManager)"]
-        AM["AddonManager\n• Topological Dependency Sort\n• Route, Prefix & Middleware Assembly\n• Multi-Port uvicorn.Server Orchestration\n• Lifespan Startup / Shutdown & Health Checks"]
-        GW["AgentRunGateway (In-Memory Pregel)\n• submit_run() / trigger_run()\n• stream_run()\n• resume_run() (HITL Command)\n• resolve_thread_id() (Deterministic UUIDv5)"]
-        EB["HookEventBus (Async Pub/Sub)\n• webhook.received / webhook.completed\n• addon.run.started / interrupted / completed / failed"]
+        AM["<b>AddonManager</b><br/>• Topological Dependency Sort &amp; Route Assembly<br/>• Multi-Port uvicorn.Server &amp; Lifespan Health Checks"]
+        GW["<b>AgentRunGateway (In-Memory Pregel)</b><br/>• submit_run() / trigger_run() / stream_run()<br/>• resume_run() (HITL) &amp; UUIDv5 Thread Mapping"]
+        EB["<b>HookEventBus (Async Pub/Sub)</b><br/>• webhook.received / webhook.completed<br/>• addon.run.started / interrupted / completed / failed"]
     end
 
-    Discovery --> AM
-    Config --> DEP --> AM
+    D1 --> C1
+    D2 --> C2
+    D3 --> DEP
+    C1 & C2 & DEP --> AM
     AM <--> GW
     GW <--> EB
 ```

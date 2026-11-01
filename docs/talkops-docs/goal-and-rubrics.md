@@ -52,12 +52,12 @@ When you start a goal in the terminal, TalkOps guides the task from initial plan
 
 ```mermaid
 flowchart LR
-    Start["1. Set Your Goal\n/goal <objective>\nor talkops --goal"] --> Draft["2. AI Drafts Proposal\nImplementation Plan,\nQuestions, To-Dos & Criteria"]
-    Draft --> Review["3. You Review & Approve\nAnswer questions (q),\nApprove (y), Edit (e), or Refine (r)"]
-    Review --> Work["4. Guided Execution\nSeeds live To-Do list &\nworks step by step"]
-    Work --> Grade{"5. Rubric Verification\nAre all criteria\nsatisfied?"}
-    Grade -- "Missing items\n(up to max-iterations)" --> Work
-    Grade -- "Cloud / IAM roadblock" --> Blocked["Paused as Blocked\nAsks for your help"]
+    Start["1. Set Your Goal<br/>/goal <objective><br/>or talkops --goal"] --> Draft["2. AI Drafts Proposal<br/>Implementation Plan,<br/>Questions, To-Dos & Criteria"]
+    Draft --> Review["3. You Review & Approve<br/>Answer questions (q),<br/>Approve (y), Edit (e), or Refine (r)"]
+    Review --> Work["4. Guided Execution<br/>Seeds live To-Do list &<br/>works step by step"]
+    Work --> Grade{"5. Rubric Verification<br/>Are all criteria<br/>satisfied?"}
+    Grade -- "Missing items<br/>(up to max-iterations)" --> Work
+    Grade -- "Cloud / IAM roadblock" --> Blocked["Paused as Blocked<br/>Asks for your help"]
     Grade -- "All verified!" --> Done["Goal Complete"]
 ```
 
@@ -111,11 +111,11 @@ When you run in **Smart Mode** (`talkops --smart` or `/smart`) with **TypeSafe J
 
 ```mermaid
 flowchart LR
-    TurnEnd["Assistant Finishes Turn"] --> Extract["1. Extract Real Evidence\nLast 10 commands & outputs,\nmodified files, cloud calls & To-Dos"]
-    Extract --> Jev["2. Jev System-1 Fast-Pass (<200ms)\nChecks all criteria in parallel +\nReadiness Score + Blocker Check"]
-    Jev -- "All Criteria Pass &\nProduction Ready" --> Pass["Verified in <200ms!\nZero LLM Grader Cost"]
-    Jev -- "External Cloud Quota /\nIAM Blocker Detected" --> Block["Marks Goal 'Blocked'\nStops Wasted Retries"]
-    Jev -- "1+ Criteria Unmet" --> Tier2["3. Tier-2 Diagnostic Advice\n1-shot AI prompt writes concise\nfix instructions for failed items only"]
+    TurnEnd["Assistant Finishes Turn"] --> Extract["1. Extract Real Evidence<br/>Last 10 commands & outputs,<br/>modified files, cloud calls & To-Dos"]
+    Extract --> Jev["2. Jev System-1 Fast-Pass (<200ms)<br/>Checks all criteria in parallel +<br/>Readiness Score + Blocker Check"]
+    Jev -- "All Criteria Pass &<br/>Production Ready" --> Pass["Verified in <200ms!<br/>Zero LLM Grader Cost"]
+    Jev -- "External Cloud Quota /<br/>IAM Blocker Detected" --> Block["Marks Goal 'Blocked'<br/>Stops Wasted Retries"]
+    Jev -- "1+ Criteria Unmet" --> Tier2["3. Tier-2 Diagnostic Advice<br/>1-shot AI prompt writes concise<br/>fix instructions for failed items only"]
     Tier2 --> Retry["Assistant Fixes the Gap"]
 ```
 

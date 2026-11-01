@@ -1,0 +1,307 @@
+name: "TalkOps Infra, Security & FinOps Rubric Check"
+description: "Run TalkOps headlessly in CI/CD to grade Terraform, OpenTofu, Kubernetes, and cloud changes against compliance & FinOps rubrics and comment on PRs."
+author: "TalkOps.ai"
+
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  prompt:
+    description: "Task prompt instructing TalkOps what to audit or validate."
+    required: false
+    default: "Audit the repository and pull request changes for Kubernetes security, Terraform/OpenTofu IAM least-privilege, and cloud FinOps cost compliance."
+  rubric:
+    description: "Acceptance criteria rubric to grade against (literal text or @path/to/rubric.md)."
+    required: true
+  talkops-api-key:
+    description: "TalkOps Control Plane or Central Server API key (oc_live_...)."
+    required: true
+  server-url:
+    description: "Optional remote TalkOps Central Server URL (http://...)."
+    required: false
+    default: ""
+  model:
+    description: "Optional model spec in provider:model format (e.g. anthropic:claude-sonnet-4-5, openai:gpt-5.2, ollama:qwen3:8b)."
+    required: false
+    default: ""
+  model-base-url:
+    description: "Optional custom base URL for self-hosted models (Ollama, vLLM, LiteLLM, or OpenAI-compatible endpoints, e.g. http://localhost:11434 or https://llm.internal/v1)."
+    required: false
+    default: ""
+  model-api-key:
+    description: "Optional API key for the selected model provider or self-hosted gateway."
+    required: false
+    default: ""
+  anthropic-api-key:
+    description: "Anthropic API key (ANTHROPIC_API_KEY)."
+    required: false
+    default: ""
+  openai-api-key:
+    description: "OpenAI API key (OPENAI_API_KEY)."
+    required: false
+    default: ""
+  google-api-key:
+    description: "Google Gemini API key (GOOGLE_API_KEY)."
+    required: false
+    default: ""
+  typesafe-api-key:
+    description: "Optional TypeSafe AI Jev API key (TYPESAFE_API_KEY) for <70ms routing and <100ms safety checks."
+    required: false
+    default: ""
+  approval-mode:
+    description: "Approval mode for tool calls: 'smart', 'auto', or 'yolo'."
+    required: false
+    default: "auto"
+  read-only:
+    description: "Enforce read-only mode to block all mutating cloud/K8s/Terraform commands ('true' or 'false')."
+    required: false
+    default: "true"
+  diff-only:
+    description: "Pipe git diff of the pull request into TalkOps stdin ('true' or 'false')."
+    required: false
+    default: "true"
+  agent:
+    description: "Optional specialist subagent name (e.g. aws-finops-engineer)."
+    required: false
+    default: ""
+  max-turns:
+    description: "Maximum agentic turns before stopping."
+    required: false
+    default: "12"
+  timeout:
+    description: "Hard wall-clock timeout in seconds."
+    required: false
+    default: "300"
+  working-directory:
+    description: "Working directory for TalkOps execution."
+    required: false
+    default: "."
+  version:
+    description: "Optional TalkOps version to install (leave empty for latest)."
+    required: false
+    default: ""
+  post-pr-comment:
+    description: "Post or update a sticky Pull Request comment with the Rubric Grade & report ('true' or 'false')."
+    required: false
+    default: "true"
+  fail-on-violation:
+    description: "Fail the GitHub Actions job if the rubric check exits non-zero ('true' or 'false')."
+    required: false
+    default: "true"
+
+outputs:
+  status:
+    description: "Rubric check status ('passed' or 'failed')."
+    value: ${{ steps.run-rubric.outputs.status }}
+  exit-code:
+    description: "Numeric exit code returned by TalkOps."
+    value: ${{ steps.run-rubric.outputs.exit_code }}
+  report-path:
+    description: "Path to the generated Markdown report file."
+    value: ${{ steps.run-rubric.outputs.report_path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install TalkOps CLI
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if command -v talkops >/dev/null 2>&1; then
+          echo "TalkOps is already installed: $(talkops --version)"
+        else
+          if [ -f "${GITHUB_ACTION_PATH}/scripts/install.sh" ]; then
+            bash "${GITHUB_ACTION_PATH}/scripts/install.sh" --yes ${INPUT_VERSION:+"$INPUT_VERSION"}
+          else
+            curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- --yes ${INPUT_VERSION:+"$INPUT_VERSION"}
+          fi
+        fi
+        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+        echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+        talkops --version
+
+    - name: Execute TalkOps Rubric Check
+      id: run-rubric
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TALKOPS_API_KEY: ${{ inputs.talkops-api-key }}
+        TALKOPS_AUTO_SSO_LOGIN: "0"
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        GOOGLE_API_KEY: ${{ inputs.google-api-key }}
+        TYPESAFE_API_KEY: ${{ inputs.typesafe-api-key }}
+        INPUT_PROMPT: ${{ inputs.prompt }}
+        INPUT_RUBRIC: ${{ inputs.rubric }}
+        INPUT_SERVER_URL: ${{ inputs.server-url }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_MODEL_BASE_URL: ${{ inputs.model-base-url }}
+        INPUT_MODEL_API_KEY: ${{ inputs.model-api-key }}
+        INPUT_APPROVAL_MODE: ${{ inputs.approval-mode }}
+        INPUT_READ_ONLY: ${{ inputs.read-only }}
+        INPUT_DIFF_ONLY: ${{ inputs.diff-only }}
+        INPUT_AGENT: ${{ inputs.agent }}
+        INPUT_MAX_TURNS: ${{ inputs.max-turns }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        set +e
+        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+
+        REPORT_FILE="${RUNNER_TEMP:-/tmp}/talkops-rubric-report.md"
+        CMD_ARGS=("-p" "$INPUT_PROMPT" "--rubric" "$INPUT_RUBRIC" "-q" "--no-stream")
+
+        if [ -n "$INPUT_MODEL" ]; then
+          CMD_ARGS+=("-M" "$INPUT_MODEL")
+        fi
+
+        if [ -n "$INPUT_MODEL_BASE_URL" ]; then
+          PROV="${INPUT_MODEL%%:*}"
+          if [ -z "$PROV" ] || [ "$PROV" = "$INPUT_MODEL" ]; then
+            PROV="openai"
+          fi
+          PROV_UPPER="$(echo "$PROV" | tr '[:lower:]-' '[:upper:]_')"
+          export "${PROV_UPPER}_BASE_URL=$INPUT_MODEL_BASE_URL"
+          export "${PROV_UPPER}_API_BASE=$INPUT_MODEL_BASE_URL"
+          if [ "$PROV" = "ollama" ]; then
+            export OLLAMA_HOST="$INPUT_MODEL_BASE_URL"
+            export OLLAMA_BASE_URL="$INPUT_MODEL_BASE_URL"
+          elif [ "$PROV" = "openai" ]; then
+            export OPENAI_BASE_URL="$INPUT_MODEL_BASE_URL"
+            export OPENAI_API_BASE="$INPUT_MODEL_BASE_URL"
+          fi
+          if [ -n "$INPUT_MODEL_API_KEY" ]; then
+            export "${PROV_UPPER}_API_KEY=$INPUT_MODEL_API_KEY"
+            talkops auth set "$PROV" "$INPUT_MODEL_API_KEY" --base-url "$INPUT_MODEL_BASE_URL" >/dev/null 2>&1 || true
+          else
+            talkops auth set "$PROV" --base-url "$INPUT_MODEL_BASE_URL" >/dev/null 2>&1 || true
+          fi
+        elif [ -n "$INPUT_MODEL_API_KEY" ] && [ -n "$INPUT_MODEL" ]; then
+          PROV="${INPUT_MODEL%%:*}"
+          if [ -n "$PROV" ] && [ "$PROV" != "$INPUT_MODEL" ]; then
+            PROV_UPPER="$(echo "$PROV" | tr '[:lower:]-' '[:upper:]_')"
+            export "${PROV_UPPER}_API_KEY=$INPUT_MODEL_API_KEY"
+            talkops auth set "$PROV" "$INPUT_MODEL_API_KEY" >/dev/null 2>&1 || true
+          fi
+        fi
+
+        if [ -n "$INPUT_SERVER_URL" ]; then
+          CMD_ARGS+=("--server-url" "$INPUT_SERVER_URL")
+        fi
+
+        if [ -n "$INPUT_AGENT" ]; then
+          CMD_ARGS+=("-a" "$INPUT_AGENT")
+        fi
+
+        if [ "$INPUT_READ_ONLY" = "true" ]; then
+          CMD_ARGS+=("--read-only")
+        fi
+
+        if [ -n "$TYPESAFE_API_KEY" ] && [ "$INPUT_APPROVAL_MODE" = "smart" ]; then
+          CMD_ARGS+=("--smart")
+        elif [ -n "$INPUT_APPROVAL_MODE" ]; then
+          CMD_ARGS+=("--approval-mode" "$INPUT_APPROVAL_MODE")
+        fi
+
+        if [ -n "$INPUT_MAX_TURNS" ]; then
+          CMD_ARGS+=("--max-turns" "$INPUT_MAX_TURNS")
+        fi
+
+        if [ -n "$INPUT_TIMEOUT" ]; then
+          CMD_ARGS+=("--timeout" "$INPUT_TIMEOUT")
+        fi
+
+        if [ "$INPUT_DIFF_ONLY" = "true" ] && [ -n "$BASE_REF" ] && git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1; then
+          git diff "origin/${BASE_REF}...HEAD" | talkops "${CMD_ARGS[@]}" > "$REPORT_FILE" 2>&1
+          EXIT_CODE=$?
+        else
+          talkops "${CMD_ARGS[@]}" > "$REPORT_FILE" 2>&1
+          EXIT_CODE=$?
+        fi
+
+        cat "$REPORT_FILE"
+
+        if [ "$EXIT_CODE" -eq 0 ]; then
+          STATUS="passed"
+        else
+          STATUS="failed"
+        fi
+
+        echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+        echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+        echo "report_path=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - name: Post Rubric Report to Pull Request
+      if: ${{ inputs.post-pr-comment == 'true' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') }}
+      uses: actions/github-script@v7
+      env:
+        RUBRIC_STATUS: ${{ steps.run-rubric.outputs.status }}
+        RUBRIC_EXIT_CODE: ${{ steps.run-rubric.outputs.exit_code }}
+        REPORT_PATH: ${{ steps.run-rubric.outputs.report_path }}
+        INPUT_RUBRIC: ${{ inputs.rubric }}
+      with:
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- talkops-rubric-pr-check -->';
+          const status = process.env.RUBRIC_STATUS === 'passed' ? '✅ Passed' : '❌ Action Required';
+          const rubricRef = process.env.INPUT_RUBRIC || '';
+          let reportBody = '';
+          try {
+            reportBody = fs.readFileSync(process.env.REPORT_PATH, 'utf8').trim();
+          } catch (e) {
+            reportBody = '_No output captured from TalkOps._';
+          }
+          if (reportBody.length > 60000) {
+            reportBody = reportBody.slice(0, 60000) + '\n\n...(truncated)';
+          }
+
+          const commentBody = [
+            marker,
+            `## 🛡️ TalkOps CI/CD Rubric Check: ${status}`,
+            `**Rubric:** \`${rubricRef}\` · **Exit Code:** \`${process.env.RUBRIC_EXIT_CODE}\``,
+            '',
+            reportBody,
+            '',
+            '---',
+            '<sub>Powered by <a href="https://github.com/talkops-ai/talkops">TalkOps</a> — Open-Source AI SRE, FinOps & DevOps Agent</sub>'
+          ].join('\n');
+
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner,
+            repo,
+            issue_number,
+            per_page: 100,
+          });
+
+          const existing = comments.find(c => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: existing.id,
+              body: commentBody,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: commentBody,
+            });
+          }
+
+    - name: Enforce Rubric Exit Status
+      if: ${{ inputs.fail-on-violation == 'true' && steps.run-rubric.outputs.exit_code != '0' }}
+      shell: bash
+      env:
+        EXIT_CODE: ${{ steps.run-rubric.outputs.exit_code }}
+      run: |
+        echo "::error::TalkOps Rubric Check failed with exit code ${EXIT_CODE}."
+        exit "${EXIT_CODE}"

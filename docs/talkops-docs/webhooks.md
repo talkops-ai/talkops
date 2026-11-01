@@ -37,10 +37,10 @@ When an alert is sent to TalkOps (`/webhooks/{provider}`), it goes through five 
 
 ```mermaid
 flowchart LR
-    Alert["1. Alert Fires\nPagerDuty · Datadog\nAlertmanager · AWS · GitHub"] --> Filter["2. Verify & Filter Noise\nCheck security secret,\nignore 'Resolved' & duplicates"]
-    Filter --> ChatCard["3. Notify Team in Chat\nPost 'Investigating...' card\nin Slack, Discord, or Teams"]
-    ChatCard --> Investigate["4. Safe AI Investigation\nCheck logs, cloud state & recent\nchanges under Smart Mode guardrails"]
-    Investigate --> Report["5. Deliver Root-Cause Report\nReply in chat thread + update\nPagerDuty, ServiceNow, or GitHub"]
+    Alert["1. Alert Fires<br/>PagerDuty · Datadog<br/>Alertmanager · AWS · GitHub"] --> Filter["2. Verify & Filter Noise<br/>Check security secret,<br/>ignore 'Resolved' & duplicates"]
+    Filter --> ChatCard["3. Notify Team in Chat<br/>Post 'Investigating...' card<br/>in Slack, Discord, or Teams"]
+    ChatCard --> Investigate["4. Safe AI Investigation<br/>Check logs, cloud state & recent<br/>changes under Smart Mode guardrails"]
+    Investigate --> Report["5. Deliver Root-Cause Report<br/>Reply in chat thread + update<br/>PagerDuty, ServiceNow, or GitHub"]
 ```
 
 1. **Verifies the sender**: Checks the security secret or signature from PagerDuty, GitHub, Datadog, or your monitoring tool to make sure the alert is genuine.
