@@ -75,7 +75,7 @@ dependencies = [
     "langchain-litellm>=0.11.0",
     "langchain-meta>=0.5.0",
     "litellm>=1.103.3",
-    "daytona>=0.217.0",
+    "daytona>=0.217.0,<1",
     "langchain-daytona>=0.0.8",
     "langchain-modal>=0.0.6",
     "langchain-runloop>=0.0.7",
@@ -103,7 +103,7 @@ agentcore = [
     "langchain-agentcore-codeinterpreter>=0.0.5",
 ]
 daytona = [
-    "daytona>=0.217.0",
+    "daytona>=0.217.0,<1",
     "langchain-daytona>=0.0.8",
 ]
 modal = [
@@ -118,7 +118,7 @@ vercel = [
     "vercel>=0.5.9",
 ]
 sandboxes = [
-    "daytona>=0.217.0",
+    "daytona>=0.217.0,<1",
     "langchain-daytona>=0.0.8",
     "langchain-modal>=0.0.6",
     "langchain-runloop>=0.0.7",
@@ -129,7 +129,7 @@ sandboxes = [
     "vercel>=0.5.9",
 ]
 all-sandboxes = [
-    "daytona>=0.217.0",
+    "daytona>=0.217.0,<1",
     "langchain-daytona>=0.0.8",
     "langchain-modal>=0.0.6",
     "langchain-runloop>=0.0.7",
