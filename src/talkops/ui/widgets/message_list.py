@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import time
 from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual import events
@@ -42,6 +43,7 @@ from talkops.ui.widgets.status_messages import (
 from talkops.ui.widgets.tool_call_message import (
     _TOOL_GROUP_EXCLUSIONS,
     ToolCallMessage,
+    _strip_success_exit_line,
 )
 from talkops.ui.widgets.tool_group import ToolGroupSummary
 from talkops.utils.logger import get_logger
@@ -50,6 +52,89 @@ if TYPE_CHECKING:
     from textual.widget import Widget
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class HistoryEntry:
+    """Lightweight virtualized representation of a historical transcript item."""
+
+    kind: str
+    text: str = ""
+    skill_kwargs: dict[str, Any] | None = None
+    compaction_kwargs: dict[str, Any] | None = None
+    tool_spec: dict[str, Any] | None = None
+    tool_group_specs: list[dict[str, Any]] | None = None
+    lc_messages: list[Any] | None = None
+
+    def to_widget(self) -> Widget:
+        """Instantiate the Textual widget corresponding to this entry."""
+        from talkops.ui.widgets.status_messages import CompactionMessage
+
+        if self.kind == "user":
+            return UserMessage(self.text)
+        if self.kind == "assistant":
+            return AssistantMessage(self.text)
+        if self.kind == "thinking":
+            return ThinkingMessage(
+                content=self.text, duration_seconds=0.0, live=False
+            )
+        if self.kind == "skill":
+            return SkillMessage(**(self.skill_kwargs or {}))
+        if self.kind == "compaction":
+            return CompactionMessage(**(self.compaction_kwargs or {}))
+        if self.kind == "tool_group":
+            cleaned_specs: list[dict[str, Any]] = []
+            for spec in self.tool_group_specs or []:
+                item = dict(spec)
+                name = str(item.get("name") or "tool")
+                raw_res = str(item.get("result") or "")
+                if item.get("success", True) and name != "ask_user":
+                    item["result"] = _strip_success_exit_line(raw_res)
+                cleaned_specs.append(item)
+            return ToolGroupSummary(lazy_specs=cleaned_specs, live=False)
+        if self.kind == "tool_call":
+            spec = self.tool_spec or {}
+            name = str(spec.get("name") or "tool")
+            msg = ToolCallMessage(name, dict(spec.get("args") or {}))
+            msg._call_id = str(spec.get("call_id") or "")
+            if spec.get("rejected"):
+                msg._deferred_status = "rejected"
+            elif "result" in spec:
+                raw_res = str(spec.get("result") or "")
+                is_ok = bool(spec.get("success", True))
+                msg._deferred_status = "success" if is_ok else "error"
+                msg._deferred_output = (
+                    _strip_success_exit_line(raw_res)
+                    if (is_ok and name != "ask_user")
+                    else raw_res
+                )
+            return msg
+        return SystemMessage(self.text)
+
+    def to_lc_messages(self) -> list[Any]:
+        """Return LangChain message representations for UI fallback inspection."""
+        if self.lc_messages is not None:
+            return list(self.lc_messages)
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        if self.kind == "user" and self.text:
+            return [HumanMessage(content=self.text)]
+        if self.kind == "assistant" and self.text:
+            return [AIMessage(content=self.text)]
+        if self.kind == "tool_call" and self.tool_spec:
+            res = str(self.tool_spec.get("result") or "")
+            cid = str(self.tool_spec.get("call_id") or "call_1")
+            if res:
+                return [ToolMessage(content=res, tool_call_id=cid)]
+        if self.kind == "tool_group" and self.tool_group_specs:
+            out: list[Any] = []
+            for spec in self.tool_group_specs:
+                res = str(spec.get("result") or "")
+                cid = str(spec.get("call_id") or "call_1")
+                if res:
+                    out.append(ToolMessage(content=res, tool_call_id=cid))
+            return out
+        return []
 
 
 def compute_wheel_speed(streak: int, viewport_height: int = 0) -> int:
@@ -87,6 +172,15 @@ class MessageList(VerticalScroll):
     _STICKY_BOTTOM_THRESHOLD: ClassVar[float] = 2.0
     """Distance from max_scroll_y within which downward scroll re-locks auto-scroll."""
 
+    INITIAL_HISTORY_WINDOW: ClassVar[int] = 40
+    """Number of most-recent history items mounted immediately on resume."""
+
+    MAX_MOUNTED_ITEMS: ClassVar[int] = 120
+    """Soft ceiling on top-level mounted transcript items while auto-scroll is locked."""
+
+    HYDRATE_BATCH_SIZE: ClassVar[int] = 20
+    """Number of archived entries prepended per scroll-to-top hydration batch."""
+
     def __init__(self, **kwargs: Any) -> None:
         """Initialize MessageList."""
         super().__init__(**kwargs)
@@ -94,9 +188,13 @@ class MessageList(VerticalScroll):
         self._current_thinking: ThinkingMessage | None = None
         self._accumulated_thinking: str = ""
         self._tool_calls: dict[str, ToolCallMessage] = {}
+        self._tool_group_by_call_id: dict[str, ToolGroupSummary] = {}
         self._tool_call_total: int = 0
         """Monotonic count of tool-call widgets created (per-turn deltas)."""
         self._active_tool_group: ToolGroupSummary | None = None
+        self._archived_entries: list[HistoryEntry] = []
+        self._hydrating_older: bool = False
+        self._timestamps_visible: bool = False
         self._auto_scroll_locked = True
         self._scroll_end_pending = False
         self._last_wheel_time: float = 0.0
@@ -269,6 +367,8 @@ class MessageList(VerticalScroll):
             self._auto_scroll_locked = True
         elif delta < 0 and (self.max_scroll_y - self.scroll_y) > self._STICKY_BOTTOM_THRESHOLD:
             self._auto_scroll_locked = False
+        if delta < 0:
+            self._maybe_hydrate_older()
 
     def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         """Handle mouse/trackpad scroll up with WheelSpeed + 16ms coalescing."""
@@ -278,6 +378,9 @@ class MessageList(VerticalScroll):
         if self.scroll_y > 0 or self._pending_scroll_delta > 0:
             speed = self._next_wheel_speed(-1)
             self._queue_wheel_scroll(-speed)
+            event.stop()
+        elif self._archived_entries:
+            self._maybe_hydrate_older()
             event.stop()
 
     def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
@@ -298,6 +401,7 @@ class MessageList(VerticalScroll):
         self.on_scroll_up()
         self._mark_user_scrolling()
         self.scroll_up(animate=False, immediate=True)
+        self._maybe_hydrate_older()
 
     def action_scroll_down(self) -> None:
         """Scroll down one line immediately and re-lock if at bottom."""
@@ -315,6 +419,7 @@ class MessageList(VerticalScroll):
         self.on_scroll_up()
         self._mark_user_scrolling()
         self.scroll_page_up(animate=False)
+        self._maybe_hydrate_older()
 
     def action_page_down(self) -> None:
         """Scroll one page down without animation jitter and re-lock at bottom."""
@@ -332,6 +437,7 @@ class MessageList(VerticalScroll):
         self.on_scroll_up()
         self._mark_user_scrolling()
         self.scroll_home(animate=False, immediate=True, x_axis=False)
+        self._maybe_hydrate_older()
 
     def action_scroll_end(self) -> None:
         """Jump to bottom of transcript and re-lock auto-scroll."""
@@ -347,6 +453,7 @@ class MessageList(VerticalScroll):
             self.on_scroll_up()
             self._mark_user_scrolling()
             self.scroll_page_up(animate=False)
+            self._maybe_hydrate_older()
             event.stop()
 
     def _on_scroll_down(self, event: Any) -> None:
@@ -368,7 +475,272 @@ class MessageList(VerticalScroll):
                 elif (self.max_scroll_y - message.y) <= self._STICKY_BOTTOM_THRESHOLD:
                     self._auto_scroll_locked = True
             self.scroll_to(message.x, message.y, animate=False, immediate=True)
+            if message.y is not None and message.y <= 6:
+                self._maybe_hydrate_older()
             message.stop()
+
+    async def load_virtualized_history(self, entries: list[HistoryEntry]) -> None:
+        """Mount only the most recent window of historical entries in a single batch."""
+        for e in entries:
+            if e.kind == "tool_call":
+                self._tool_call_total += 1
+            elif e.kind == "tool_group" and e.tool_group_specs:
+                self._tool_call_total += len(e.tool_group_specs)
+
+        if len(entries) > self.INITIAL_HISTORY_WINDOW:
+            self._archived_entries = list(entries[: -self.INITIAL_HISTORY_WINDOW])
+            tail = entries[-self.INITIAL_HISTORY_WINDOW :]
+        else:
+            self._archived_entries = []
+            tail = list(entries)
+
+        widgets: list[Widget] = []
+        for entry in tail:
+            w = entry.to_widget()
+            if isinstance(w, ToolCallMessage) and w._call_id:
+                self._tool_calls[w._call_id] = w
+            if self._timestamps_visible:
+                fn = getattr(w, "set_timestamp_visible", None)
+                if callable(fn):
+                    fn(True)
+            widgets.append(w)
+
+        if widgets:
+            loading = (
+                getattr(self.app, "_loading_widget", None)
+                if self.is_attached and self.app
+                else None
+            )
+            batch_ctx = (
+                self.app.batch_update()
+                if (self.is_attached and self.app is not None)
+                else nullcontext()
+            )
+            with batch_ctx:
+                if (
+                    loading is not None
+                    and getattr(loading, "is_attached", False)
+                    and loading.parent is self
+                ):
+                    await self.mount_all(widgets, before=loading)
+                else:
+                    await self.mount_all(widgets)
+
+        self._auto_scroll_locked = True
+        self._scroll_to_end()
+
+    def _maybe_hydrate_older(self) -> None:
+        """Schedule lazy hydration of older archived messages when scrolled near top."""
+        if (
+            not self._archived_entries
+            or self._hydrating_older
+            or not self.is_attached
+            or self.scroll_y > 6
+        ):
+            return
+        self._hydrating_older = True
+        self.run_worker(self._hydrate_older_batch(), exclusive=False)
+
+    async def _hydrate_older_batch(self) -> None:
+        """Mount a batch of older archived entries at the top while preserving viewport position."""
+        from talkops.ui.widgets.welcome import WelcomeBanner
+
+        try:
+            if not self._archived_entries or not self.is_attached:
+                return
+            count = min(self.HYDRATE_BATCH_SIZE, len(self._archived_entries))
+            batch = self._archived_entries[-count:]
+            del self._archived_entries[-count:]
+
+            widgets: list[Widget] = []
+            for entry in batch:
+                w = entry.to_widget()
+                if isinstance(w, ToolCallMessage) and w._call_id:
+                    self._tool_calls[w._call_id] = w
+                if self._timestamps_visible:
+                    fn = getattr(w, "set_timestamp_visible", None)
+                    if callable(fn):
+                        fn(True)
+                widgets.append(w)
+
+            if not widgets:
+                return
+
+            anchor: Widget | None = None
+            for child in self.children:
+                if not isinstance(child, WelcomeBanner):
+                    anchor = child
+                    break
+
+            old_max_y = float(self.max_scroll_y)
+            old_scroll_y = float(self.scroll_y)
+
+            batch_ctx = (
+                self.app.batch_update()
+                if (self.is_attached and self.app is not None)
+                else nullcontext()
+            )
+            with batch_ctx:
+                if anchor is not None and anchor.is_attached and anchor.parent is self:
+                    await self.mount_all(widgets, before=anchor)
+                else:
+                    await self.mount_all(widgets)
+
+            def _restore_scroll() -> None:
+                if not self.is_attached:
+                    return
+                added_height = max(0.0, float(self.max_scroll_y) - old_max_y)
+                if added_height > 0:
+                    self.scroll_to(
+                        y=old_scroll_y + added_height,
+                        animate=False,
+                        immediate=True,
+                    )
+
+            self.call_after_refresh(_restore_scroll)
+        except Exception:
+            logger.debug("Older history hydration failed", exc_info=True)
+        finally:
+            self._hydrating_older = False
+
+    def _widget_to_history_entry(self, widget: Widget) -> HistoryEntry | None:
+        """Convert a settled top-level widget into an archivable `HistoryEntry`."""
+        from talkops.ui.widgets.status_messages import CompactionMessage
+
+        if isinstance(widget, UserMessage):
+            return HistoryEntry(
+                kind="user",
+                text=getattr(widget, "_raw_content", "") or "",
+            )
+        if isinstance(widget, AssistantMessage) and widget is not self._current_assistant:
+            txt = getattr(widget, "content_text", None) or "".join(
+                getattr(widget, "_fragments", [])
+            )
+            return HistoryEntry(kind="assistant", text=txt)
+        if isinstance(widget, ThinkingMessage) and widget is not self._current_thinking:
+            return HistoryEntry(
+                kind="thinking",
+                text=getattr(widget, "_content", "") or "",
+            )
+        if (
+            isinstance(widget, ToolGroupSummary)
+            and widget is not self._active_tool_group
+            and widget._finalized
+        ):
+            specs: list[dict[str, Any]] = []
+            for t in widget._tools:
+                specs.append(
+                    {
+                        "name": t.tool_name,
+                        "call_id": getattr(t, "_call_id", "") or "",
+                        "args": dict(getattr(t, "_args", {}) or {}),
+                        "result": getattr(t, "_output", None)
+                        or getattr(t, "_deferred_output", None)
+                        or "",
+                        "success": not t.is_failed,
+                    }
+                )
+            specs.extend(dict(s) for s in widget._lazy_specs)
+            return HistoryEntry(kind="tool_group", tool_group_specs=specs)
+        if (
+            isinstance(widget, ToolCallMessage)
+            and not widget.has_class("-grouped")
+            and not widget.is_pending
+        ):
+            spec: dict[str, Any] = {
+                "name": widget.tool_name,
+                "call_id": getattr(widget, "_call_id", "") or "",
+                "args": dict(getattr(widget, "_args", {}) or {}),
+            }
+            if getattr(widget, "_status", "") == "rejected":
+                spec["rejected"] = True
+            else:
+                spec["result"] = (
+                    getattr(widget, "_output", None)
+                    or getattr(widget, "_deferred_output", None)
+                    or ""
+                )
+                spec["success"] = widget.is_success
+            return HistoryEntry(kind="tool_call", tool_spec=spec)
+        if isinstance(widget, SkillMessage):
+            return HistoryEntry(
+                kind="skill",
+                skill_kwargs={
+                    "skill_name": getattr(widget, "_skill_name", ""),
+                    "description": getattr(widget, "_description", ""),
+                    "source": getattr(widget, "_source", "built-in"),
+                    "body": getattr(widget, "_body", ""),
+                    "args": getattr(widget, "_args", ""),
+                },
+            )
+        if isinstance(widget, CompactionMessage):
+            return HistoryEntry(
+                kind="compaction",
+                compaction_kwargs={
+                    "steps_summarized": getattr(widget, "_steps_summarized", 0),
+                    "pre_tokens": getattr(widget, "_pre_tokens", 0),
+                    "post_tokens": getattr(widget, "_post_tokens", 0),
+                    "summary_tokens": getattr(widget, "_summary_tokens", 0),
+                    "duration_seconds": getattr(widget, "_duration_seconds", 0.0),
+                },
+            )
+        if isinstance(widget, SystemMessage):
+            return HistoryEntry(
+                kind="system",
+                text=str(getattr(widget, "_content", "") or ""),
+            )
+        return None
+
+    def _prune_excess_mounted_items(self) -> None:
+        """Evict oldest settled top-level items into `_archived_entries` when DOM exceeds cap."""
+        if (
+            not self._auto_scroll_locked
+            or self._hydrating_older
+            or len(self.children) <= self.MAX_MOUNTED_ITEMS + 20
+        ):
+            return
+        from talkops.ui.widgets.welcome import WelcomeBanner
+
+        loading = (
+            getattr(self.app, "_loading_widget", None)
+            if self.is_attached and self.app
+            else None
+        )
+        top_level: list[Widget] = [
+            c
+            for c in self.children
+            if not isinstance(c, WelcomeBanner)
+            and c is not loading
+            and not c.has_class("-grouped")
+        ]
+        excess = len(top_level) - self.MAX_MOUNTED_ITEMS
+        if excess <= 0:
+            return
+
+        to_remove: list[Widget] = []
+        for child in top_level[:excess]:
+            entry = self._widget_to_history_entry(child)
+            if entry is None:
+                # Stop pruning at first live/interactive widget so transcript order stays exact
+                break
+            self._archived_entries.append(entry)
+            to_remove.append(child)
+            if isinstance(child, ToolGroupSummary):
+                for member in list(child._collapsible):
+                    cid = getattr(member, "_call_id", "")
+                    if cid:
+                        self._tool_calls.pop(cid, None)
+                        self._tool_group_by_call_id.pop(cid, None)
+                    if member.is_attached:
+                        to_remove.append(member)
+            elif isinstance(child, ToolCallMessage):
+                cid = getattr(child, "_call_id", "")
+                if cid:
+                    self._tool_calls.pop(cid, None)
+                    self._tool_group_by_call_id.pop(cid, None)
+
+        if to_remove:
+            self.remove_children(to_remove)
 
     async def mount_inline_prompt(self, widget: Widget) -> None:
         """Mount an inline prompt widget into the message transcript area."""
@@ -475,6 +847,10 @@ class MessageList(VerticalScroll):
                     collapsible=list(run_collapsible),
                     live=False,
                 )
+                for t in run_tools:
+                    cid = getattr(t, "_call_id", "")
+                    if cid:
+                        self._tool_group_by_call_id[cid] = summary
                 for widget in run_collapsible:
                     widget.add_class("-grouped")
                 try:
@@ -516,6 +892,8 @@ class MessageList(VerticalScroll):
                 await flush()
             await flush()
 
+        self._prune_excess_mounted_items()
+
         logger.debug(
             "TUI: MessageList.regroup_completed_tools folded %d runs",
             folded_runs_count,
@@ -526,6 +904,7 @@ class MessageList(VerticalScroll):
         self._auto_scroll_locked = True
         self.close_active_tool_group()
         self._mount_child(UserMessage(text))
+        self._prune_excess_mounted_items()
         self._scroll_to_end()
 
     def add_queued_user_message(self, text: str) -> QueuedUserMessage:
@@ -572,6 +951,7 @@ class MessageList(VerticalScroll):
         if self._current_assistant:
             self._current_assistant.finish()
             self._current_assistant = None
+            self._prune_excess_mounted_items()
             self._scroll_to_end()
 
     def add_tool_call(
@@ -580,6 +960,7 @@ class MessageList(VerticalScroll):
         """Add a tool-call widget."""
         self._end_thinking()
         msg = ToolCallMessage(name, args)
+        msg._call_id = call_id or ""
         self._tool_call_total += 1
         if live:
             msg.set_running()
@@ -600,6 +981,8 @@ class MessageList(VerticalScroll):
                 msg.add_class("-grouped")
                 msg.display = False
                 self._active_tool_group.add_member(msg)
+                if call_id:
+                    self._tool_group_by_call_id[call_id] = self._active_tool_group
             self._mount_child(msg)
         self._scroll_to_end()
 
@@ -618,12 +1001,24 @@ class MessageList(VerticalScroll):
                 msg.set_success(result)
             else:
                 msg.set_error(result)
-            for child in list(self.children):
-                if isinstance(child, ToolGroupSummary) and msg in child._tools:
-                    child.sync_members()
+            group = self._tool_group_by_call_id.get(call_id)
+            if group is not None and msg in group._tools:
+                group.sync_members()
+            elif (
+                self._active_tool_group is not None
+                and msg in self._active_tool_group._tools
+            ):
+                self._active_tool_group.sync_members()
+            elif msg.has_class("-grouped"):
+                for child in list(self.children):
+                    if isinstance(child, ToolGroupSummary) and msg in child._tools:
+                        self._tool_group_by_call_id[call_id] = child
+                        child.sync_members()
+                        break
         else:
             msg_name = name if (name and name != "None") else "tool"
             msg = ToolCallMessage(msg_name, {})
+            msg._call_id = call_id or ""
             self._tool_call_total += 1
             if call_id:
                 self._tool_calls[call_id] = msg
@@ -643,6 +1038,8 @@ class MessageList(VerticalScroll):
                     msg.add_class("-grouped")
                     msg.display = False
                     self._active_tool_group.add_member(msg)
+                    if call_id:
+                        self._tool_group_by_call_id[call_id] = self._active_tool_group
                 self._mount_child(msg)
                 if success:
                     msg.set_success(result)
@@ -675,6 +1072,48 @@ class MessageList(VerticalScroll):
         self._mount_child(SystemMessage(text))
         self._scroll_to_end()
 
+    def has_any_conversation_messages(self) -> bool:
+        """Return True if either archived or mounted items contain user/assistant messages."""
+        if any(e.kind in {"user", "assistant"} for e in self._archived_entries):
+            return True
+        return any(
+            isinstance(child, (UserMessage, AssistantMessage))
+            for child in self.children
+        )
+
+    def get_all_thread_messages(self) -> list[Any]:
+        """Return LangChain messages across both archived and mounted transcript items."""
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        msgs: list[Any] = []
+        for entry in self._archived_entries:
+            msgs.extend(entry.to_lc_messages())
+        for child in self.children:
+            if isinstance(child, UserMessage):
+                txt = getattr(child, "_raw_content", "") or ""
+                if txt:
+                    msgs.append(HumanMessage(content=txt))
+            elif isinstance(child, AssistantMessage):
+                txt = getattr(child, "content_text", None) or "".join(
+                    getattr(child, "_fragments", [])
+                )
+                if txt:
+                    msgs.append(AIMessage(content=txt))
+            elif isinstance(child, ToolGroupSummary):
+                for cid, out in child.iter_tool_outputs():
+                    msgs.append(ToolMessage(content=out, tool_call_id=cid))
+            elif isinstance(child, ToolCallMessage) and not child.has_class("-grouped"):
+                out = (
+                    getattr(child, "_output", None)
+                    or getattr(child, "_deferred_output", None)
+                    or getattr(child, "_result", None)
+                    or ""
+                )
+                cid = getattr(child, "_call_id", "") or "call_1"
+                if out:
+                    msgs.append(ToolMessage(content=str(out), tool_call_id=cid))
+        return msgs
+
     def clear(self) -> None:
         """Clear all conversation message widgets while keeping the welcome banner."""
         from talkops.ui.widgets.welcome import WelcomeBanner
@@ -683,6 +1122,9 @@ class MessageList(VerticalScroll):
         self._pending_scroll_delta = 0
         self._scroll_end_pending = False
         self._auto_scroll_locked = True
+        self._hydrating_older = False
+        self._archived_entries.clear()
+        self._tool_group_by_call_id.clear()
         to_remove = [
             child for child in self.children if not isinstance(child, WelcomeBanner)
         ]

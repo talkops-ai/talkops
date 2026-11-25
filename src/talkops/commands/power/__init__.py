@@ -21,11 +21,13 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from talkops.commands.power.agents import AgentsHandler
+    from talkops.commands.power.browser import BrowserHandler
     from talkops.commands.power.btw import BtwHandler
     from talkops.commands.power.copy import CopyHandler
     from talkops.commands.power.goal import GoalHandler
     from talkops.commands.power.loop import LoopHandler
     from talkops.commands.power.memory import MemoryHandler
+    from talkops.commands.power.openwiki import OpenWikiHandler
     from talkops.commands.power.review import ReviewHandler
     from talkops.commands.power.rubric import RubricHandler
     from talkops.commands.power.runtime import (
@@ -48,11 +50,13 @@ if TYPE_CHECKING:
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "AgentsHandler": ("talkops.commands.power.agents", "AgentsHandler"),
+    "BrowserHandler": ("talkops.commands.power.browser", "BrowserHandler"),
     "BtwHandler": ("talkops.commands.power.btw", "BtwHandler"),
     "CopyHandler": ("talkops.commands.power.copy", "CopyHandler"),
     "GoalHandler": ("talkops.commands.power.goal", "GoalHandler"),
     "LoopHandler": ("talkops.commands.power.loop", "LoopHandler"),
     "MemoryHandler": ("talkops.commands.power.memory", "MemoryHandler"),
+    "OpenWikiHandler": ("talkops.commands.power.openwiki", "OpenWikiHandler"),
     "ReviewHandler": ("talkops.commands.power.review", "ReviewHandler"),
     "RubricHandler": ("talkops.commands.power.rubric", "RubricHandler"),
     "AutoUpdateHandler": ("talkops.commands.power.runtime", "AutoUpdateHandler"),
@@ -84,6 +88,7 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "AgentsHandler",
     "AutoUpdateHandler",
+    "BrowserHandler",
     "BtwHandler",
     "CopyHandler",
     "GoalHandler",
@@ -91,6 +96,7 @@ __all__ = [
     "LoopHandler",
     "MemoryHandler",
     "NotificationsHandler",
+    "OpenWikiHandler",
     "ReloadHandler",
     "RestartHandler",
     "ReviewHandler",

@@ -16,11 +16,8 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -28,10 +25,7 @@ from langchain_core.messages import HumanMessage
 
 from talkops.agent.factory import create_talkops_agent
 from talkops.config.paths import (
-    DEFAULT_AGENT_MD_TEMPLATE,
     ensure_user_agent_md,
-    primary_agent_md,
-    user_agent_md,
 )
 from talkops.memory.onboarding import (
     ONBOARDING_NAME_MEMORY_END,
@@ -39,10 +33,9 @@ from talkops.memory.onboarding import (
     _onboarding_name_memory_block,
     _upsert_onboarding_name_memory,
     extract_onboarding_name_block,
-    run_onboarding_if_needed,
     strip_onboarding_name_markers,
 )
-from talkops.memory.store import MemoryEntry, MemoryStore, _sanitize_key
+from talkops.memory.store import MemoryStore, _sanitize_key
 
 captured_model_inputs: list[Any] = []
 

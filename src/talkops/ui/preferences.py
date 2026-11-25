@@ -20,16 +20,12 @@ and auto-approval preferences.
 
 from __future__ import annotations
 
-import os
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, ClassVar
 
-from rich.text import Text
 from textual import on
 from textual.binding import Binding, BindingType
-from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Button, OptionList, Static
 from textual.widgets.option_list import Option

@@ -12,15 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Built-in Open-Source Server Addons shipped with TalkOps core (`client-gateway`, `core-auth`, `webhooks`)."""
+"""Built-in Open-Source Server Addons shipped with TalkOps core (`core-auth`, `client-gateway`, `webhooks`, `channels`, `context-graph`, `intelligence`)."""
 
 from __future__ import annotations
 
+from talkops.addons.builtin.channels import (
+    ChannelsAddon,
+    ChannelsAddonSettings,
+    ChatOpsAddon,
+)
 from talkops.addons.builtin.client_gateway import (
     ClientGatewayAddon,
     ClientGatewaySettings,
 )
+from talkops.addons.builtin.context_graph import (
+    ContextGraphAddon,
+    ContextGraphAddonSettings,
+)
 from talkops.addons.builtin.core_auth import CoreAuthAddon, CoreAuthSettings
+from talkops.addons.builtin.intelligence import (
+    IntelligenceAddon,
+    IntelligenceAddonSettings,
+)
 from talkops.addons.builtin.webhooks import (
     WebhookAddon,
     WebhookAddonSettings,
@@ -36,14 +49,24 @@ def get_builtin_addons() -> list[ServerAddon]:
         CoreAuthAddon(),
         ClientGatewayAddon(),
         WebhookAddon(),
+        ChannelsAddon(),
+        ContextGraphAddon(),
+        IntelligenceAddon(),
     ]
 
 
 __all__ = [
+    "ChannelsAddon",
+    "ChannelsAddonSettings",
+    "ChatOpsAddon",
     "ClientGatewayAddon",
     "ClientGatewaySettings",
+    "ContextGraphAddon",
+    "ContextGraphAddonSettings",
     "CoreAuthAddon",
     "CoreAuthSettings",
+    "IntelligenceAddon",
+    "IntelligenceAddonSettings",
     "WebhookAddon",
     "WebhookAddonSettings",
     "get_builtin_addons",

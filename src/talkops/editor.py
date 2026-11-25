@@ -123,6 +123,20 @@ def _strip_local_uri_scheme(raw: str) -> tuple[str, int | None]:
     return cleaned, anchor_line
 
 
+_LINE_COL_SUFFIX_RE = re.compile(r"^(.*?):(\d+)(?::(\d+))?$")
+_CANDIDATE_PATH_RE = re.compile(
+    r"(?:(?:/[a-zA-Z0-9_\-\.]+){2,}/?|~/(?:[a-zA-Z0-9_\-\.]+/)*[a-zA-Z0-9_\-\.]+|\./(?:[a-zA-Z0-9_\-\.]+/)*[a-zA-Z0-9_\-\.]+|(?:\b[a-zA-Z]:[\\/](?:[a-zA-Z0-9_\-\.]+[\\/])*[a-zA-Z0-9_\-\.]+))(?:\.[a-zA-Z0-9_]+)?"
+)
+_AUTOFS_SKIP_PREFIXES = ("/net/", "/Network/", "/Volumes/", "/afs/", "/smb/")
+_MAX_EXTRACT_SCAN_CHARS = 4096
+_MAX_EXTRACT_STAT_PROBES = 8
+
+
+def _is_safe_local_probe(candidate: str) -> bool:
+    """Skip macOS/Linux autofs network mount prefixes that can stall `stat()` for seconds."""
+    return not candidate.startswith(_AUTOFS_SKIP_PREFIXES)
+
+
 def extract_file_path(text: str) -> str | None:
     """Extract an existing file path from a text snippet, code block, or line.
 
@@ -133,28 +147,32 @@ def extract_file_path(text: str) -> str | None:
     if not text:
         return None
 
-
-    raw = text.strip()
+    raw = text[:_MAX_EXTRACT_SCAN_CHARS].strip()
     if (raw.startswith(('"', "'", "`")) and raw.endswith(('"', "'", "`"))) and len(raw) >= 2:
         raw = raw[1:-1].strip()
 
     raw, _ = _strip_local_uri_scheme(raw)
 
-    cleaned = raw.rstrip(".,;:!?)'\">")
-    m = re.match(r"^(.*?):(\d+)(?::(\d+))?$", cleaned)
-    candidate = m.group(1) if m else cleaned
-    try:
-        p = Path(os.path.expanduser(candidate))
-        if p.exists() and p.is_file():
-            return cleaned
-    except Exception:
-        pass
+    if "\n" not in raw and len(raw) <= 512:
+        cleaned = raw.rstrip(".,;:!?)'\">")
+        m = _LINE_COL_SUFFIX_RE.match(cleaned)
+        candidate = m.group(1) if m else cleaned
+        if _is_safe_local_probe(candidate):
+            try:
+                p = Path(os.path.expanduser(candidate))
+                if p.exists() and p.is_file():
+                    return cleaned
+            except Exception:
+                pass
 
-    path_re = re.compile(
-        r"(?:(?:/[a-zA-Z0-9_\-\.]+){2,}/?|~/(?:[a-zA-Z0-9_\-\.]+/)*[a-zA-Z0-9_\-\.]+|\./(?:[a-zA-Z0-9_\-\.]+/)*[a-zA-Z0-9_\-\.]+|(?:\b[a-zA-Z]:[\\/](?:[a-zA-Z0-9_\-\.]+[\\/])*[a-zA-Z0-9_\-\.]+))(?:\.[a-zA-Z0-9_]+)?"
-    )
-    for match in path_re.finditer(raw):
+    probes = 0
+    for match in _CANDIDATE_PATH_RE.finditer(raw):
         cand = match.group(0).rstrip(".,;:!?)'\">")
+        if not _is_safe_local_probe(cand):
+            continue
+        probes += 1
+        if probes > _MAX_EXTRACT_STAT_PROBES:
+            break
         try:
             p = Path(os.path.expanduser(cand))
             if p.exists() and p.is_file():

@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,7 +25,6 @@ from textual.widgets._markdown import MarkdownFence, MarkdownTable, MarkdownTabl
 from textual.widgets._tooltip import Tooltip
 
 from talkops.editor import (
-    TERMINAL_EDITORS,
     extract_file_path,
     open_file_in_editor,
     resolve_editor,
@@ -114,12 +112,20 @@ def test_assistant_markdown_parses_file_links_and_table_tooltips_safely() -> Non
     md_cls = _assistant_markdown_class()
     md = md_cls()
 
-    # 1. file:// links are parsed as links instead of raw literal markdown syntax
+    # 1. file:// and https:// links are parsed with both @click metadata and OSC 8 Style.link
     blocks = md._build_from_source(
-        "Report generated at [/Users/test/report.md](file:///Users/test/report.md)."
+        "Report generated at [/Users/test/report.md](file:///Users/test/report.md) and https://github.com/talkops-ai/talkops."
     )
-    assert blocks[0]._content.plain == "Report generated at /Users/test/report.md."
-    assert len(blocks[0]._content.spans) == 1
+    assert (
+        blocks[0]._content.plain
+        == "Report generated at /Users/test/report.md and https://github.com/talkops-ai/talkops."
+    )
+    assert len(blocks[0]._content.spans) == 2
+    assert blocks[0]._content.spans[0].style.link == "file:///Users/test/report.md"
+    assert blocks[0]._content.spans[1].style.link == "https://github.com/talkops-ai/talkops"
+    osc8_rendered = blocks[0]._content.spans[1].style.rich_style.render("https://github.com/talkops-ai/talkops")
+    assert "\x1b]8;id=" in osc8_rendered
+    assert ";https://github.com/talkops-ai/talkops\x1b\\" in osc8_rendered
 
     # 2. Table cells with bracket-slash text use Content tooltips and Tooltip.update handles raw [/...] safely
     table_md = (

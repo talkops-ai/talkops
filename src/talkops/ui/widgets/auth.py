@@ -35,14 +35,11 @@ from typing import TYPE_CHECKING, ClassVar
 
 from textual import events
 from textual.binding import Binding, BindingType
-from textual.color import Color as TColor
-from textual.containers import Vertical
 from textual.content import Content
-from textual.screen import ModalScreen
 from textual.style import Style as TStyle
 from textual.widgets import Checkbox, Input, RadioButton, RadioSet, Static
 
-from talkops.config.paths import GLOBAL_ENV_PATH, ensure_data_dir, upsert_env_vars
+from talkops.config.paths import upsert_env_vars
 from talkops.ui.widgets.modal_base import OpsModalScreen
 from talkops.utils.logger import get_logger
 
@@ -84,6 +81,8 @@ PROVIDER_API_KEY_URLS: dict[str, str] = {
     "deepseek": "https://platform.deepseek.com/api_keys",
     "fireworks": "https://app.fireworks.ai/settings/users/api-keys",
     "google_genai": "https://aistudio.google.com/api-keys",
+    "google_vertexai": "https://console.cloud.google.com/vertex-ai",
+    "google_anthropic_vertex": "https://console.cloud.google.com/vertex-ai/model-garden",
     "groq": "https://console.groq.com/keys",
     "huggingface": "https://huggingface.co/login?next=%2Fsettings%2Ftokens",
     "ibm": "https://cloud.ibm.com/iam/apikeys",
@@ -204,7 +203,11 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
 
     AuthPromptScreen #auth-prompt-base-url-label,
     AuthPromptScreen #auth-prompt-region-label,
-    AuthPromptScreen #auth-prompt-project-label {
+    AuthPromptScreen #auth-prompt-project-label,
+    AuthPromptScreen #auth-prompt-vertex-project-label,
+    AuthPromptScreen #auth-prompt-vertex-location-label,
+    AuthPromptScreen #auth-prompt-vertex-api-version-label,
+    AuthPromptScreen #auth-prompt-vertex-quota-project-label {
         margin-bottom: 0;
     }
 
@@ -215,20 +218,28 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         border: solid $panel;
     }
 
-    AuthPromptScreen #auth-prompt-input {
+    AuthPromptScreen #auth-prompt-input,
+    AuthPromptScreen #auth-prompt-vertex-project,
+    AuthPromptScreen #auth-prompt-vertex-location {
         margin-bottom: 1;
         border: solid $panel;
     }
 
     AuthPromptScreen #auth-prompt-base-url,
-    AuthPromptScreen #auth-prompt-project-input {
+    AuthPromptScreen #auth-prompt-project-input,
+    AuthPromptScreen #auth-prompt-vertex-api-version,
+    AuthPromptScreen #auth-prompt-vertex-quota-project {
         margin-bottom: 0;
         border: solid $panel;
     }
 
     AuthPromptScreen #auth-prompt-input:focus,
     AuthPromptScreen #auth-prompt-base-url:focus,
-    AuthPromptScreen #auth-prompt-project-input:focus {
+    AuthPromptScreen #auth-prompt-project-input:focus,
+    AuthPromptScreen #auth-prompt-vertex-project:focus,
+    AuthPromptScreen #auth-prompt-vertex-location:focus,
+    AuthPromptScreen #auth-prompt-vertex-api-version:focus,
+    AuthPromptScreen #auth-prompt-vertex-quota-project:focus {
         border: solid $primary;
     }
 
@@ -270,6 +281,7 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             self._provider = provider
         else:
             self._provider = canonicalize_provider(provider)
+        self._is_vertex = self._provider in ("google_vertexai", "google_anthropic_vertex")
         self._env_var = (
             env_var
             or get_credential_env_var(self._provider)
@@ -278,6 +290,22 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         self._reason = reason
         self._allow_empty_submit = allow_empty_submit
         self._advanced_visible = False
+
+    def _resolve_initial_vertex_project(self) -> str:
+        """Resolve existing GCP Project ID from env or config.toml for Vertex AI pre-fill."""
+        for env_k in ("GOOGLE_CLOUD_PROJECT", "VERTEXAI_PROJECT", "GCP_PROJECT_ID"):
+            val = os.environ.get(env_k, "").strip()
+            if val and not val.startswith(("AQ.", "AIza")):
+                return val
+        try:
+            from talkops.model.factory import _resolve_gcp_project_from_toml
+
+            toml_proj = _resolve_gcp_project_from_toml()
+            if toml_proj:
+                return toml_proj
+        except Exception:
+            pass
+        return ""
 
     def on_mount(self) -> None:
         """Initialize component state when mounted into the DOM."""
@@ -311,14 +339,53 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
 
         # ── Key input ──
         initial_val = ""
+        key_placeholder = "Paste your API key"
         if self._is_langsmith:
             initial_val = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY") or ""
+        elif self._is_vertex:
+            initial_val = (
+                os.environ.get("VERTEXAI_API_KEY")
+                or os.environ.get("GOOGLE_VERTEXAI_API_KEY")
+                or ""
+            ).strip()
+            key_placeholder = (
+                "Paste Vertex AI API key (VERTEXAI_API_KEY) — optional if using GCP Project / ADC"
+            )
         yield Input(
             value=initial_val,
-            placeholder="Paste your API key",
+            placeholder=key_placeholder,
             password=True,
             id="auth-prompt-input",
         )
+
+        if self._is_vertex:
+            yield Static(
+                Content.from_markup("[bold]GCP Project ID[/bold] [dim](GOOGLE_CLOUD_PROJECT)[/dim]"),
+                classes="auth-prompt-meta",
+                id="auth-prompt-vertex-project-label",
+            )
+            yield Input(
+                value=self._resolve_initial_vertex_project(),
+                placeholder="e.g. my-gcp-project-id (sets GOOGLE_CLOUD_PROJECT)",
+                id="auth-prompt-vertex-project",
+            )
+
+            yield Static(
+                Content.from_markup("[bold]Vertex AI Location[/bold] [dim](GOOGLE_CLOUD_LOCATION)[/dim]"),
+                classes="auth-prompt-meta",
+                id="auth-prompt-vertex-location-label",
+            )
+            initial_loc = (
+                os.environ.get("GOOGLE_CLOUD_LOCATION")
+                or os.environ.get("VERTEXAI_LOCATION")
+                or os.environ.get("GCP_LOCATION")
+                or "global"
+            ).strip()
+            yield Input(
+                value=initial_loc,
+                placeholder="global (default for Gemini 3/4 frontier models) or us-central1",
+                id="auth-prompt-vertex-location",
+            )
 
         # ── Storage note ──
         if self._is_langsmith:
@@ -326,6 +393,17 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
                 Content.from_markup(
                     "talkops stores the above key locally and turns on LangSmith tracing. "
                     "To pause tracing without removing the key, set [bold]LANGSMITH_TRACING=false[/bold]."
+                ),
+                classes="auth-prompt-meta",
+                id="auth-prompt-storage-note",
+            )
+        elif self._is_vertex:
+            yield Static(
+                Content.from_markup(
+                    "talkops saves [bold]GOOGLE_CLOUD_PROJECT[/bold], [bold]GOOGLE_CLOUD_LOCATION[/bold], "
+                    "and [bold]VERTEXAI_API_KEY[/bold] to ~/.talkops/.env and applies them immediately for "
+                    "[bold]$provider[/bold] models.",
+                    provider=provider_label,
                 ),
                 classes="auth-prompt-meta",
                 id="auth-prompt-storage-note",
@@ -439,6 +517,39 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             proj_hint.display = self._advanced_visible
             yield proj_hint
         else:
+            if self._is_vertex:
+                api_ver_label = Static(
+                    Content.from_markup("[bold]Vertex AI API Version[/bold] [dim](VERTEXAI_API_VERSION)[/dim]"),
+                    classes="auth-prompt-meta",
+                    id="auth-prompt-vertex-api-version-label",
+                )
+                api_ver_label.display = self._advanced_visible
+                yield api_ver_label
+
+                api_ver_input = Input(
+                    value=(os.environ.get("VERTEXAI_API_VERSION") or "v1").strip(),
+                    placeholder="v1 (default) or v1beta1",
+                    id="auth-prompt-vertex-api-version",
+                )
+                api_ver_input.display = self._advanced_visible
+                yield api_ver_input
+
+                quota_proj_label = Static(
+                    Content.from_markup("[bold]Quota Project Override[/bold] [dim](GOOGLE_CLOUD_QUOTA_PROJECT)[/dim]"),
+                    classes="auth-prompt-meta",
+                    id="auth-prompt-vertex-quota-project-label",
+                )
+                quota_proj_label.display = self._advanced_visible
+                yield quota_proj_label
+
+                quota_proj_input = Input(
+                    value=(os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT") or "").strip(),
+                    placeholder="Defaults to GOOGLE_CLOUD_PROJECT (sets X-Goog-User-Project)",
+                    id="auth-prompt-vertex-quota-project",
+                )
+                quota_proj_input.display = self._advanced_visible
+                yield quota_proj_input
+
             base_url_label = Static(
                 Content.from_markup("[bold]Base URL override[/bold]"),
                 classes="auth-prompt-meta",
@@ -523,6 +634,11 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
 
         if self._is_langsmith:
             text = f"Sign in to {provider_label}, create or copy an API key, then paste it below. "
+        elif self._is_vertex:
+            text = (
+                f"Configure {provider_label} with your Vertex AI API key (Express Mode) "
+                "and/or GCP Project ID & Location (for Google Cloud ADC / Agent Platform). "
+            )
         elif self._provider == "azure_openai":
             text = (
                 "Find your key in your Azure OpenAI resource's "
@@ -573,6 +689,10 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         else:
             for selector in (
                 "#auth-prompt-key-meta",
+                "#auth-prompt-vertex-api-version-label",
+                "#auth-prompt-vertex-api-version",
+                "#auth-prompt-vertex-quota-project-label",
+                "#auth-prompt-vertex-quota-project",
                 "#auth-prompt-base-url-label",
                 "#auth-prompt-base-url",
                 "#auth-prompt-base-url-hint",
@@ -688,6 +808,32 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
         except Exception:
             pass
 
+        vertex_project = ""
+        vertex_location = ""
+        vertex_api_version = ""
+        vertex_quota_project = ""
+        if self._is_vertex:
+            try:
+                vertex_project = self.query_one("#auth-prompt-vertex-project", Input).value.strip()
+            except Exception:
+                pass
+            try:
+                vertex_location = self.query_one("#auth-prompt-vertex-location", Input).value.strip() or "global"
+            except Exception:
+                vertex_location = "global"
+            try:
+                vertex_api_version = self.query_one("#auth-prompt-vertex-api-version", Input).value.strip() or "v1"
+            except Exception:
+                vertex_api_version = "v1"
+            try:
+                vertex_quota_project = self.query_one("#auth-prompt-vertex-quota-project", Input).value.strip()
+            except Exception:
+                pass
+
+            if cleaned and not cleaned.startswith(("AQ.", "AIza")) and not vertex_project:
+                vertex_project = cleaned
+                cleaned = ""
+
         use_vertex = False
         vertex_env_val = None
         if self._provider == "google_genai":
@@ -702,23 +848,34 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = vertex_env_val
 
         if not cleaned:
-            if (self._provider == "google_genai" and use_vertex) or (self._provider == "ollama" and base_url):
+            if (
+                (self._provider == "google_genai" and use_vertex)
+                or (self._provider == "ollama" and base_url)
+                or (self._is_vertex and vertex_project)
+            ):
                 pass
             elif self._allow_empty_submit:
                 self.dismiss(AuthResult.CANCELLED)
+                return
+            elif self._is_vertex:
+                self._show_error(
+                    "Provide a GCP Project ID (GOOGLE_CLOUD_PROJECT) and/or a Vertex AI API key (VERTEXAI_API_KEY)."
+                )
                 return
             else:
                 self._show_error("API key cannot be empty (unless Vertex AI backend is enabled).")
                 return
 
         effective_env_var = self._env_var
-        if self._provider == "google_vertexai" and cleaned.startswith(("AQ.", "AIza")):
+        if self._is_vertex and cleaned.startswith(("AQ.", "AIza")):
             effective_env_var = "VERTEXAI_API_KEY"
             if os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip().startswith(("AQ.", "AIza")):
                 os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
 
         if cleaned:
             os.environ[effective_env_var] = cleaned
+            if self._is_vertex and effective_env_var == "VERTEXAI_API_KEY":
+                os.environ["GOOGLE_VERTEXAI_API_KEY"] = cleaned
             if self._provider == "talkops":
                 os.environ["TALKOPS_SERVER_API_KEY"] = cleaned
                 try:
@@ -728,6 +885,38 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
                 except Exception:
                     pass
             logger.info("Saved environment variable credentials for %s (%s)", self._provider, effective_env_var)
+
+        vertex_extra_env: dict[str, str] = {}
+        if self._is_vertex:
+            if vertex_project:
+                os.environ["GOOGLE_CLOUD_PROJECT"] = vertex_project
+                os.environ["VERTEXAI_PROJECT"] = vertex_project
+                vertex_extra_env["GOOGLE_CLOUD_PROJECT"] = vertex_project
+                vertex_extra_env["VERTEXAI_PROJECT"] = vertex_project
+                try:
+                    from talkops.config.settings import get_settings
+
+                    setattr(get_settings(), "google_cloud_project", vertex_project)
+                except Exception:
+                    pass
+            if vertex_location:
+                os.environ["GOOGLE_CLOUD_LOCATION"] = vertex_location
+                os.environ["VERTEXAI_LOCATION"] = vertex_location
+                vertex_extra_env["GOOGLE_CLOUD_LOCATION"] = vertex_location
+                vertex_extra_env["VERTEXAI_LOCATION"] = vertex_location
+                try:
+                    from talkops.config.settings import get_settings
+
+                    setattr(get_settings(), "google_cloud_location", vertex_location)
+                except Exception:
+                    pass
+            if vertex_api_version:
+                os.environ["VERTEXAI_API_VERSION"] = vertex_api_version
+                vertex_extra_env["VERTEXAI_API_VERSION"] = vertex_api_version
+            effective_quota_proj = vertex_quota_project or vertex_project
+            if effective_quota_proj:
+                os.environ["GOOGLE_CLOUD_QUOTA_PROJECT"] = effective_quota_proj
+                vertex_extra_env["GOOGLE_CLOUD_QUOTA_PROJECT"] = effective_quota_proj
 
         base_url_var = (
             "TALKOPS_SERVER_URL"
@@ -739,11 +928,15 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
             logger.info("Set base URL for %s: %s", self._provider, base_url_var)
 
         try:
-            prov_vars = {}
+            prov_vars: dict[str, str] = {}
             if cleaned:
                 prov_vars[effective_env_var] = cleaned
+                if self._is_vertex and effective_env_var == "VERTEXAI_API_KEY":
+                    prov_vars["GOOGLE_VERTEXAI_API_KEY"] = cleaned
                 if self._provider == "talkops":
                     prov_vars["TALKOPS_SERVER_API_KEY"] = cleaned
+            if vertex_extra_env:
+                prov_vars.update(vertex_extra_env)
             if base_url:
                 prov_vars[base_url_var] = base_url
             if vertex_env_val is not None:
@@ -824,17 +1017,31 @@ class AuthPromptScreen(OpsModalScreen[AuthResult]):
                     asyncio.create_task(_bg_exchange_and_refresh())
                 except Exception:
                     pass
-            elif cleaned or base_url:
+            elif cleaned or vertex_project or base_url:
+                primary_val = cleaned or vertex_project
+                primary_env = (
+                    "VERTEXAI_API_KEY"
+                    if (self._is_vertex and cleaned and cleaned.startswith(("AQ.", "AIza")))
+                    else ("GOOGLE_CLOUD_PROJECT" if (self._is_vertex and not cleaned and vertex_project) else effective_env_var)
+                )
                 storage.set_provider_key(
                     self._provider,
-                    cleaned,
-                    env_var=effective_env_var,
+                    primary_val,
+                    env_var=primary_env,
                     base_url=base_url or None,
                     base_url_env=base_url_var,
+                    extra_env=vertex_extra_env or None,
                     sync_dotenv=False,
                 )
         except Exception as e:
             logger.debug("Failed to persist credentials to CompositeCredentialStorage: %s", e)
+
+        try:
+            from talkops.model.factory import clear_model_cache
+
+            clear_model_cache()
+        except Exception:
+            pass
 
         try:
             self.app.notify(

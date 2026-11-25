@@ -16,18 +16,54 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from talkops.plugins.models import PluginInstance
     from talkops.subagents.types import SubagentMetadata
 
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _extract_plugin_mcp_server_names(meta: SubagentMetadata, plugin: PluginInstance) -> list[str]:
+    """Extract plain-text MCP server names scoped to a plugin subagent without opening connections."""
+    import json
+
+    names: list[str] = []
+
+    def _collect_from_mapping(raw: Mapping[str, Any]) -> None:
+        inner = raw.get("mcpServers") if isinstance(raw.get("mcpServers"), Mapping) else raw
+        for srv_name, srv_cfg in inner.items():
+            if not isinstance(srv_name, str) or not srv_name.strip() or srv_name.startswith("$"):
+                continue
+            if isinstance(srv_cfg, Mapping) and srv_cfg.get("enabled") is False:
+                continue
+            if srv_name not in names:
+                names.append(srv_name)
+
+    mcp_cfg = meta.get("mcp_config")
+    if isinstance(mcp_cfg, Mapping):
+        _collect_from_mapping(mcp_cfg)
+
+    mcp_files = meta.get("mcp_files") or [str(p) for p in plugin.inventory.mcp_files]
+    for fp in mcp_files:
+        try:
+            path_obj = Path(fp)
+            if path_obj.is_file():
+                parsed = json.loads(path_obj.read_text(encoding="utf-8"))
+                if isinstance(parsed, Mapping):
+                    _collect_from_mapping(parsed)
+        except Exception:
+            continue
+
+    if not names and plugin.manifest and isinstance(plugin.manifest.inline_mcp, Mapping):
+        _collect_from_mapping(plugin.manifest.inline_mcp)
+
+    return names
 
 
 def _enrich_plugin_subagent(meta: SubagentMetadata, plugin: PluginInstance) -> SubagentMetadata:
@@ -40,12 +76,22 @@ def _enrich_plugin_subagent(meta: SubagentMetadata, plugin: PluginInstance) -> S
         meta["name"] = f"{p_id}:{raw_name}"
 
     meta["source"] = f"plugin:{p_id}"
+    meta["is_plugin"] = True
     meta["plugin_id"] = p_id
     meta["bundle_dir"] = str(plugin.root)
+
+    if not meta.get("keywords") and plugin.manifest and plugin.manifest.keywords:
+        meta["keywords"] = list(plugin.manifest.keywords)
 
     skills_dir = plugin.root / "skills"
     if skills_dir.is_dir():
         meta["skills_dir"] = str(skills_dir)
+    elif plugin.inventory.skills:
+        first_skill = plugin.inventory.skills[0]
+        if first_skill.is_dir():
+            meta["skills_dir"] = str(first_skill)
+        elif first_skill.is_file():
+            meta["skills_dir"] = str(first_skill.parent)
 
     # Attach default plugin skill wildcard if no skills explicitly set
     if not meta.get("skills"):
@@ -57,6 +103,11 @@ def _enrich_plugin_subagent(meta: SubagentMetadata, plugin: PluginInstance) -> S
             meta["mcp_files"] = [str(p) for p in plugin.inventory.mcp_files]
         elif plugin.manifest and plugin.manifest.inline_mcp:
             meta["mcp_config"] = {"mcpServers": plugin.manifest.inline_mcp}
+
+    if not meta.get("mcp_servers"):
+        extracted_servers = _extract_plugin_mcp_server_names(meta, plugin)
+        if extracted_servers:
+            meta["mcp_servers"] = extracted_servers
 
     return meta
 
@@ -103,6 +154,14 @@ def plugin_subagents(plugins: tuple[PluginInstance, ...] | list[PluginInstance])
                             subagents.append(_enrich_plugin_subagent(meta, plugin))
                     elif entry.is_dir():
                         sub_agents_file = entry / "AGENTS.md"
+                        if not sub_agents_file.is_file():
+                            named_md = entry / f"{entry.name}.md"
+                            if named_md.is_file():
+                                sub_agents_file = named_md
+                            else:
+                                md_files = sorted(entry.glob("*.md"))
+                                if len(md_files) == 1:
+                                    sub_agents_file = md_files[0]
                         if sub_agents_file.is_file():
                             meta = parse_subagent_file(sub_agents_file, fallback_name=entry.name)
                             if meta:

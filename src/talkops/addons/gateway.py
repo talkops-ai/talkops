@@ -85,11 +85,13 @@ class HookEventBus:
         return _unsubscribe
 
     def has_subscribers(self, event_type: str) -> bool:
-        """Return True if at least one handler is subscribed to `event_type` (or wildcard)."""
-        if self._subscribers.get(event_type):
-            return True
-        for wildcard_key in ("*", "addon.*"):
-            if self._subscribers.get(wildcard_key):
+        """Return True if at least one handler is subscribed to `event_type` (or matching wildcard)."""
+        import fnmatch
+
+        for pattern, handlers in self._subscribers.items():
+            if not handlers:
+                continue
+            if pattern == event_type or ("*" in pattern and fnmatch.fnmatchcase(event_type, pattern)):
                 return True
         return False
 
@@ -103,6 +105,8 @@ class HookEventBus:
         source_addon: str = "kernel",
     ) -> AddonEvent:
         """Publish an `AddonEvent` to all matching subscribers."""
+        import fnmatch
+
         event = AddonEvent(
             event_type=event_type,
             thread_id=thread_id,
@@ -114,10 +118,12 @@ class HookEventBus:
         if len(self._recent_events) > self._max_history:
             self._recent_events = self._recent_events[-self._max_history :]
 
-        matching_handlers = list(self._subscribers.get(event_type, []))
-        for wildcard_key in ("*", "addon.*"):
-            if wildcard_key != event_type:
-                matching_handlers.extend(self._subscribers.get(wildcard_key, []))
+        matching_handlers: list[AddonEventHandler] = []
+        for pattern, handlers in self._subscribers.items():
+            if pattern == event_type or ("*" in pattern and fnmatch.fnmatchcase(event_type, pattern)):
+                for h in handlers:
+                    if h not in matching_handlers:
+                        matching_handlers.append(h)
 
         for handler in matching_handlers:
             try:
@@ -250,6 +256,8 @@ class AgentRunGateway:
             logger.debug("AgentRunGateway Postgres checkpointer init skipped: %s", exc)
 
         try:
+            import threading
+
             import aiosqlite
 
             from talkops.state.session import (
@@ -262,7 +270,13 @@ class AgentRunGateway:
             _patch_aiosqlite()
             db_path = get_db_path()
             db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = await aiosqlite.connect(str(db_path), timeout=30.0)
+            pending_conn = aiosqlite.connect(str(db_path), timeout=30.0)
+            if isinstance(pending_conn, threading.Thread):
+                pending_conn.daemon = True
+            worker = getattr(pending_conn, "_thread", None)
+            if worker is not None:
+                worker.daemon = True
+            conn = await pending_conn
             await _guard_sqlite_handle(conn)
             saver = TalkOpsCheckpointer(conn)
             await saver.setup()
@@ -447,6 +461,12 @@ class AgentRunGateway:
         ctx_payload.setdefault("thread_id", resolved_tid)
         ctx_payload.setdefault("source_addon", source_addon)
         ctx_payload.setdefault("interactive", False)
+        if "approval_mode" not in ctx_payload:
+            import os
+
+            srv_mode = (os.environ.get("TALKOPS_SERVER_APPROVAL_MODE") or "auto").strip().lower()
+            ctx_payload["approval_mode"] = srv_mode
+        ctx_payload.setdefault("yolo", str(ctx_payload.get("approval_mode") or "").lower() == "yolo")
         if self._cwd and "cwd" not in ctx_payload:
             ctx_payload["cwd"] = self._cwd
         if configurable:
@@ -487,6 +507,12 @@ class AgentRunGateway:
             run_metadata["channel"] = str(ctx_payload["channel"])
         if ctx_payload.get("conversation_id"):
             run_metadata["conversation_id"] = str(ctx_payload["conversation_id"])
+        if ctx_payload.get("webhook_service_name") or ctx_payload.get("service_name"):
+            run_metadata["service_name"] = str(
+                ctx_payload.get("webhook_service_name") or ctx_payload.get("service_name")
+            )
+        if ctx_payload.get("webhook_title"):
+            run_metadata["title"] = str(ctx_payload["webhook_title"])
         if ctx_payload.get("cwd") or self._cwd:
             run_metadata["cwd"] = str(ctx_payload.get("cwd") or self._cwd)
 
@@ -560,13 +586,14 @@ class AgentRunGateway:
 
                 yield (ns, mode, data)
 
-            if not last_ai_text:
-                state = await self.get_thread_state(resolved_tid)
-                values = getattr(state, "values", None) or (
-                    state.get("values") if isinstance(state, Mapping) else None
-                )
-                if isinstance(values, Mapping) and isinstance(values.get("messages"), list):
-                    last_ai_text = _extract_last_assistant_message(values["messages"])
+            state = await self.get_thread_state(resolved_tid)
+            values = getattr(state, "values", None) or (
+                state.get("values") if isinstance(state, Mapping) else None
+            )
+            if not last_ai_text and isinstance(values, Mapping) and isinstance(values.get("messages"), list):
+                last_ai_text = _extract_last_assistant_message(values["messages"])
+            if isinstance(values, Mapping) and isinstance(values.get("hypothesis_ledger"), list):
+                handle.metadata["hypothesis_ledger"] = list(values["hypothesis_ledger"])
 
             handle.analysis_text = last_ai_text
             handle.completed_at = datetime.now(UTC).isoformat()
@@ -580,6 +607,7 @@ class AgentRunGateway:
                         "run_id": effective_run_id,
                         "status": handle.status,
                         "analysis_text": last_ai_text,
+                        "hypothesis_ledger": list(handle.metadata.get("hypothesis_ledger") or []),
                     },
                     thread_id=resolved_tid,
                     run_id=effective_run_id,
@@ -710,7 +738,17 @@ class AgentRunGateway:
         effective_resume = resume_payload
         if effective_resume is None and decision is not None:
             if isinstance(decision, str):
-                effective_resume = {"decisions": [{"type": decision}]}
+                resolved_tid = self.resolve_thread_id(thread_id)
+                num_actions = 1
+                prev_runs = self._thread_runs.get(resolved_tid) or []
+                if prev_runs:
+                    last_handle = self._runs.get(prev_runs[-1])
+                    if last_handle and last_handle.interrupts:
+                        intr0 = last_handle.interrupts[0]
+                        val = intr0.get("value") if isinstance(intr0, Mapping) else getattr(intr0, "value", None)
+                        if isinstance(val, Mapping) and isinstance(val.get("action_requests"), list):
+                            num_actions = max(1, len(val["action_requests"]))
+                effective_resume = {"decisions": [{"type": decision} for _ in range(num_actions)]}
             else:
                 effective_resume = decision
         cmd = Command(resume=effective_resume)
@@ -819,6 +857,30 @@ class AgentRunGateway:
         if self._store is not None and hasattr(self._store, "get"):
             return self._store.get(namespace, key)
         return None
+
+    async def aclose(self) -> None:
+        """Close persistent SQLite/Postgres checkpointer resources held by the gateway."""
+        conn = getattr(self, "_sqlite_conn", None)
+        self._sqlite_conn = None
+        if conn is not None:
+            try:
+                await conn.close()
+            except Exception:
+                pass
+            try:
+                from talkops.state.session import _drain_aiosqlite_worker
+
+                await _drain_aiosqlite_worker(conn)
+            except Exception:
+                pass
+        cm = getattr(self, "_checkpointer_cm", None)
+        self._checkpointer_cm = None
+        if cm is not None:
+            try:
+                await cm.__aexit__(None, None, None)
+            except Exception:
+                pass
+        self._checkpointer = None
 
 
 def _extract_last_assistant_message(messages: list[Any]) -> str:

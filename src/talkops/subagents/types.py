@@ -31,6 +31,8 @@ class SubagentMetadata(TypedDict):
     capabilities: NotRequired[list[dict[str, Any]] | None]
     mcp_config: NotRequired[dict[str, Any] | None]
     mcp_files: NotRequired[list[str] | None]
+    mcp_servers: NotRequired[list[str] | None]
+    keywords: NotRequired[list[str] | None]
     middleware: NotRequired[list[Any] | None]
     permission_tier: NotRequired[str | None]
     is_plugin: NotRequired[bool]

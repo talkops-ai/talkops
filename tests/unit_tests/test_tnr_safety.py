@@ -24,7 +24,6 @@ import pytest
 from langchain_core.messages import ToolMessage
 
 from talkops.middleware.tnr_safety import (
-    ALockManager,
     TransactionalNonRegressionMiddleware,
     is_mutating_tool_call,
     synthesize_k8s_inverse_command,

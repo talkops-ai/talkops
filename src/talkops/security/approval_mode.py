@@ -30,7 +30,7 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from filelock import FileLock, Timeout
 
@@ -163,11 +163,12 @@ def next_approval_mode(
     *,
     auto_eligible: bool = True,
     smart_eligible: bool = True,
+    yolo_switcher_enabled: bool = False,
 ) -> ApprovalMode:
-    """Cycle to the next interactive approval mode (Manual → Auto → Smart → Manual).
+    """Cycle to the next interactive approval mode.
 
     Used by the Textual TUI (`Shift+Tab` switcher) and CLI interactive cycles.
-    Never cycles into `YOLO`; if called from `YOLO`, exits to `MANUAL`.
+    When `yolo_switcher_enabled` is `True`, cycles `Manual → Auto → Smart → YOLO → Manual`.
     """
     mode = current if isinstance(current, ApprovalMode) else coerce_approval_mode(current)
 
@@ -176,14 +177,20 @@ def next_approval_mode(
             return ApprovalMode.AUTO
         if smart_eligible:
             return ApprovalMode.SMART
+        if yolo_switcher_enabled:
+            return ApprovalMode.YOLO
         return ApprovalMode.MANUAL
 
     if mode == ApprovalMode.AUTO:
         if smart_eligible:
             return ApprovalMode.SMART
+        if yolo_switcher_enabled:
+            return ApprovalMode.YOLO
         return ApprovalMode.MANUAL
 
     if mode == ApprovalMode.SMART:
+        if yolo_switcher_enabled:
+            return ApprovalMode.YOLO
         return ApprovalMode.MANUAL
 
     return ApprovalMode.MANUAL

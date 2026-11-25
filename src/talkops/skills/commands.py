@@ -25,7 +25,6 @@ from rich.console import Console
 from rich.markup import escape as escape_markup
 
 from talkops.config.paths import (
-    PATHS,
     display_path,
     ensure_project_skills_dir,
     ensure_user_skills_dir,

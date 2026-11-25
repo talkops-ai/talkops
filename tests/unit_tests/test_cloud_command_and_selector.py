@@ -29,8 +29,7 @@ from talkops.config.cloud_profiles import (
     get_active_cloud_target,
     get_cloud_execution_mode,
     invalidate_cloud_profile_cache,
-     set_active_cloud_target,
-    set_cloud_execution_mode,
+     set_cloud_execution_mode,
 )
 from talkops.tools.cloud_tools import (
     cloud_get_status,

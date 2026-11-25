@@ -12,4 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Evals package."""
+"""TalkOps Scenario-Driven Agent Evaluation Framework (`evals`).
+
+Implements the Five-Scope Agent Flow Evaluation Architecture, Swiss-Cheese
+Outcome-First Grading, `pass@k` vs. `pass^k` Multi-Trial Consistency, and
+`judgy` Binary Judge Calibration (`TPR` / `TNR` Rogan-Gladen correction).
+
+Note: Scenario evals are strictly local-only and isolated from GitHub Actions
+and PyPI package release builds.
+"""

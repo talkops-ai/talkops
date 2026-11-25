@@ -23,8 +23,7 @@ Applies targeted enhancements and bug fixes for Textual terminal widgets:
 from __future__ import annotations
 
 import re
-from inspect import isawaitable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual import __version__ as _textual_version
@@ -561,13 +560,19 @@ def _install_tooltip_markup_safety_patch() -> None:
     try:
         from textual.markup import MarkupError
         from textual.widgets._markdown import (  # noqa: PLC2701
+            MarkdownBlock,
             MarkdownTableCellContents,
             MarkdownTableContent,
         )
         from textual.widgets._tooltip import Tooltip  # noqa: PLC2701
 
-        original_from_markup = Content.from_markup
-        original_tooltip_update = Tooltip.update
+        from talkops.ui.widgets._links import upgrade_content_links_for_osc8
+
+        original_from_markup = getattr(Content, "_talkops_orig_from_markup", Content.from_markup)
+        original_tooltip_update = getattr(Tooltip, "_talkops_orig_tooltip_update", Tooltip.update)
+        original_token_to_content = getattr(
+            MarkdownBlock, "_talkops_orig_token_to_content", MarkdownBlock._token_to_content
+        )
     except (ImportError, AttributeError) as exc:
         logger.warning(
             "Textual tooltip-markup patch skipped (textual %s): %s",
@@ -575,6 +580,10 @@ def _install_tooltip_markup_safety_patch() -> None:
             exc,
         )
         return
+
+    def token_to_content_osc8(self: Any, token: Any) -> Content:
+        """Convert markdown inline token to Content and attach OSC 8 Style.link on links."""
+        return upgrade_content_links_for_osc8(original_token_to_content(self, token))
 
     @classmethod  # type: ignore[misc]
     def from_markup_safe(
@@ -611,9 +620,13 @@ def _install_tooltip_markup_safety_patch() -> None:
             self.last_row = row_index
 
     try:
+        setattr(Content, "_talkops_orig_from_markup", original_from_markup)
+        setattr(Tooltip, "_talkops_orig_tooltip_update", original_tooltip_update)
+        setattr(MarkdownBlock, "_talkops_orig_token_to_content", original_token_to_content)
         setattr(Content, "from_markup", from_markup_safe)
         setattr(Tooltip, "update", tooltip_update_safe)
         setattr(MarkdownTableContent, "compose", table_content_compose_safe)
+        setattr(MarkdownBlock, "_token_to_content", token_to_content_osc8)
     except (AttributeError, TypeError) as exc:
         logger.warning(
             "Textual tooltip-markup patch assignment rejected (textual %s): %s",

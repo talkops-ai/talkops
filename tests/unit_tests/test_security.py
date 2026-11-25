@@ -23,10 +23,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from talkops.approval_mode import ApprovalMode
 from talkops.security.shell_safety import (
-    classify_command,
     contains_dangerous_patterns,
     is_safe_command,
-    is_shell_command_allowed,
 )
 from talkops.security.unicode_security import (
     check_url_safety,
@@ -212,7 +210,6 @@ def test_approval_mode_payload():
 async def test_awrite_and_read_approval_mode():
     """Verify awrite and read approval mode."""
     from talkops.approval_mode import (
-        APPROVAL_MODE_NAMESPACE,
         aread_approval_mode_from_store,
         awrite_approval_mode,
         read_approval_mode_from_store,
@@ -264,10 +261,7 @@ async def test_resolve_approval_mode_signatures():
     """Verify resolve approval mode signatures."""
     from talkops.approval_mode import ApprovalMode
     from talkops.security.approval_mode_source import (
-        ApprovalPolicyResolver,
         _aresolve_approval_mode,
-        _DecidedMode,
-        _LiveLookup,
         _resolve_approval_mode,
     )
 
@@ -399,7 +393,7 @@ async def test_auto_mode_hitl_aafter_model():
     }
 
     # aafter_model should resolve approval mode and tag routed state
-    update = await mw.aafter_model(state, runtime)
+    await mw.aafter_model(state, runtime)
     # The return from after_model with no tool calls needing interrupt is None or state update
     # In both cases, super().after_model was called with routed_state containing _RoutingDecision(ApprovalMode.AUTO)
     # Let's verify _async_routing_mode helper

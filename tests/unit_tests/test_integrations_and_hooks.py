@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import uuid
 from pathlib import Path
 from typing import Any, cast
@@ -47,7 +46,7 @@ from talkops.integrations.hooks import (
     drain_pending_hooks,
     load_hooks,
 )
-from talkops.integrations.identity import IdentityMapper, UserIdentity
+from talkops.integrations.identity import IdentityMapper
 from talkops.integrations.notifications import (
     notify_cloud_event,
     notify_deploy_event,

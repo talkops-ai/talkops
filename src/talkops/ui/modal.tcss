@@ -37,7 +37,7 @@ ModalDialog.-compact,
     width: 64;
     max-width: 95%;
     height: auto;
-    max-height: 70vh;
+    max-height: 85vh;
     min-height: 8;
 }
 
@@ -121,6 +121,44 @@ ModalSearchInput Input:focus {
     background-tint: transparent;
 }
 
+/* ── Scrollable Body & Pinned Action Footer ────────────── */
+
+ModalBodyScroll,
+.ops-modal-body-scroll {
+    height: auto;
+    max-height: 6;
+    width: 100%;
+    margin-bottom: 1;
+    background: transparent;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+
+ModalBodyScroll.ops-modal-body--notice,
+.ops-modal-body-scroll.ops-modal-body--notice {
+    height: auto;
+    max-height: 55vh;
+    margin-bottom: 0;
+}
+
+ModalBodyScroll.ops-modal-body--fill,
+.ops-modal-body-scroll.ops-modal-body--fill,
+OpsModalScreen.-split-detail ModalBodyScroll,
+OpsModalScreen.-split-detail .ops-modal-body-scroll {
+    height: 1fr;
+    min-height: 3;
+    max-height: 100%;
+    padding-right: 1;
+    overflow-y: auto;
+}
+
+ModalFooter,
+.ops-modal-footer {
+    height: auto;
+    width: 100%;
+    background: transparent;
+}
+
 /* ── OptionList inside ModalScreen ─────────────────────── */
 
 /* Lists hug content unless a screen opts into workspace behavior. */
@@ -135,6 +173,18 @@ OpsModalScreen OptionList {
 
 OpsModalScreen .ops-modal-dialog.-workspace OptionList {
     height: 1fr;
+}
+
+/* In split-detail mode, workspace OptionLists pin at the bottom as an action menu
+   while ModalBodyScroll absorbs variable-length detail content above. */
+OpsModalScreen.-split-detail .ops-modal-dialog.-workspace OptionList,
+OpsModalScreen.-split-detail OptionList.ops-modal-actions {
+    height: auto;
+    min-height: 4;
+    max-height: 10;
+    border-top: solid $primary 35%;
+    padding-top: 1;
+    background: transparent;
 }
 
 OpsModalScreen OptionList:focus {

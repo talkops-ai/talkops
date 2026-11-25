@@ -33,17 +33,14 @@ logger = get_logger(__name__)
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 # Regex to match the `### Model Identity` section in the system prompt for runtime hot-patching
-MODEL_IDENTITY_RE = re.compile(r"### Model Identity\n\n.*?(?=###|\Z)", re.DOTALL)
+MODEL_IDENTITY_RE = re.compile(r"### Model Identity\n\n.*?(?=\n#{2,3} |###|\Z)", re.DOTALL)
 
 _INTERACTIVE_TOOL_APPROVAL_GUIDANCE = (
     "### Human-in-the-Loop Tool Approval\n\n"
     "Some tool calls require operator approval before execution. When a tool call is "
     "rejected by the operator:\n\n"
-    "1. Accept their decision immediately — do NOT retry the same rejected command\n"
-    "2. Explain that you understand they rejected the action\n"
-    "3. Suggest an alternative safe approach or ask for clarification\n"
-    "4. Never attempt the exact same rejected command again\n\n"
-    "Respect the operator's decisions and collaborate with them safely."
+    "1. Accept the decision immediately — NEVER retry the exact same rejected command\n"
+    "2. Acknowledge the rejection and suggest a safe read-only alternative or ask for clarification"
 )
 
 _HEADLESS_TOOL_APPROVAL_GUIDANCE = (
@@ -56,14 +53,7 @@ _HEADLESS_TOOL_APPROVAL_GUIDANCE = (
 )
 
 _INTERACTIVE_CLARIFICATION_GUIDANCE = (
-    "## Clarifying Requests\n\n"
-    "- Do not ask for details the operator already supplied.\n"
-    "- Use reasonable defaults when the request clearly implies them.\n"
-    "- Prioritize missing semantics like target environment, account context, "
-    "alert thresholds, or retention criteria.\n"
-    "- Avoid opening with a long explanation of tool or permission limitations "
-    "when a concise blocking followup question would move the task forward.\n"
-    "- Ask domain-defining architectural questions before implementation details.\n\n"
+    "- Do not ask for details already supplied; use reasonable defaults when implied and prioritize missing target environment, account, or threshold semantics.\n"
 )
 
 _WEB_SEARCH_TOOL_GUIDANCE = (
@@ -145,7 +135,7 @@ def build_cloud_provider_section(
         return (
             "### Cloud Platform Context: AWS\n"
             "Active cloud target is **Amazon Web Services (AWS)**. Consult active skills in the Skills System "
-            "for verified CLI idioms, authentication workflows (`aws sts get-caller-identity`), and deterministic playbooks."
+            "for verified CLI idioms and deterministic playbooks."
         )
     if provider_enum == CloudProvider.AZURE:
         return (
@@ -161,8 +151,8 @@ def build_cloud_provider_section(
         )
     return (
         "### Cloud Platform Context: Multi-Cloud\n"
-        "Active environment spans **Multi-Cloud / Hybrid** architectures. Consult active skills in the Skills System "
-        "for provider context isolation, workload portability, and cross-provider IaC."
+        "Active environment spans **Multi-Cloud / Hybrid / Private Data Center** architectures. Consult active skills "
+        "in the Skills System and plugin marketplace extensions for provider context isolation, workload portability, and cross-provider IaC."
     )
 
 
@@ -407,11 +397,7 @@ def get_base_system_prompt(
         clarification_guidance = _INTERACTIVE_CLARIFICATION_GUIDANCE
         tool_approval_guidance = _INTERACTIVE_TOOL_APPROVAL_GUIDANCE
         todo_guidance = (
-            "- Use `write_todos` to maintain a tactical checklist of execution steps under your active goal.\n"
-            "- Keep todo statuses strictly as `pending`, `in_progress`, or `completed`.\n"
-            "- When beginning execution, mark the first item `in_progress` immediately and proceed without asking redundant confirmation questions.\n"
-            "- Update todo status promptly as each tactical step finishes to keep progress visible in real time.\n"
-            "- If tactical steps change during execution, update the todo list to reflect the actual path forward."
+            "When `write_todos` is available for multi-step goals, track execution steps (`pending`, `in_progress`, `completed`) and mark the first item `in_progress` immediately."
         )
     else:
         mode_description = (
@@ -444,10 +430,7 @@ def get_base_system_prompt(
         clarification_guidance = ""
         tool_approval_guidance = _HEADLESS_TOOL_APPROVAL_GUIDANCE
         todo_guidance = (
-            "- There is no human operator in this mode — complete all steps autonomously without waiting for confirmation.\n"
-            "- Use `write_todos` to track execution steps. Mark the first item `in_progress` immediately upon planning.\n"
-            "- If the plan needs adjustment during execution, revise the todo list yourself without blocking.\n"
-            "- Update todo status promptly as each tactical step finishes."
+            "When `write_todos` is available, track and complete all execution steps (`pending`, `in_progress`, `completed`) autonomously without waiting for confirmation."
         )
 
     # 2. Filesystem Tool Guidance
@@ -566,6 +549,7 @@ def get_webhook_sre_system_prompt(
     webhook_incident_id: str | None = None,
     source_addon: str | None = None,
     channel: str | None = None,
+    has_webhook_alert_prompt: bool = False,
 ) -> str:
     """Get the TalkOps Autonomous SRE & Incident Root Cause Analysis (RCA) system prompt.
 
@@ -583,48 +567,95 @@ def get_webhook_sre_system_prompt(
 
     template = template_path.read_text(encoding="utf-8")
 
-    # Webhook and channel triggers on the central server run autonomously by default
-    mode_description = (
-        "non-interactive (headless) Autonomous SRE & Incident Response mode on a central server — "
-        "there is no human developer in an IDE session monitoring your output in real time"
+    norm_addon = (source_addon or "").strip().lower()
+    norm_channel = (channel or "").strip().lower()
+    is_chatops_channel_turn = bool(
+        not has_webhook_alert_prompt
+        and not webhook_provider
+        and (
+            norm_channel in {"slack", "teams", "msteams", "discord", "telegram"}
+            or norm_addon in {"channels", "channel", "chatops"}
+        )
     )
-    interactive_preamble = (
-        "You received an automated operational alert, webhook event, or incident channel escalation "
-        "and must investigate, diagnose, and produce a complete Root Cause Analysis (RCA) and "
-        "remediation plan autonomously. There is no human available to answer clarifying questions "
-        "during triage — make reasonable, evidence-backed assumptions and proceed."
-    )
-    ambiguity_guidance = (
-        "- Do NOT ask clarifying questions — there is no human operator waiting in an interactive prompt. "
-        "Extract context from alert labels, annotations, cluster/cloud state, and repository manifests.\n"
-        "- If you encounter ambiguity, choose the safest read-only diagnostic interpretation and state your assumption briefly.\n"
-        "- Always use non-interactive command variants — no human is available to respond to stdin prompts. "
-        "Examples: `aws ... --output json`, `kubectl ... --request-timeout=15s`, `--no-input`/`--non-interactive` flags. "
-        "Never run commands that block waiting for stdin or stream indefinitely."
-    )
+
+    if is_chatops_channel_turn:
+        ch_label = f" (`{channel}`)" if channel else ""
+        mode_description = (
+            f"Centralized SRE & Incident ChatOps mode{ch_label} on a central server"
+        )
+        interactive_preamble = (
+            "Engineers and on-call responders interact with you in a shared operational channel "
+            "alongside automated incident escalations. Match your response depth to the message: "
+            "answer greetings, capability inquiries, and quick operational checks concisely, and "
+            "execute full autonomous diagnostics and Root Cause Analysis (RCA) when investigating "
+            "alerts, production errors, or service incidents."
+        )
+        ambiguity_guidance = (
+            "- Execute read-only diagnostics autonomously using defaults from Local Context, "
+            "`<context_authority>`, and thread history without unnecessary confirmation; ask a brief, "
+            "targeted question only if target environment or service scope is genuinely ambiguous.\n"
+            "- Always use non-interactive CLI flags (`aws ... --output json`, `kubectl ... --request-timeout=15s`, "
+            "`--no-pager`, `--no-input`). Never run commands that block on stdin or stream indefinitely."
+        )
+        todo_guidance = (
+            "When `write_todos` is bound in your toolset, use it to track multi-step incident triage "
+            "(`pending`, `in_progress`, `completed`); skip `write_todos` for greetings, capability questions, or single-step status checks."
+        )
+    else:
+        mode_description = (
+            "non-interactive (headless) Autonomous SRE & Incident Response mode on a central server — "
+            "no human operator is waiting on an interactive prompt"
+        )
+        interactive_preamble = (
+            "You received an automated operational alert, webhook event, or incident escalation "
+            "and must investigate, correlate telemetry, and produce a complete Root Cause Analysis (RCA) "
+            "and remediation plan autonomously. Make safe, evidence-backed read-only assumptions and proceed."
+        )
+        ambiguity_guidance = (
+            "- Do NOT ask clarifying questions — extract scope from alert labels, annotations, `<context_authority>`, "
+            "live cluster/cloud state, and repository manifests, stating any safe read-only assumption briefly.\n"
+            "- Always use non-interactive CLI flags (`aws ... --output json`, `kubectl ... --request-timeout=15s`, "
+            "`--no-pager`, `--no-input`). Never run commands that block on stdin or stream indefinitely."
+        )
+        todo_guidance = (
+            "When `write_todos` is bound in your toolset, use it to track your incident triage & RCA checklist "
+            "(`pending`, `in_progress`, `completed`); otherwise proceed directly with specialist subagent delegation and triage."
+        )
+
     blocked_task_guidance = (
-        "If essential cloud/cluster permissions or connectivity are unavailable, report the exact permission/connection "
+        "If essential cloud/cluster permissions or connectivity are unavailable, report the exact "
         "blocker and complete the deepest possible forensic RCA using alert metadata, runbooks, and local manifests."
     )
     substitution_guidance = (
-        "If a required diagnostic tool is unavailable, use an allowed read-only alternative or report the limitation "
-        "clearly in your RCA report."
+        "If a required diagnostic tool is unavailable, use an allowed read-only alternative or note the limitation in your RCA."
     )
     failure_recovery_guidance = (
-        "- After repeated failures on a command, switch to an alternative permitted diagnostic path. "
-        "If none is available, document the blocker in your RCA and synthesize all collected evidence."
+        "- After repeated failures on a command, switch to an alternative permitted diagnostic path; "
+        "if none is available, document the blocker and synthesize all collected evidence."
     )
     tool_approval_guidance = (
-        _INTERACTIVE_TOOL_APPROVAL_GUIDANCE if interactive else _HEADLESS_TOOL_APPROVAL_GUIDANCE
-    )
-    todo_guidance = (
-        "- There is no human operator in this mode — execute all diagnostic and correlation steps autonomously without waiting for confirmation.\n"
-        "- Use `write_todos` to track your incident triage & RCA checklist (`pending`, `in_progress`, `completed`). Mark the first item `in_progress` immediately.\n"
-        "- If new forensic leads emerge during triage, update the todo list yourself without blocking.\n"
-        "- Update todo status promptly as each diagnostic step finishes."
+        _INTERACTIVE_TOOL_APPROVAL_GUIDANCE if (interactive or is_chatops_channel_turn) else _HEADLESS_TOOL_APPROVAL_GUIDANCE
     )
 
-    filesystem_tool_guidance = build_fs_tool_guidance(fs_tools)
+    enabled_fs = frozenset(fs_tools) if fs_tools is not None else None
+    sre_fs_lines: list[str] = []
+    write_tools = [
+        f"`{name}`"
+        for name in ("write_file", "edit_file")
+        if enabled_fs is None or name in enabled_fs
+    ]
+    if write_tools:
+        sre_fs_lines.append(
+            f"- **Report & Authorized File Writes ({' / '.join(write_tools)})**: "
+            "When saving explicitly requested reports or applying authorized manifest fixes, "
+            "use dedicated file tools instead of shell `echo`/heredoc/`sed`/`awk`."
+        )
+    if enabled_fs is not None and len(enabled_fs) < 5:
+        available = ", ".join(f"`{t}`" for t in sorted(enabled_fs))
+        sre_fs_lines.append(
+            f"- **Restricted Filesystem Access**: Only {available} are available."
+        )
+    filesystem_tool_guidance = ("\n".join(sre_fs_lines) + "\n") if sre_fs_lines else ""
     model_identity_section = build_model_identity_section(
         name=model_name,
         provider=model_provider,
@@ -632,7 +663,6 @@ def get_webhook_sre_system_prompt(
         unsupported_modalities=model_unsupported_modalities,
     )
     working_dir_section = build_working_dir_section(cwd=cwd, sandbox_type=sandbox_type)
-    skills_path = f"`~/.talkops/skills` or project-level `.talkops/skills` for {assistant_id}"
     web_search_tool_guidance = (
         _WEB_SEARCH_TOOL_GUIDANCE.format(clarifying_followup="")
         if has_search
@@ -657,7 +687,6 @@ def get_webhook_sre_system_prompt(
         .replace("{filesystem_tool_guidance}", filesystem_tool_guidance)
         .replace("{model_identity_section}", model_identity_section)
         .replace("{working_dir_section}", working_dir_section)
-        .replace("{skills_path}", skills_path)
         .replace("{tool_approval_guidance}", tool_approval_guidance)
         .replace("{web_search_tool_guidance}", web_search_tool_guidance)
         .replace("{webhook_event_context_section}", webhook_event_context_section)

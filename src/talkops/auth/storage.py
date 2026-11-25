@@ -471,11 +471,13 @@ class CompositeCredentialStorage:
         env_var: str | None = None,
         base_url: str | None = None,
         base_url_env: str | None = None,
+        extra_env: dict[str, str] | None = None,
         sync_dotenv: bool = True,
     ) -> bool:
         """Save a provider API key to `auth.json` (`0600`), Keyring, and `.env`."""
         from talkops.model.config import (
             PROVIDER_KEY_ALIASES,
+            _is_google_api_key_value,
             canonicalize_provider,
             get_base_url_env_vars,
             get_credential_env_var,
@@ -485,12 +487,22 @@ class CompositeCredentialStorage:
         prov_key = canonicalize_provider(raw_key)
         cleaned_key = api_key.strip()
         cleaned_url = base_url.strip() if base_url else ""
-        if not prov_key or (not cleaned_key and not cleaned_url):
+        cleaned_extra_env = {
+            str(k).strip(): str(v).strip()
+            for k, v in (extra_env or {}).items()
+            if str(k).strip() and str(v).strip()
+        }
+        if not prov_key or (not cleaned_key and not cleaned_url and not cleaned_extra_env):
             return False
 
+        is_vertex_api_key = (
+            prov_key in ("google_vertexai", "google_anthropic_vertex")
+            and bool(cleaned_key)
+            and _is_google_api_key_value(cleaned_key)
+        )
         resolved_env_var = (
             env_var
-            or get_credential_env_var(prov_key)
+            or ("VERTEXAI_API_KEY" if is_vertex_api_key else get_credential_env_var(prov_key))
             or ("LANGSMITH_API_KEY" if prov_key == "langsmith" else f"{prov_key.upper()}_API_KEY")
         )
         base_url_candidates = get_base_url_env_vars(prov_key)
@@ -515,15 +527,26 @@ class CompositeCredentialStorage:
         if cleaned_url:
             entry["base_url"] = cleaned_url
             entry["base_url_env"] = resolved_base_url_env
+        if cleaned_extra_env:
+            prev_extra = entry.get("extra_env")
+            merged_extra = dict(prev_extra) if isinstance(prev_extra, dict) else {}
+            merged_extra.update(cleaned_extra_env)
+            entry["extra_env"] = merged_extra
         providers[prov_key] = entry
         ok = self._write_auth_json(data)
 
         if cleaned_key:
             os.environ[resolved_env_var] = cleaned_key
             for alias_var in PROVIDER_KEY_ALIASES.get(prov_key, ()):
+                if is_vertex_api_key and alias_var in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "VERTEXAI_PROJECT"):
+                    continue
+                if not is_vertex_api_key and prov_key in ("google_vertexai", "google_anthropic_vertex") and alias_var in ("VERTEXAI_API_KEY", "GOOGLE_VERTEXAI_API_KEY"):
+                    continue
                 os.environ.setdefault(alias_var, cleaned_key)
         if cleaned_url:
             os.environ[resolved_base_url_env] = cleaned_url
+        for k, v in cleaned_extra_env.items():
+            os.environ[k] = v
 
         if sync_dotenv:
             env_updates: dict[str, str] = {}
@@ -531,6 +554,7 @@ class CompositeCredentialStorage:
                 env_updates[resolved_env_var] = cleaned_key
             if cleaned_url:
                 env_updates[resolved_base_url_env] = cleaned_url
+            env_updates.update(cleaned_extra_env)
             if env_updates:
                 paths_mod.upsert_env_vars(env_updates, env_path=self.env_path)
 

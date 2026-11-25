@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -28,6 +29,8 @@ from talkops.webhooks.formatting import (
     build_slack_rca_blocks,
     parse_incident_output,
     parse_rca_output,
+    strip_slack_expand_flags,
+    strip_slack_expand_flags_from_attachments,
 )
 from talkops.webhooks.models import NormalizedWebhookEvent, WebhookConfig
 from talkops.webhooks.security import is_valid_sns_subscribe_url
@@ -47,6 +50,11 @@ class WebhookRunResult:
     status: str
     analysis_text: str
     error: str | None = None
+    preflight_summary: dict[str, Any] | None = None
+    hypothesis_ledger: list[dict[str, Any]] | None = None
+    verification_status: str = "unverified"
+    postmortem_dir: str | None = None
+    duration_seconds: float | None = None
 
 
 async def confirm_sns_subscription(
@@ -104,6 +112,7 @@ async def dispatch_completion_sinks(
             "source_url": event.source_url,
             "analysis": cleaned_analysis,
             "error": result.error,
+            "duration_seconds": result.duration_seconds,
         },
     )
 
@@ -179,6 +188,38 @@ async def dispatch_completion_sinks(
                 http_client=client,
             )
             outcomes.update(channel_outcomes)
+
+        # 8. PostmortemArtifactSink (8th Built-in Sink — TalkOps v2)
+        import os
+
+        pm_dir = (
+            result.postmortem_dir
+            or getattr(config, "postmortem_dir", None)
+            or os.environ.get("TALKOPS_POSTMORTEM_DIR")
+        )
+        pm_enabled = bool(pm_dir) or (
+            os.environ.get("TALKOPS_ENABLE_POSTMORTEM_SINK", "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+        if pm_enabled:
+            try:
+                from talkops.webhooks.postmortem import PostmortemArtifactSink
+
+                sink = PostmortemArtifactSink(output_dir=pm_dir)
+                sink.write_postmortem(
+                    incident_id=event.incident_id,
+                    thread_id=result.thread_id,
+                    provider=event.provider,
+                    service_name=event.service_name or "",
+                    severity=str(event.severity),
+                    analysis_text=cleaned_analysis,
+                    preflight_summary=result.preflight_summary,
+                    hypothesis_ledger=result.hypothesis_ledger,
+                    verification_status=result.verification_status,
+                )
+                outcomes["postmortem"] = True
+            except Exception as exc:
+                logger.warning("Failed to write postmortem artifact for %s: %s", event.incident_id, exc)
+                outcomes["postmortem"] = False
     finally:
         if owns_client:
             await client.aclose()
@@ -290,51 +331,53 @@ async def _post_slack_notification(
     result: WebhookRunResult,
     analysis: str,
 ) -> bool:
-    truncated = analysis[:_SLACK_MAX_CHARS]
-    header = (
-        f"*[TalkOps Automated RCA]* `{event.provider.upper()}` | "
-        f"*{event.title}* (`{event.severity.value.upper()}`)\n"
-        f"Thread: `{result.thread_id}` | Status: `{result.status}`"
+    inv_state: Literal["completed", "error"] = (
+        "error" if result.status.lower() in {"error", "failed"} else "completed"
     )
-    if event.source_url:
-        header += f" | <{event.source_url}|View Source>"
-
-    fields: list[dict[str, str]] = [
-        {"type": "mrkdwn", "text": f"*Provider*\n`{event.provider.upper()}`"},
-        {"type": "mrkdwn", "text": f"*Severity*\n`{event.severity.value.upper()}`"},
-        {"type": "mrkdwn", "text": f"*Status*\n`{result.status}`"},
-        {"type": "mrkdwn", "text": f"*Service*\n`{event.service_name or 'infrastructure'}`"},
-    ]
-    footer = f"Thread `{result.thread_id}`  ·  Incident `{event.incident_id}`"
-    if event.source_url:
-        footer += f"  ·  <{event.source_url}|View Source>"
-
-    blocks: list[dict[str, Any]] = [
-        {
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": f"TalkOps Automated RCA — {event.title}"[:150],
-                "emoji": True,
-            },
-        },
-        {"type": "section", "fields": fields},
-        {"type": "divider"},
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": truncated[:2900] or "_No analysis details._"},
-        },
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": footer[:1900]}],
-        },
-    ]
+    rca_out = parse_rca_output(
+        "slack",
+        analysis,
+        provider=event.provider,
+        title=event.title,
+        severity=event.severity.value,
+        status=inv_state,
+        source_url=event.source_url,
+        lg_thread_id=result.thread_id,
+        duration_seconds=result.duration_seconds,
+        include_feedback_actions=False,
+    )
+    # Standard Slack incoming webhooks may reject `section.expand`; strip it up front
+    blocks = (
+        strip_slack_expand_flags(rca_out.blocks_or_cards)
+        if isinstance(rca_out.blocks_or_cards, list)
+        else []
+    )
+    fallback_text = rca_out.text[:_SLACK_MAX_CHARS] or f"TalkOps RCA — {event.title}"
 
     try:
         resp = await client.post(
             webhook_url,
-            json={"text": f"{header}\n\n{truncated}", "blocks": blocks},
+            json={"text": fallback_text, "blocks": blocks} if blocks else {"text": fallback_text},
         )
+        if resp.status_code >= 400 and blocks:
+            # Retry without native table block on older incoming webhook apps
+            fallback_blocks = build_slack_rca_blocks(
+                analysis,
+                provider=event.provider,
+                title=event.title,
+                severity=event.severity.value,
+                status=inv_state,
+                source_url=event.source_url or "",
+                lg_thread_id=result.thread_id,
+                duration_seconds=result.duration_seconds,
+                use_native_table=False,
+                expand_sections=False,
+                include_feedback_actions=False,
+            )
+            resp = await client.post(
+                webhook_url,
+                json={"text": fallback_text, "blocks": fallback_blocks},
+            )
         resp.raise_for_status()
         logger.info("Posted TalkOps RCA notification to Slack webhook for incident %s", event.incident_id)
         return True
@@ -465,6 +508,25 @@ async def dispatch_outbound_channel_received(
                     )
                     if ref:
                         thread_refs[(ch, conv_id)] = ref
+                elif ch in {"generic_webhook", "webhook", "http", "callback"} and conv_id.startswith(
+                    ("http://", "https://")
+                ):
+                    resp = await client.post(
+                        conv_id,
+                        json={
+                            "stage": "received",
+                            "provider": event.provider,
+                            "event_type": event.event_type,
+                            "incident_id": event.incident_id,
+                            "thread_id": lg_thread_id,
+                            "title": event.title,
+                            "severity": event.severity.value,
+                            "service_name": event.service_name,
+                            "summary": event.summary,
+                        },
+                    )
+                    resp.raise_for_status()
+                    thread_refs[(ch, conv_id)] = {"webhook_url": conv_id}
             except Exception as exc:
                 logger.warning(
                     "Failed to post initial incident card to %s:%s for incident %s: %s",
@@ -531,6 +593,16 @@ async def dispatch_outbound_channel_completed(
                         analysis=analysis,
                         root_ref=root_ref,
                     )
+                elif ch in {"generic_webhook", "webhook", "http", "callback"} and conv_id.startswith(
+                    ("http://", "https://")
+                ):
+                    outcomes[key] = await _post_callback_webhook(
+                        client,
+                        callback_url=conv_id,
+                        event=event,
+                        result=result,
+                        analysis=analysis,
+                    )
             except Exception as exc:
                 logger.warning(
                     "Failed to post completed RCA to %s:%s for incident %s: %s",
@@ -544,6 +616,80 @@ async def dispatch_outbound_channel_completed(
         if owns_client:
             await client.aclose()
     return outcomes
+
+
+def _apply_slack_card_payload(target: dict[str, Any], blocks_or_cards: Any) -> None:
+    """Attach either colored Slack `attachments` or top-level `blocks` to an outbound payload."""
+    if isinstance(blocks_or_cards, dict) and isinstance(blocks_or_cards.get("attachments"), list):
+        target["attachments"] = blocks_or_cards["attachments"]
+    elif isinstance(blocks_or_cards, list):
+        target["blocks"] = blocks_or_cards
+
+
+def _strip_slack_payload_expand(payload: dict[str, Any]) -> bool:
+    """Strip `section.expand` in-place from `blocks` or `attachments`; return True if modified."""
+    if isinstance(payload.get("attachments"), list):
+        payload["attachments"] = strip_slack_expand_flags_from_attachments(payload["attachments"])
+        return True
+    if isinstance(payload.get("blocks"), list):
+        payload["blocks"] = strip_slack_expand_flags(payload["blocks"])
+        return True
+    return False
+
+
+async def _upload_slack_markdown_external(
+    client: httpx.AsyncClient,
+    *,
+    token: str,
+    channel_id: str,
+    filename: str,
+    file_bytes: bytes,
+    thread_ts: str = "",
+    initial_comment: str = "",
+) -> bool:
+    """Upload a `.md` RCA file to a Slack thread using Slack's 3-step external upload flow."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    try:
+        step1 = await client.post(
+            "https://slack.com/api/files.getUploadURLExternal",
+            headers=headers,
+            json={"filename": filename, "length": len(file_bytes)},
+        )
+        step1.raise_for_status()
+        s1_data = step1.json()
+        upload_url = str(s1_data.get("upload_url") or "")
+        file_id = str(s1_data.get("file_id") or "")
+        if not s1_data.get("ok") or not upload_url or not file_id:
+            return False
+
+        step2 = await client.post(
+            upload_url,
+            content=file_bytes,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        step2.raise_for_status()
+
+        complete_body: dict[str, Any] = {
+            "files": [{"id": file_id, "title": filename}],
+            "channel_id": channel_id,
+        }
+        if thread_ts:
+            complete_body["thread_ts"] = thread_ts
+        if initial_comment:
+            complete_body["initial_comment"] = initial_comment
+        step3 = await client.post(
+            "https://slack.com/api/files.completeUploadExternal",
+            headers=headers,
+            json=complete_body,
+        )
+        step3.raise_for_status()
+        return bool(step3.json().get("ok"))
+    except Exception as exc:
+        logger.debug("Slack external markdown upload failed for %s: %s", filename, exc)
+        return False
 
 
 async def _post_slack_channel_received(
@@ -576,10 +722,10 @@ async def _post_slack_channel_received(
     payload: dict[str, Any] = {
         "channel": channel_id,
         "text": inc_out.text[:_SLACK_MAX_CHARS],
-        "blocks": inc_out.blocks_or_cards,
         "unfurl_links": False,
         "unfurl_media": False,
     }
+    _apply_slack_card_payload(payload, inc_out.blocks_or_cards)
     if existing_thread_ts:
         payload["thread_ts"] = existing_thread_ts
 
@@ -593,6 +739,17 @@ async def _post_slack_channel_received(
     )
     resp.raise_for_status()
     data = resp.json()
+    if not data.get("ok") and _strip_slack_payload_expand(payload):
+        resp = await client.post(
+            "https://slack.com/api/chat.postMessage",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
     if not data.get("ok"):
         logger.warning(
             "Slack chat.postMessage (incident card) returned error for %s: %s",
@@ -660,20 +817,30 @@ async def _post_slack_channel_completed(
             lg_thread_id=result.thread_id,
             investigation_state=inv_state,
             rca_preview=analysis,
+            duration_seconds=result.duration_seconds,
         )
+        parent_payload: dict[str, Any] = {
+            "channel": resolved_channel,
+            "text": completed_inc.text[:_SLACK_MAX_CHARS],
+            "unfurl_links": False,
+            "unfurl_media": False,
+        }
+        _apply_slack_card_payload(parent_payload, completed_inc.blocks_or_cards)
         parent_resp = await client.post(
             "https://slack.com/api/chat.postMessage",
             headers=headers,
-            json={
-                "channel": resolved_channel,
-                "text": completed_inc.text[:_SLACK_MAX_CHARS],
-                "blocks": completed_inc.blocks_or_cards,
-                "unfurl_links": False,
-                "unfurl_media": False,
-            },
+            json=parent_payload,
         )
         parent_resp.raise_for_status()
         parent_data = parent_resp.json()
+        if not parent_data.get("ok") and _strip_slack_payload_expand(parent_payload):
+            parent_resp = await client.post(
+                "https://slack.com/api/chat.postMessage",
+                headers=headers,
+                json=parent_payload,
+            )
+            parent_resp.raise_for_status()
+            parent_data = parent_resp.json()
         if parent_data.get("ok"):
             resolved_channel = str(parent_data.get("channel") or resolved_channel)
             parent_msg_ts = str(parent_data.get("ts") or "")
@@ -690,6 +857,7 @@ async def _post_slack_channel_completed(
         status=inv_state,
         source_url=event.source_url,
         lg_thread_id=result.thread_id,
+        duration_seconds=result.duration_seconds,
     )
     rca_payload: dict[str, Any] = {
         "channel": resolved_channel,
@@ -708,6 +876,15 @@ async def _post_slack_channel_completed(
     )
     rca_resp.raise_for_status()
     rca_data = rca_resp.json()
+    if not rca_data.get("ok") and isinstance(rca_out.blocks_or_cards, list):
+        rca_payload["blocks"] = strip_slack_expand_flags(rca_out.blocks_or_cards)
+        rca_resp = await client.post(
+            "https://slack.com/api/chat.postMessage",
+            headers=headers,
+            json=rca_payload,
+        )
+        rca_resp.raise_for_status()
+        rca_data = rca_resp.json()
     if not rca_data.get("ok") and rca_out.blocks_or_cards:
         fallback_blocks = build_slack_rca_blocks(
             analysis,
@@ -717,7 +894,9 @@ async def _post_slack_channel_completed(
             status=inv_state,
             source_url=event.source_url or "",
             lg_thread_id=result.thread_id,
+            duration_seconds=result.duration_seconds,
             use_native_table=False,
+            expand_sections=False,
         )
         rca_payload["blocks"] = fallback_blocks
         rca_resp = await client.post(
@@ -736,7 +915,20 @@ async def _post_slack_channel_completed(
         )
         return False
 
-    # 3. Update the parent incident card in-place (`Investigating...` -> `RCA Complete` + Root Cause Takeaway)
+    # 2b. Auto-upload full `.md` postmortem attachment in thread if the RCA was long/truncated
+    if rca_out.attachment_markdown is not None:
+        md_name, md_bytes = rca_out.attachment_markdown
+        await _upload_slack_markdown_external(
+            client,
+            token=token,
+            channel_id=resolved_channel,
+            filename=md_name,
+            file_bytes=md_bytes,
+            thread_ts=thread_ts,
+            initial_comment=f"Full RCA report (`{md_name}`)",
+        )
+
+    # 3. Update the parent incident card in-place (`Investigating...` Red -> `RCA Complete` Green + Takeaway)
     if not created_fresh_parent and parent_msg_ts:
         completed_inc = parse_incident_output(
             "slack",
@@ -749,18 +941,27 @@ async def _post_slack_channel_completed(
             lg_thread_id=result.thread_id,
             investigation_state=inv_state,
             rca_preview=analysis,
+            duration_seconds=result.duration_seconds,
         )
         try:
-            await client.post(
+            upd_payload: dict[str, Any] = {
+                "channel": resolved_channel,
+                "ts": parent_msg_ts,
+                "text": completed_inc.text[:_SLACK_MAX_CHARS],
+            }
+            _apply_slack_card_payload(upd_payload, completed_inc.blocks_or_cards)
+            upd_resp = await client.post(
                 "https://slack.com/api/chat.update",
                 headers=headers,
-                json={
-                    "channel": resolved_channel,
-                    "ts": parent_msg_ts,
-                    "text": completed_inc.text[:_SLACK_MAX_CHARS],
-                    "blocks": completed_inc.blocks_or_cards,
-                },
+                json=upd_payload,
             )
+            upd_data = upd_resp.json() if upd_resp.status_code < 400 else {}
+            if not upd_data.get("ok") and _strip_slack_payload_expand(upd_payload):
+                await client.post(
+                    "https://slack.com/api/chat.update",
+                    headers=headers,
+                    json=upd_payload,
+                )
         except Exception as exc:
             logger.debug("Slack chat.update on incident root card failed: %s", exc)
 
@@ -802,7 +1003,12 @@ async def _post_discord_channel_received(
         investigation_state="investigating",
     )
     headers = {"Authorization": f"Bot {token}", "Content-Type": "application/json"}
-    body: dict[str, Any] = {"content": inc_out.text[:1900]}
+    suppress = (
+        isinstance(inc_out.blocks_or_cards, dict)
+        and bool(inc_out.blocks_or_cards.get("suppress_content"))
+        and bool(inc_out.blocks_or_cards.get("embeds"))
+    )
+    body: dict[str, Any] = {"content": "" if suppress else inc_out.text[:1900]}
     if isinstance(inc_out.blocks_or_cards, dict):
         if inc_out.blocks_or_cards.get("embeds"):
             body["embeds"] = inc_out.blocks_or_cards["embeds"]
@@ -866,16 +1072,42 @@ async def _post_discord_channel_completed(
         status=inv_state,
         source_url=event.source_url,
         lg_thread_id=result.thread_id,
+        duration_seconds=result.duration_seconds,
     )
-    body: dict[str, Any] = {"content": rca_out.text[:1900]}
-    if isinstance(rca_out.blocks_or_cards, dict) and rca_out.blocks_or_cards.get("embeds"):
-        body["embeds"] = rca_out.blocks_or_cards["embeds"]
+    suppress_rca = (
+        isinstance(rca_out.blocks_or_cards, dict)
+        and bool(rca_out.blocks_or_cards.get("suppress_content"))
+        and bool(rca_out.blocks_or_cards.get("embeds"))
+    )
+    body: dict[str, Any] = {"content": "" if suppress_rca else rca_out.text[:1900]}
+    if isinstance(rca_out.blocks_or_cards, dict):
+        if rca_out.blocks_or_cards.get("embeds"):
+            body["embeds"] = rca_out.blocks_or_cards["embeds"]
+        if rca_out.blocks_or_cards.get("components"):
+            body["components"] = rca_out.blocks_or_cards["components"]
 
-    resp = await client.post(
-        f"https://discord.com/api/v10/channels/{target_thread}/messages",
-        headers=headers,
-        json=body,
-    )
+    if rca_out.attachment_markdown is not None:
+        md_name, md_bytes = rca_out.attachment_markdown
+        body["attachments"] = [
+            {
+                "id": 0,
+                "filename": md_name,
+                "description": f"Full TalkOps RCA report ({event.title or event.incident_id})"[:1024],
+            }
+        ]
+        # Multipart upload MUST NOT set `Content-Type: application/json` manually
+        resp = await client.post(
+            f"https://discord.com/api/v10/channels/{target_thread}/messages",
+            headers={"Authorization": f"Bot {token}"},
+            data={"payload_json": json.dumps(body)},
+            files=[("files[0]", (md_name, md_bytes, "text/markdown"))],
+        )
+    else:
+        resp = await client.post(
+            f"https://discord.com/api/v10/channels/{target_thread}/messages",
+            headers=headers,
+            json=body,
+        )
     resp.raise_for_status()
 
     if parent_msg_id:
@@ -890,8 +1122,14 @@ async def _post_discord_channel_completed(
             lg_thread_id=result.thread_id,
             investigation_state=inv_state,
             rca_preview=analysis,
+            duration_seconds=result.duration_seconds,
         )
-        patch_body: dict[str, Any] = {"content": completed_inc.text[:1900]}
+        suppress_patch = (
+            isinstance(completed_inc.blocks_or_cards, dict)
+            and bool(completed_inc.blocks_or_cards.get("suppress_content"))
+            and bool(completed_inc.blocks_or_cards.get("embeds"))
+        )
+        patch_body: dict[str, Any] = {"content": "" if suppress_patch else completed_inc.text[:1900]}
         if isinstance(completed_inc.blocks_or_cards, dict):
             if completed_inc.blocks_or_cards.get("embeds"):
                 patch_body["embeds"] = completed_inc.blocks_or_cards["embeds"]
@@ -964,6 +1202,20 @@ async def _post_teams_channel_received(
         investigation_state="investigating",
     )
 
+    def _teams_activity_payload(text: str, attachments: Any, *, msg_id: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"type": "message"}
+        if msg_id:
+            payload["id"] = msg_id
+        if attachments:
+            # Omit `text` when Adaptive Cards are attached so Teams doesn't duplicate text above the card.
+            payload["attachments"] = attachments
+            if text.strip():
+                payload["summary"] = text.strip()[:200]
+        else:
+            payload["textFormat"] = "markdown"
+            payload["text"] = text
+        return payload
+
     # Mode 1: Teams Incoming Webhook URL
     webhook_url = (
         conversation_id
@@ -973,7 +1225,7 @@ async def _post_teams_channel_received(
     if webhook_url and conversation_id.startswith(("http://", "https://")):
         resp = await client.post(
             webhook_url,
-            json={"type": "message", "text": inc_out.text, "attachments": inc_out.blocks_or_cards or []},
+            json=_teams_activity_payload(inc_out.text, inc_out.blocks_or_cards),
         )
         resp.raise_for_status()
         return {"webhook_url": webhook_url}
@@ -990,7 +1242,7 @@ async def _post_teams_channel_received(
     if not token and webhook_url:
         resp = await client.post(
             webhook_url,
-            json={"type": "message", "text": inc_out.text, "attachments": inc_out.blocks_or_cards or []},
+            json=_teams_activity_payload(inc_out.text, inc_out.blocks_or_cards),
         )
         resp.raise_for_status()
         return {"webhook_url": webhook_url}
@@ -1002,12 +1254,7 @@ async def _post_teams_channel_received(
     resp = await client.post(
         f"{service_url}/v3/conversations/{conversation_id}/activities",
         headers=headers,
-        json={
-            "type": "message",
-            "textFormat": "markdown",
-            "text": inc_out.text,
-            "attachments": inc_out.blocks_or_cards or [],
-        },
+        json=_teams_activity_payload(inc_out.text, inc_out.blocks_or_cards),
     )
     resp.raise_for_status()
     data = resp.json() if resp.content else {}
@@ -1052,7 +1299,21 @@ async def _post_teams_channel_completed(
         status=inv_state,
         source_url=event.source_url,
         lg_thread_id=result.thread_id,
+        duration_seconds=result.duration_seconds,
     )
+
+    def _teams_completed_payload(text: str, attachments: Any, *, msg_id: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"type": "message"}
+        if msg_id:
+            payload["id"] = msg_id
+        if attachments:
+            payload["attachments"] = attachments
+            if text.strip():
+                payload["summary"] = text.strip()[:200]
+        else:
+            payload["textFormat"] = "markdown"
+            payload["text"] = text
+        return payload
 
     webhook_url = (
         (root_ref or {}).get("webhook_url")
@@ -1064,9 +1325,15 @@ async def _post_teams_channel_completed(
     ):
         resp = await client.post(
             webhook_url,
-            json={"type": "message", "text": rca_out.text, "attachments": rca_out.blocks_or_cards or []},
+            json=_teams_completed_payload(rca_out.text, rca_out.blocks_or_cards),
         )
         resp.raise_for_status()
+        for overflow_chunk in rca_out.overflow_texts:
+            ov_resp = await client.post(
+                webhook_url,
+                json={"type": "message", "textFormat": "markdown", "text": overflow_chunk},
+            )
+            ov_resp.raise_for_status()
         return True
 
     service_url = (
@@ -1081,7 +1348,7 @@ async def _post_teams_channel_completed(
     if not token and webhook_url:
         resp = await client.post(
             webhook_url,
-            json={"type": "message", "text": rca_out.text, "attachments": rca_out.blocks_or_cards or []},
+            json=_teams_completed_payload(rca_out.text, rca_out.blocks_or_cards),
         )
         resp.raise_for_status()
         return True
@@ -1092,12 +1359,7 @@ async def _post_teams_channel_completed(
 
     parent_msg_id = (root_ref or {}).get("message_id") or ""
     thread_conv = (root_ref or {}).get("thread_conv_id") or conversation_id
-    activity_body: dict[str, Any] = {
-        "type": "message",
-        "textFormat": "markdown",
-        "text": rca_out.text,
-        "attachments": rca_out.blocks_or_cards or [],
-    }
+    activity_body = _teams_completed_payload(rca_out.text, rca_out.blocks_or_cards)
     if parent_msg_id:
         activity_body["replyToId"] = parent_msg_id
         post_url = f"{service_url}/v3/conversations/{thread_conv}/activities/{parent_msg_id}"
@@ -1106,6 +1368,16 @@ async def _post_teams_channel_completed(
 
     resp = await client.post(post_url, headers=headers, json=activity_body)
     resp.raise_for_status()
+    for overflow_chunk in rca_out.overflow_texts:
+        ov_body: dict[str, Any] = {
+            "type": "message",
+            "textFormat": "markdown",
+            "text": overflow_chunk,
+        }
+        if parent_msg_id:
+            ov_body["replyToId"] = parent_msg_id
+        ov_resp = await client.post(post_url, headers=headers, json=ov_body)
+        ov_resp.raise_for_status()
 
     if parent_msg_id:
         completed_inc = parse_incident_output(
@@ -1119,18 +1391,15 @@ async def _post_teams_channel_completed(
             lg_thread_id=result.thread_id,
             investigation_state=inv_state,
             rca_preview=analysis,
+            duration_seconds=result.duration_seconds,
         )
         try:
             await client.put(
                 f"{service_url}/v3/conversations/{conversation_id}/activities/{parent_msg_id}",
                 headers=headers,
-                json={
-                    "id": parent_msg_id,
-                    "type": "message",
-                    "textFormat": "markdown",
-                    "text": completed_inc.text,
-                    "attachments": completed_inc.blocks_or_cards or [],
-                },
+                json=_teams_completed_payload(
+                    completed_inc.text, completed_inc.blocks_or_cards, msg_id=parent_msg_id
+                ),
             )
         except Exception:
             pass

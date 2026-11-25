@@ -25,25 +25,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from rich.console import Console as RichConsole
-from rich.console import ConsoleOptions, RenderResult
-from rich.markdown import Markdown as RichMarkdown
-from rich.styled import Styled
-from rich.text import Text
-from rich.theme import Theme
-from textual import events, on
 from textual._context import NoActiveAppError
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.content import Content, Span
-from textual.css.query import NoMatches
+from textual.containers import Horizontal, Vertical
+from textual.content import Content
 from textual.events import Click
-from textual.geometry import Offset
-from textual.message import Message
-from textual.reactive import var
-from textual.selection import Selection
-from textual.style import Style
-from textual.style import Style as TStyle
 from textual.widgets import Static
 
 from talkops.config.settings import (
@@ -52,13 +38,10 @@ from talkops.config.settings import (
 )
 from talkops.ui import theme
 from talkops.ui.widgets.diff import (
-    compose_diff_lines,
-    format_file_diff_header,
     render_diff_content,
 )
 from talkops.ui.widgets.loading import format_duration
 from talkops.ui.widgets.tool_display import (
-    format_tool_display,
     format_tool_parts,
     format_tool_result_summary,
 )
@@ -67,15 +50,10 @@ from talkops.ui.widgets.tool_widgets import is_sensitive_file_path
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
 
-    from textual.events import MouseMove
     from textual.timer import Timer
     from textual.widget import Widget
-    from textual.widgets import Markdown
-    from textual.widgets._markdown import MarkdownStream
 
-    from talkops.ui.theme import ThemeColors
 
 ASK_USER_ANSWERED_SUMMARY = "answered"
 ASK_USER_FAILED_SUMMARY = "failed"
@@ -181,6 +159,9 @@ _TOOLS_WITH_HEADER_INFO: set[str] = {
     "task",
     "write_todos",
     "call_mcp_tool",
+    "list_resources",
+    "read_resource",
+    "manage_task",
 }
 
 
@@ -509,6 +490,7 @@ class ToolCallMessage(Vertical):
         # args once per widget rather than on every re-render.
         self._ask_user_args_warned: bool = False
         # Deferred state for hydration (set by MessageData.to_widget)
+        self._call_id: str = ""
         self._deferred_status: str | None = None
         self._deferred_output: str | None = None
         self._deferred_duration: float | None = None
@@ -2289,23 +2271,19 @@ class ToolCallMessage(Vertical):
             return
 
         output_stripped = self._output.strip()
-        lines = output_stripped.split("\n")
-        total_lines = len(lines)
-        total_chars = len(output_stripped)
-
-        # Truncate if too many lines OR too many characters
-        needs_truncation = (
-            total_lines > self._PREVIEW_LINES or total_chars > self._PREVIEW_CHARS
-        )
-
-        full = self._format_output(self._output, is_preview=False)
-        if not full.content.plain.strip():
+        if not output_stripped and not self._has_diff_preview():
             self._preview_row.display = False
             self._full_row.display = False
             self._hint_widget.display = False
             return
 
         if self._expanded:
+            full = self._format_output(self._output, is_preview=False)
+            if not full.content.plain.strip():
+                self._preview_row.display = False
+                self._full_row.display = False
+                self._hint_widget.display = False
+                return
             # Show full output with formatting
             self._preview_row.display = False
             self._full_widget.update(full.content)
@@ -2320,7 +2298,7 @@ class ToolCallMessage(Vertical):
             else:
                 self._hint_widget.display = False
         else:
-            # Show collapsed preview
+            # Show collapsed preview without formatting full untruncated output
             self._full_row.display = False
             if not self._is_search_no_result_output(self._output) and (
                 self._tool_name in _COLLAPSE_OUTPUT_BY_DEFAULT
@@ -2338,11 +2316,29 @@ class ToolCallMessage(Vertical):
                 self._preview_row.display = True
                 self._hint_widget.display = False
                 return
-            # Truncate the preview only when the output is large enough to
-            # warrant it; `_ALWAYS_PREVIEW_TOOLS` use their compact preview
-            # regardless of size.
+
+            total_chars = len(output_stripped)
+            needs_truncation = total_chars > self._PREVIEW_CHARS
+            if not needs_truncation:
+                newline_count = 0
+                search_pos = 0
+                while True:
+                    idx = output_stripped.find("\n", search_pos)
+                    if idx == -1:
+                        break
+                    newline_count += 1
+                    if newline_count >= self._PREVIEW_LINES:
+                        needs_truncation = True
+                        break
+                    search_pos = idx + 1
+
             is_preview = needs_truncation or self._tool_name in _ALWAYS_PREVIEW_TOOLS
             result = self._format_output(self._output, is_preview=is_preview)
+            if not result.content.plain.strip() and not result.truncation:
+                self._preview_row.display = False
+                self._full_row.display = False
+                self._hint_widget.display = False
+                return
             self._preview_widget.update(result.content)
             self._preview_row.display = True
 

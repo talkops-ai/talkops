@@ -29,6 +29,7 @@ import collections
 import os
 import re
 import signal
+import sys
 import threading
 import time
 import uuid
@@ -156,6 +157,26 @@ class DetachedExecResult:
     wait_ms: int
 
 
+def read_log_tail(path: Path, max_bytes: int = 65536) -> str:
+    """Read at most the trailing `max_bytes` of a UTF-8 log file without loading the full file."""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            if size <= 0:
+                return ""
+            offset = max(0, size - max(1024, max_bytes))
+            fh.seek(offset)
+            data = fh.read()
+        text = data.decode("utf-8", errors="replace")
+        if offset > 0 and "\n" in text:
+            # Drop partial leading UTF-8/line fragment after mid-file seek
+            text = text.split("\n", 1)[1]
+        return text
+    except OSError:
+        return ""
+
+
 @dataclass
 class BackgroundTaskHandle:
     """Live runtime handle for a running or completed background command."""
@@ -181,6 +202,7 @@ class BackgroundTaskHandle:
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _chunks: collections.deque[str] = field(default_factory=collections.deque, repr=False)
     _total_chars: int = field(default=0, repr=False)
+    _last_non_empty_line: str = field(default="", repr=False)
     _last_output_at: float = field(default_factory=time.time, repr=False)
     _last_prompt_notified_len: int = field(default=-1, repr=False)
     _detached: bool = field(default=False, repr=False)
@@ -190,12 +212,20 @@ class BackgroundTaskHandle:
         if not text:
             return
         now = time.time()
+        latest_line = ""
+        for line in reversed(text.splitlines()):
+            cleaned = line.strip()
+            if cleaned:
+                latest_line = cleaned[:160]
+                break
         with self._lock:
             self._chunks.append(text)
             self._total_chars += len(text)
             while self._total_chars > MAX_RING_BUFFER_CHARS and len(self._chunks) > 1:
                 removed = self._chunks.popleft()
                 self._total_chars -= len(removed)
+            if latest_line:
+                self._last_non_empty_line = latest_line
             self._last_output_at = now
             self.updated_at = now
             if self.status == "waiting_for_input":
@@ -207,14 +237,16 @@ class BackgroundTaskHandle:
         tail_chars: int = 8000,
         tail_lines: int | None = None,
     ) -> str:
-        """Return recent output from the ring buffer (or disk log fallback)."""
+        """Return recent output from the ring buffer (or bounded disk log tail fallback)."""
         with self._lock:
             combined = "".join(self._chunks)
         if not combined and self.log_path.exists():
-            try:
-                combined = self.log_path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                combined = ""
+            max_bytes = max(
+                65536,
+                (tail_chars * 4 if tail_chars > 0 else 65536),
+                ((tail_lines or 0) * 512),
+            )
+            combined = read_log_tail(self.log_path, max_bytes=max_bytes)
         if tail_lines is not None and tail_lines > 0:
             lines = combined.splitlines()
             if len(lines) > tail_lines:
@@ -224,14 +256,22 @@ class BackgroundTaskHandle:
         return combined
 
     def last_non_empty_line(self) -> str:
-        """Return the most recent non-empty line of output for UI badges."""
+        """Return the most recent non-empty line of output for UI badges in O(1)."""
         with self._lock:
+            if self._last_non_empty_line:
+                return self._last_non_empty_line
+            if not self._chunks:
+                return ""
             combined = "".join(self._chunks)
         for line in reversed(combined.splitlines()):
             cleaned = line.strip()
             if cleaned:
                 return cleaned[:160]
         return ""
+
+    def is_active(self) -> bool:
+        """Return True if the background task is still running or waiting for input."""
+        return self.status in ("running", "waiting_for_input")
 
     def elapsed_seconds(self) -> float:
         """Return elapsed execution time in seconds."""
@@ -315,6 +355,11 @@ class BackgroundTaskManager:
         proc_env.setdefault("GIT_PAGER", "cat")
 
         started_at = time.time()
+        subproc_kwargs: dict[str, Any] = {}
+        if sys.platform != "win32":
+            subproc_kwargs["start_new_session"] = True
+        else:
+            subproc_kwargs["creationflags"] = 0x00000200  # CREATE_NEW_PROCESS_GROUP
         proc = await asyncio.create_subprocess_shell(
             command,
             stdin=asyncio.subprocess.PIPE,
@@ -322,7 +367,7 @@ class BackgroundTaskManager:
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd_str,
             env=proc_env,
-            start_new_session=True,
+            **subproc_kwargs,
         )
 
         handle = BackgroundTaskHandle(
@@ -437,27 +482,36 @@ class BackgroundTaskManager:
             return
 
         last_emit = 0.0
+        last_flush = 0.0
         try:
-            with handle.log_path.open("a", encoding="utf-8", errors="replace") as log_file:
+            with handle.log_path.open(
+                "a", encoding="utf-8", errors="replace", buffering=1
+            ) as log_file:
                 while True:
                     chunk = await proc.stdout.read(4096)
                     if not chunk:
                         break
                     text = chunk.decode("utf-8", errors="replace")
                     handle.append_output(text)
+                    now = time.time()
                     try:
                         log_file.write(text)
-                        log_file.flush()
+                        if (now - last_flush) >= 0.25:
+                            log_file.flush()
+                            last_flush = now
                     except OSError:
                         pass
 
-                    now = time.time()
                     if handle._detached and (now - last_emit) >= 0.25:
                         last_emit = now
                         evt = self._build_event(handle, phase="output")
                         self._publish_event(handle.thread_id, evt)
                         if on_event is not None:
                             self._safe_invoke_callback(on_event, evt)
+                try:
+                    log_file.flush()
+                except OSError:
+                    pass
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -626,7 +680,7 @@ class BackgroundTaskManager:
         records = [
             h.to_record()
             for h in sorted(handles, key=lambda item: item.started_at)
-            if include_completed or h.status in ("running", "waiting_for_input")
+            if include_completed or h.is_active()
         ]
         return records
 
@@ -834,7 +888,6 @@ class BackgroundTaskManager:
             "started_at": handle.started_at,
             "updated_at": handle.updated_at,
             "completed_at": handle.completed_at,
-            " elapsed_seconds": round(handle.elapsed_seconds(), 2),
             "elapsed_seconds": round(handle.elapsed_seconds(), 2),
             "exit_code": handle.exit_code,
             "log_path": str(handle.log_path),

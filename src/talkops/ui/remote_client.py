@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ from langchain_core.messages import (
     AIMessageChunk,
     BaseMessage,
     HumanMessage,
+    RemoveMessage,
     ToolMessage,
 )
 
@@ -41,6 +43,9 @@ from talkops.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _RUN_CANCEL_WAIT_SECONDS = 10.0
+_STATE_CALL_TIMEOUT_SECONDS = 20.0
+_IDLE_POOL_RECYCLE_SECONDS = 45.0
+_KEEPALIVE_EXPIRY_SECONDS = 20.0
 
 
 @dataclass(frozen=True)
@@ -169,8 +174,9 @@ class RemoteAgent:
         self._active_token: str | None = None
         self._graph: Any = None
         self._active_run_id: str | None = None
+        self._last_activity_monotonic: float = time.monotonic()
 
-    async def _ensure_auth_token(self) -> None:
+    async def _ensure_auth_token(self, *, force_refresh: bool = False) -> None:
         """Ensure a valid short-lived temporary token (JWT) is exchanged and bound to headers."""
         if not self._api_key or self._url.startswith("inprocess://"):
             return
@@ -183,16 +189,56 @@ class RemoteAgent:
             self._url,
             api_key=self._api_key,
             user_id=self._user_id,
+            force_refresh=force_refresh,
         )
         new_headers = build_remote_auth_headers(
             api_key=self._api_key,
             user_id=self._user_id,
             extra_headers=self._extra_headers,
         )
-        if temp_token and temp_token != self._active_token:
+        if (temp_token and temp_token != self._active_token) or new_headers != self._headers:
             await self.aclose()
-            self._active_token = temp_token
+            if temp_token:
+                self._active_token = temp_token
         self._headers = new_headers
+
+    def _has_real_http_pool(self) -> bool:
+        """Return True when `_graph` wraps a real httpx.AsyncClient (not an in-process or unit-test mock)."""
+        if self._graph is None or self._url.startswith("inprocess://"):
+            return False
+        if not hasattr(self._graph, "_validate_client"):
+            return False
+        try:
+            client = self._graph._validate_client()
+            return isinstance(getattr(client, "http", None), httpx.AsyncClient)
+        except Exception:
+            return False
+
+    async def _prepare_client_for_call(self, *, force_token_refresh: bool = False) -> None:
+        """Recycle stale idle keepalive pools and ensure fresh auth headers before remote I/O."""
+        now = time.monotonic()
+        if (
+            self._graph is not None
+            and (now - self._last_activity_monotonic) > _IDLE_POOL_RECYCLE_SECONDS
+            and self._has_real_http_pool()
+        ):
+            logger.debug(
+                "Recycling idle RemoteAgent HTTP pool after %.1fs of inactivity",
+                now - self._last_activity_monotonic,
+            )
+            await self.aclose()
+        await self._ensure_auth_token(force_refresh=force_token_refresh)
+        self._last_activity_monotonic = time.monotonic()
+
+    @staticmethod
+    def _is_retryable_state_error(exc: BaseException) -> tuple[bool, bool]:
+        """Return (should_retry, force_token_refresh) for state/thread/store RPC errors."""
+        status_code = getattr(exc, "status_code", None)
+        if status_code == 401:
+            return True, True
+        if isinstance(exc, (httpx.TransportError, httpx.TimeoutException, TimeoutError)):
+            return True, False
+        return False, False
 
     async def aclose(self) -> None:
         """Explicitly close SDK client and underlying httpx connection pool (DV-10)."""
@@ -218,8 +264,31 @@ class RemoteAgent:
                 url=self._url,
                 api_key=sdk_api_key,
                 headers=self._headers if self._headers else None,
-                timeout=(10.0, 600.0, 300.0, 10.0),
+                timeout=(5.0, 600.0, 45.0, 5.0),
             )
+            if (
+                not self._url.startswith("inprocess://")
+                and isinstance(getattr(client, "http", None), httpx.AsyncClient)
+            ):
+                old_http = client.http
+                transport = httpx.AsyncHTTPTransport(
+                    retries=1,
+                    limits=httpx.Limits(
+                        max_connections=20,
+                        max_keepalive_connections=10,
+                        keepalive_expiry=_KEEPALIVE_EXPIRY_SECONDS,
+                    ),
+                )
+                client.http = httpx.AsyncClient(
+                    base_url=old_http.base_url,
+                    headers=old_http.headers,
+                    timeout=old_http.timeout,
+                    transport=transport,
+                )
+                try:
+                    asyncio.get_running_loop().create_task(old_http.aclose())
+                except RuntimeError:
+                    pass
             self._graph = RemoteGraph(
                 self._graph_name,
                 client=client,
@@ -238,7 +307,7 @@ class RemoteAgent:
     ) -> AsyncIterator[tuple[tuple[str, ...], str, Any]]:
         """Execute astream on RemoteAgent."""
         _require_thread_id(config)
-        await self._ensure_auth_token()
+        await self._prepare_client_for_call()
 
         prepared_config = _prepare_config(config)
 
@@ -299,6 +368,7 @@ class RemoteAgent:
                 parsed = _parse_stream_item(raw_item)
                 if parsed is None:
                     continue
+                self._last_activity_monotonic = time.monotonic()
                 ns, mode, data = parsed
 
                 logger.debug("RemoteGraph event ns=%s mode=%s data_type=%s", ns, mode, type(data).__name__)
@@ -355,21 +425,42 @@ class RemoteAgent:
         from langgraph_sdk.errors import NotFoundError
 
         thread_id = _require_thread_id(config)
-        graph = self._get_graph()
-        try:
-            return await graph.aget_state(_prepare_config(config))
-        except NotFoundError:
-            logger.debug("Thread %s not found on server", thread_id)
-            return None
-        except TypeError as e:
-            if "subscriptable" in str(e).lower():
-                logger.debug("Thread %s has no checkpoint yet", thread_id)
+        await self._prepare_client_for_call()
+        prepared = _prepare_config(config)
+        for attempt in range(2):
+            graph = self._get_graph()
+            try:
+                res = await asyncio.wait_for(
+                    graph.aget_state(prepared),
+                    timeout=_STATE_CALL_TIMEOUT_SECONDS,
+                )
+                self._last_activity_monotonic = time.monotonic()
+                return res
+            except NotFoundError:
+                logger.debug("Thread %s not found on server", thread_id)
                 return None
-            raise
+            except TypeError as e:
+                if "subscriptable" in str(e).lower():
+                    logger.debug("Thread %s has no checkpoint yet", thread_id)
+                    return None
+                raise
+            except Exception as exc:
+                should_retry, refresh_token = self._is_retryable_state_error(exc)
+                if attempt == 0 and should_retry and self._has_real_http_pool():
+                    logger.debug(
+                        "aget_state transient/auth error on thread %s (%s); recycling client and retrying",
+                        thread_id,
+                        exc,
+                    )
+                    await self.aclose()
+                    await self._prepare_client_for_call(force_token_refresh=refresh_token)
+                    continue
+                raise
 
     async def acancel_active_runs(self, config: dict[str, Any]) -> CancellationResult:
         """Cancel any in-flight runs on the thread, keeping active_run_id until terminal state confirmed (DV-09)."""
         thread_id = _require_thread_id(config)
+        await self._prepare_client_for_call()
         graph = self._get_graph()
         try:
             client = graph._validate_client()
@@ -383,7 +474,10 @@ class RemoteAgent:
 
         for status in ("running", "pending"):
             try:
-                runs = await client.runs.list(thread_id, status=status, limit=10)
+                runs = await asyncio.wait_for(
+                    client.runs.list(thread_id, status=status, limit=10),
+                    timeout=_RUN_CANCEL_WAIT_SECONDS,
+                )
                 for run in runs:
                     r_status = run.get("status") if isinstance(run, dict) else getattr(run, "status", None)
                     if r_status is not None and r_status != status:
@@ -396,7 +490,10 @@ class RemoteAgent:
 
         if not run_ids:
             try:
-                runs = await client.runs.list(thread_id)
+                runs = await asyncio.wait_for(
+                    client.runs.list(thread_id),
+                    timeout=_RUN_CANCEL_WAIT_SECONDS,
+                )
                 for r in runs:
                     status = r.get("status") if isinstance(r, dict) else getattr(r, "status", None)
                     if status in ("pending", "running"):
@@ -424,7 +521,10 @@ class RemoteAgent:
                 logger.warning("Cancellation wait failed for run %s on thread %s: %s", run_id, thread_id, exc)
 
             try:
-                info = await client.runs.get(thread_id, run_id)
+                info = await asyncio.wait_for(
+                    client.runs.get(thread_id, run_id),
+                    timeout=_RUN_CANCEL_WAIT_SECONDS,
+                )
                 st = info.get("status") if isinstance(info, dict) else getattr(info, "status", "")
                 st = str(st).lower()
                 terminal_statuses[run_id] = st
@@ -436,6 +536,7 @@ class RemoteAgent:
                 failed_ids.append(run_id)
 
         await asyncio.gather(*(_cancel_one(rid) for rid in set(run_ids)))
+        self._last_activity_monotonic = time.monotonic()
 
         # DV-09: Only clear _active_run_id if it was confirmed terminal
         if self._active_run_id:
@@ -459,9 +560,10 @@ class RemoteAgent:
     ) -> Any:
         """Write a state update into the thread checkpoint.
 
-        Delegates to ``RemoteGraph.aupdate_state`` with retry on 409 conflict.
+        Delegates to ``RemoteGraph.aupdate_state`` with retry on 409 conflict
+        and stale-pool/401 recovery.
         """
-        graph = self._get_graph()
+        await self._prepare_client_for_call()
         prepared = _prepare_config(config)
 
         # Sanitize values to ensure messages are JSON serializable
@@ -469,7 +571,13 @@ class RemoteAgent:
         if "messages" in clean_values and isinstance(clean_values["messages"], list):
             clean_msgs: list[Any] = []
             for m in clean_values["messages"]:
-                if hasattr(m, "content") and hasattr(m, "type"):
+                if isinstance(m, RemoveMessage) or getattr(m, "type", None) == "remove":
+                    rm_dict: dict[str, Any] = {"type": "remove"}
+                    msg_id = getattr(m, "id", None)
+                    if msg_id is not None:
+                        rm_dict["id"] = msg_id
+                    clean_msgs.append(rm_dict)
+                elif hasattr(m, "content") and hasattr(m, "type"):
                     msg_dict: dict[str, Any] = {
                         "role": getattr(m, "type", "system"),
                         "content": str(m.content),
@@ -491,18 +599,41 @@ class RemoteAgent:
         if as_node is not None:
             kwargs["as_node"] = as_node
 
-        try:
-            return await graph.aupdate_state(prepared, clean_values, **kwargs)
-        except Exception as exc:
-            # If 409 Conflict: Thread is busy, cancel any dangling active run and retry once
-            if "conflict" in str(exc).lower() or getattr(exc, "status_code", None) == 409:
-                logger.debug("aupdate_state encountered conflict, cancelling active runs and retrying")
-                await self.acancel_active_runs(config)
-                return await graph.aupdate_state(prepared, clean_values, **kwargs)
+        for attempt in range(2):
+            graph = self._get_graph()
+            try:
+                res = await asyncio.wait_for(
+                    graph.aupdate_state(prepared, clean_values, **kwargs),
+                    timeout=_STATE_CALL_TIMEOUT_SECONDS,
+                )
+                self._last_activity_monotonic = time.monotonic()
+                return res
+            except Exception as exc:
+                # If 409 Conflict: Thread is busy, cancel any dangling active run and retry once
+                if "conflict" in str(exc).lower() or getattr(exc, "status_code", None) == 409:
+                    logger.debug("aupdate_state encountered conflict, cancelling active runs and retrying")
+                    await self.acancel_active_runs(config)
+                    res = await asyncio.wait_for(
+                        self._get_graph().aupdate_state(prepared, clean_values, **kwargs),
+                        timeout=_STATE_CALL_TIMEOUT_SECONDS,
+                    )
+                    self._last_activity_monotonic = time.monotonic()
+                    return res
 
-            if as_node is not None:
-                return await graph.aupdate_state(prepared, clean_values)
-            raise
+                should_retry, refresh_token = self._is_retryable_state_error(exc)
+                if attempt == 0 and should_retry and self._has_real_http_pool():
+                    await self.aclose()
+                    await self._prepare_client_for_call(force_token_refresh=refresh_token)
+                    continue
+
+                if as_node is not None:
+                    res = await asyncio.wait_for(
+                        graph.aupdate_state(prepared, clean_values),
+                        timeout=_STATE_CALL_TIMEOUT_SECONDS,
+                    )
+                    self._last_activity_monotonic = time.monotonic()
+                    return res
+                raise
 
     async def aput_store_item(
         self,
@@ -517,10 +648,15 @@ class RemoteAgent:
             key: Item key within `namespace`.
             value: JSON-serializable item value.
         """
+        await self._prepare_client_for_call()
         graph = self._get_graph()
         try:
             client = graph._validate_client()
-            await client.store.put_item(namespace, key, value, index=False)
+            await asyncio.wait_for(
+                client.store.put_item(namespace, key, value, index=False),
+                timeout=_STATE_CALL_TIMEOUT_SECONDS,
+            )
+            self._last_activity_monotonic = time.monotonic()
         except Exception:
             logger.debug(
                 "Failed to write store item %s/%s",
@@ -538,7 +674,6 @@ class RemoteAgent:
         performs idempotent HTTP-side registration so subsequent ``aget_state``
         and ``aupdate_state`` calls work correctly.
         """
-        graph = self._get_graph()
         if isinstance(config, str) or config is None:
             prepared = _prepare_config({"configurable": {"thread_id": normalize_thread_id(config)}})
         else:
@@ -550,34 +685,47 @@ class RemoteAgent:
         metadata = prepared.get("metadata")
         thread_metadata = metadata if isinstance(metadata, dict) else None
 
-        try:
-            client = graph._validate_client()
-            await client.threads.create(
-                thread_id=thread_id,
-                if_exists="do_nothing",
-                metadata=thread_metadata,
-                graph_id=self._graph_name,
-            )
-            return str(thread_id)
-        except Exception as exc:
-            if (
-                getattr(exc, "status_code", None) == 409
-                or type(exc).__name__ == "ConflictError"
-                or "already exists" in str(exc).lower()
-            ):
-                logger.debug("Thread %s already exists on remote server", thread_id)
+        await self._prepare_client_for_call()
+        for attempt in range(2):
+            graph = self._get_graph()
+            try:
+                client = graph._validate_client()
+                await asyncio.wait_for(
+                    client.threads.create(
+                        thread_id=thread_id,
+                        if_exists="do_nothing",
+                        metadata=thread_metadata,
+                        graph_id=self._graph_name,
+                    ),
+                    timeout=_STATE_CALL_TIMEOUT_SECONDS,
+                )
+                self._last_activity_monotonic = time.monotonic()
                 return str(thread_id)
-            logger.warning(
-                "Failed to ensure thread %s exists on remote server",
-                thread_id,
-                exc_info=True,
-            )
-            raise
+            except Exception as exc:
+                if (
+                    getattr(exc, "status_code", None) == 409
+                    or type(exc).__name__ == "ConflictError"
+                    or "already exists" in str(exc).lower()
+                ):
+                    logger.debug("Thread %s already exists on remote server", thread_id)
+                    return str(thread_id)
+                should_retry, refresh_token = self._is_retryable_state_error(exc)
+                if attempt == 0 and should_retry and self._has_real_http_pool():
+                    await self.aclose()
+                    await self._prepare_client_for_call(force_token_refresh=refresh_token)
+                    continue
+                logger.warning(
+                    "Failed to ensure thread %s exists on remote server",
+                    thread_id,
+                    exc_info=True,
+                )
+                raise
 
     async def create_thread(self) -> dict[str, Any] | str:
         """Create thread using SDK client."""
+        await self._prepare_client_for_call()
         client = self._get_graph()._validate_client()
-        return await client.threads.create()
+        return await asyncio.wait_for(client.threads.create(), timeout=_STATE_CALL_TIMEOUT_SECONDS)
 
     async def afork_thread(self, source_thread_id: str) -> str:
         """Fork a conversation thread using the LangGraph SDK and append a ``<fork_notice>``.
@@ -595,6 +743,7 @@ class RemoteAgent:
         norm_source_tid = normalize_thread_id(source_thread_id)
         new_thread_id: str | None = None
 
+        await self._prepare_client_for_call()
         graph = self._get_graph()
         client: Any = None
         if hasattr(graph, "_validate_client"):
@@ -681,6 +830,7 @@ class RemoteAgent:
 
         from talkops.middleware.btw import format_btw_prompt
 
+        await self._prepare_client_for_call()
         graph = self._get_graph()
         client: Any = None
         if hasattr(graph, "_validate_client"):
@@ -964,6 +1114,7 @@ class InProcessAgent(RemoteAgent):
                 parsed = _parse_stream_item(raw_item)
                 if parsed is None:
                     continue
+                self._last_activity_monotonic = time.monotonic()
                 ns, mode, data = parsed
 
                 if mode == "messages":

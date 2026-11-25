@@ -23,22 +23,17 @@ from langchain_core.messages import AIMessage
 from talkops.skills.commands import (
     _create,
     _delete,
-    _format_info_fields,
     _generate_template,
     _validate_name,
     _validate_skill_path,
-    execute_skills_command,
     setup_skills_parser,
 )
 from talkops.skills.invocation import (
     build_skill_invocation_envelope,
-    discover_skills_and_roots,
     parse_skill_command,
 )
 from talkops.skills.load import (
     _parse_skill_file,
-    get_skill_by_name,
-    get_skill_content_by_name,
     list_skills,
     load_skill_content,
 )
@@ -615,6 +610,7 @@ def test_lean_core_built_in_skills_registered() -> None:
 
     expected = {
         "commit",
+        "openwiki",
         "remember",
         "simplify",
         "skill-creator",
@@ -749,6 +745,29 @@ def test_subagent_skill_scoping_and_compact_formatting(tmp_path: Path) -> None:
     formatted = mw._format_skills_list(fake_skills)  # type: ignore[arg-type]
     assert f"*(Read `{tmp_path}/<skill-name>/SKILL.md` with `read_file` for full instructions)*" in formatted
     assert "Extra verbose paragraph." not in formatted
+
+
+def test_skill_source_labels_never_duplicate_skills_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify get_skill_sources uses labels that do not produce 'Skills Skills' in SkillsMiddleware."""
+    from talkops.config import paths
+    from talkops.middleware.skills import PluginSkillsMiddleware
+    from talkops.skills.sources import get_skill_sources
+
+    user_skills = tmp_path / "user_skills"
+    user_skills.mkdir()
+    proj_skills = tmp_path / "proj" / ".talkops" / "skills"
+    proj_skills.mkdir(parents=True)
+    proj_agent_skills = tmp_path / "proj" / ".agents" / "skills"
+    proj_agent_skills.mkdir(parents=True)
+
+    monkeypatch.setattr(paths, "get_user_skills_dir", lambda _a=None: user_skills)
+    sources = get_skill_sources(project_root=tmp_path / "proj")
+    mw = PluginSkillsMiddleware(sources=sources)
+    locations = mw._format_skills_locations()
+    assert "Skills Skills" not in locations
+    assert "**Project Skills**:" in locations
+    assert "**Project Agent Skills**:" in locations
+
 
 
 

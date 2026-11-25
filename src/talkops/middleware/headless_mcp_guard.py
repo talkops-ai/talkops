@@ -54,7 +54,8 @@ def gated_mcp_tool_names(mcp_tools: Sequence[BaseTool]) -> set[str]:
     return {
         tool.name
         for tool in mcp_tools
-        if tool.name == "call_mcp_tool" or not mcp_tool_is_coherently_read_only(tool)
+        if tool.name == "call_mcp_tool"
+        or (tool.name not in {"list_resources", "read_resource"} and not mcp_tool_is_coherently_read_only(tool))
     }
 
 
@@ -157,7 +158,9 @@ class HeadlessMCPGuardMiddleware(HumanInTheLoopMiddleware[AgentState[Any], Any, 
 
     def _rejection(self, request: ToolCallRequest) -> ToolMessage | None:
         tool_name = request.tool_call.get("name", "")
-        if tool_name == "call_mcp_tool":
+        if tool_name in {"list_resources", "read_resource"}:
+            blocked = False
+        elif tool_name == "call_mcp_tool":
             args = request.tool_call.get("args") or {}
             blocked = not is_call_mcp_tool_read_only(
                 args,

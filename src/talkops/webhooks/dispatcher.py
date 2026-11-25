@@ -282,11 +282,17 @@ async def default_langgraph_run_executor(
         "webhook_provider": event.provider,
         "webhook_event_type": event.event_type,
         "webhook_incident_id": event.incident_id,
+        "webhook_title": webhook_title,
         "source_addon": "webhooks",
         "interactive": False,
     }
+    if event.service_name:
+        context["webhook_service_name"] = event.service_name
+        context["service_name"] = event.service_name
     if server_cfg.model:
         context["model"] = server_cfg.model
+    if getattr(server_cfg, "explicit_model", False):
+        context["explicit_model"] = True
     if server_cfg.shell_allow_list:
         context["shell_allow_list"] = list(server_cfg.shell_allow_list)
 
@@ -300,6 +306,8 @@ async def default_langgraph_run_executor(
             "provider": event.provider,
             "event_type": event.event_type,
             "incident_id": event.incident_id,
+            "service_name": event.service_name,
+            "title": webhook_title,
             "severity": str(event.severity),
         },
         multitask_strategy="enqueue",
@@ -387,12 +395,19 @@ async def default_langgraph_run_executor(
                 preview + ("..." if len(analysis_text) > 240 else ""),
             )
 
+    hyp_ledger = (
+        list(values["hypothesis_ledger"])
+        if isinstance(values, dict) and isinstance(values.get("hypothesis_ledger"), list)
+        else None
+    )
     return WebhookRunResult(
         run_id=run_id,
         thread_id=lg_thread_id,
         status=status,
         analysis_text=analysis_text,
         error=error_msg,
+        hypothesis_ledger=hyp_ledger,
+        duration_seconds=round(elapsed, 2),
     )
 
 
@@ -444,12 +459,19 @@ def create_gateway_run_executor(gateway: Any) -> RunExecutor:
             "webhook_provider": event.provider,
             "webhook_event_type": event.event_type,
             "webhook_incident_id": event.incident_id,
+            "webhook_title": webhook_title,
         }
+        if event.service_name:
+            context["webhook_service_name"] = event.service_name
+            context["service_name"] = event.service_name
         if server_cfg.model:
             context["model"] = server_cfg.model
+        if getattr(server_cfg, "explicit_model", False):
+            context["explicit_model"] = True
         if server_cfg.shell_allow_list:
             context["shell_allow_list"] = list(server_cfg.shell_allow_list)
 
+        gw_start = time.monotonic()
         handle = await gateway.trigger_run(
             prompt,
             thread_id=lg_thread_id,
@@ -467,12 +489,21 @@ def create_gateway_run_executor(gateway: Any) -> RunExecutor:
             },
             wait=True,
         )
+        gw_ledger = handle.metadata.get("hypothesis_ledger") if isinstance(handle.metadata, Mapping) else None
+        if gw_ledger is None:
+            with contextlib.suppress(Exception):
+                st = await gateway.get_thread_state(lg_thread_id)
+                vals = getattr(st, "values", None) or (st.get("values") if isinstance(st, Mapping) else None)
+                if isinstance(vals, Mapping) and isinstance(vals.get("hypothesis_ledger"), list):
+                    gw_ledger = list(vals["hypothesis_ledger"])
         return WebhookRunResult(
             run_id=handle.run_id,
             thread_id=lg_thread_id,
             status=handle.status,
             analysis_text=handle.analysis_text,
             error=handle.error,
+            hypothesis_ledger=list(gw_ledger) if isinstance(gw_ledger, list) else None,
+            duration_seconds=round(max(0.0, time.monotonic() - gw_start), 2),
         )
 
     return _gateway_executor
@@ -514,6 +545,11 @@ class WebhookDispatcher:
         self._concurrency_semaphore = asyncio.Semaphore(max(1, self.config.max_concurrent_runs))
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._recent_deliveries: list[dict[str, Any]] = []
+        self._storm_correlator: Any | None = None
+
+    def bind_storm_correlator(self, correlator: Any | None) -> None:
+        """Attach an ``AlertStormCorrelator`` for sidecar inbox storm routing."""
+        self._storm_correlator = correlator
 
     def bind_event_bus(self, event_bus: Any | None) -> None:
         """Bind the server's `HookEventBus` so marketplace addons receive `webhook.received` and `webhook.completed`."""
@@ -648,6 +684,32 @@ class WebhookDispatcher:
         identity = self.identity_mapper.resolve(event.provider, event.caller_id)
         delivery_id = str(uuid.uuid4())
 
+        # 4b. Optional Alert Storm Sidecar Correlation (TalkOps v2)
+        if self._storm_correlator is not None and event.service_name:
+            route_decision = await self._storm_correlator.route_incoming_alert(
+                candidate_thread_id=lg_thread_id,
+                provider=event.provider,
+                dedup_key=event.effective_dedup_key,
+                service_name=event.service_name,
+                environment=str(event.metadata.get("environment") or "production"),
+                normalized_event={
+                    "incident_id": event.incident_id,
+                    "title": event.title,
+                    "summary": event.summary,
+                    "severity": str(event.severity),
+                    "service_name": event.service_name,
+                },
+            )
+            if route_decision.action == "queued_sidecar_inbox":
+                return 202, {
+                    "status": "correlated_into_active_run",
+                    "delivery_id": delivery_id,
+                    "provider": event.provider,
+                    "incident_id": event.incident_id,
+                    "thread_id": route_decision.thread_id,
+                    "matched_service": route_decision.matched_service,
+                }
+
         logger.info(
             "Webhook accepted & queued | delivery_id=%s provider=%s incident_id=%s thread_id=%s caller=%s role=%s",
             delivery_id,
@@ -674,14 +736,13 @@ class WebhookDispatcher:
         if len(self._recent_deliveries) > 100:
             self._recent_deliveries.pop(0)
 
-        # 5. Publish `webhook.received` on HookEventBus for marketplace channel addons
+        # 5. Publish `webhook.received` on HookEventBus for built-in/custom channel addons
         active_routes = self._resolve_active_outbound_channels()
         matching_received_routes = [
             r.to_dict()
             for r in active_routes
             if r.matches(event, stage="received")
         ]
-        external_received = self._has_external_channel_listener("webhook.received")
         if self._event_bus is not None and hasattr(self._event_bus, "publish"):
             with contextlib.suppress(Exception):
                 await self._event_bus.publish(
@@ -712,7 +773,7 @@ class WebhookDispatcher:
                 lg_thread_id,
                 delivery_id,
                 delivery_record,
-                received_routes=matching_received_routes if not external_received else None,
+                received_routes=self._filter_builtin_sink_routes(matching_received_routes),
             )
         )
         self._background_tasks.add(bg_task)
@@ -730,12 +791,18 @@ class WebhookDispatcher:
         }
 
     def _resolve_active_outbound_channels(self) -> list[Any]:
-        """Return configured `outbound_channels` (re-checking env if default config is empty)."""
+        """Return configured `outbound_channels` normalized as `OutboundChannelRoute` instances."""
+        from talkops.webhooks.models import (
+            OutboundChannelRoute,
+            parse_outbound_channel_routes,
+        )
+
         if self.config.outbound_channels or self._has_explicit_config:
+            if any(not isinstance(item, OutboundChannelRoute) for item in self.config.outbound_channels):
+                self.config.outbound_channels = parse_outbound_channel_routes(self.config.outbound_channels)
             return self.config.outbound_channels
         with contextlib.suppress(Exception):
             from talkops.config.settings import resolve_env_var
-            from talkops.webhooks.models import parse_outbound_channel_routes
 
             raw = resolve_env_var(
                 "WEBHOOK_NOTIFY_CHANNELS",
@@ -745,20 +812,47 @@ class WebhookDispatcher:
                 self.config.outbound_channels = parse_outbound_channel_routes(raw)
         return self.config.outbound_channels
 
-    def _has_external_channel_listener(self, event_type: str) -> bool:
-        """Return True if an external `channels` addon is subscribed to handle outbound routes."""
+    def _filter_builtin_sink_routes(
+        self,
+        routes: list[dict[str, Any]],
+    ) -> list[dict[str, Any]] | None:
+        """Filter outbound routes delegated to built-in `sinks.py`.
+
+        When `ChannelsAddon` is active on `_event_bus`, it handles registered chat
+        providers (`slack`, `teams`, `discord`) with full 2-way thread binding, while
+        non-chat HTTP sinks (`generic_webhook`, `webhook`, `http`, `callback`) still
+        dispatch cleanly through `sinks.py`.
+        """
+        if not routes:
+            return None
         if self._outbound_sinks:
-            return True
-        if self._event_bus is not None:
-            checker = getattr(self._event_bus, "has_subscribers", None)
-            if callable(checker):
-                return bool(checker(event_type))
-            subs = getattr(self._event_bus, "_subscribers", None)
-            if isinstance(subs, dict) and (
-                subs.get(event_type) or subs.get("*") or subs.get("addon.*")
-            ):
-                return True
-        return False
+            sink_names = {str(k).strip().lower() for k in self._outbound_sinks}
+            remaining = [
+                r
+                for r in routes
+                if str(r.get("channel") or "").strip().lower() not in sink_names
+                and str(r.get("channel") or "").strip().lower()
+                in {"generic_webhook", "webhook", "http", "callback"}
+            ]
+            return remaining or None
+        if self._event_bus is not None and bool(
+            getattr(self._event_bus, "_channels_addon_active", False)
+        ):
+            handled_providers = {
+                str(p).strip().lower()
+                for p in getattr(
+                    self._event_bus,
+                    "_channels_addon_providers",
+                    {"slack", "teams", "discord"},
+                )
+            }
+            remaining = [
+                r
+                for r in routes
+                if str(r.get("channel") or "").strip().lower() not in handled_providers
+            ]
+            return remaining or None
+        return routes
 
     async def _execute_and_notify(
         self,
@@ -779,6 +873,7 @@ class WebhookDispatcher:
                     routes=received_routes,
                 )
 
+        run_started_mono = time.monotonic()
         try:
             async with self._concurrency_semaphore:
                 logger.info(
@@ -789,6 +884,8 @@ class WebhookDispatcher:
                     lg_thread_id,
                 )
                 result = await self.run_executor(event, lg_thread_id, delivery_id, self.config)
+                if result.duration_seconds is None:
+                    result.duration_seconds = round(max(0.0, time.monotonic() - run_started_mono), 2)
         except Exception as exc:
             logger.exception(
                 "Background webhook run failed for provider=%s incident=%s",
@@ -801,11 +898,14 @@ class WebhookDispatcher:
                 status="error",
                 analysis_text="",
                 error=str(exc),
+                duration_seconds=round(max(0.0, time.monotonic() - run_started_mono), 2),
             )
 
         if delivery_record is not None:
             delivery_record["run_id"] = result.run_id
             delivery_record["run_status"] = result.status
+            if result.duration_seconds is not None:
+                delivery_record["duration_seconds"] = result.duration_seconds
             if result.analysis_text:
                 delivery_record["analysis_preview"] = result.analysis_text[:1000]
             if result.error:
@@ -816,13 +916,13 @@ class WebhookDispatcher:
             for r in self._resolve_active_outbound_channels()
             if r.matches(event, stage="completed")
         ]
-        external_completed = self._has_external_channel_listener("webhook.completed")
+        filtered_completed_routes = self._filter_builtin_sink_routes(matching_completed_routes)
 
         await dispatch_completion_sinks(
             event,
             result,
             self.config,
-            outbound_routes=matching_completed_routes if not external_completed else None,
+            outbound_routes=filtered_completed_routes,
             incident_thread_refs=incident_thread_refs,
         )
 
@@ -845,6 +945,7 @@ class WebhookDispatcher:
                         "source_url": event.source_url,
                         "analysis": result.analysis_text,
                         "error": result.error,
+                        "duration_seconds": result.duration_seconds,
                         "outbound_channels": matching_completed_routes,
                     },
                     thread_id=result.thread_id,
@@ -857,6 +958,35 @@ class WebhookDispatcher:
                 await sink_cb(event, result, matching_completed_routes)
             except Exception as exc:
                 logger.warning("Registered outbound webhook sink %r failed: %s", sink_name, exc)
+
+        if self._storm_correlator is not None:
+            async def _run_late_continuation(leftovers: list[Any]) -> None:
+                from dataclasses import replace
+
+                from talkops.middleware.storm_drain import format_drained_alerts_message
+
+                cont_msg = format_drained_alerts_message(leftovers)
+                cont_event = replace(
+                    event,
+                    title=f"Correlated Alert Storm Continuation ({len(leftovers)} alert(s))",
+                    summary=str(cont_msg.content),
+                )
+                cont_id = f"{delivery_id}-cont"
+                async with self._concurrency_semaphore:
+                    cont_res = await self.run_executor(cont_event, lg_thread_id, cont_id, self.config)
+                await dispatch_completion_sinks(
+                    cont_event,
+                    cont_res,
+                    self.config,
+                    outbound_routes=filtered_completed_routes,
+                    incident_thread_refs=incident_thread_refs,
+                )
+
+            with contextlib.suppress(Exception):
+                await self._storm_correlator.finalize_run_or_continue(
+                    lg_thread_id,
+                    continuation_runner=_run_late_continuation,
+                )
 
 
     async def drain_background_tasks(self) -> None:

@@ -6,22 +6,30 @@ Adapts `deepagents_talon/channels/base.py` for Slack (`mrkdwn`), Microsoft Teams
 
 from __future__ import annotations
 
+import copy
+import fnmatch
+import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
-import fnmatch
-import re
 from typing import Any, Literal
 
 DEFAULT_MAX_TEXT_CHARS = 4000
 SLACK_MAX_TEXT_CHARS = 4000
 TEAMS_MAX_TEXT_CHARS = 4000
+TEAMS_ADAPTIVE_CARD_MAX_BYTES = 24_576  # Safe ceiling below Teams' strict 28 KB (28,672 B) cap
 DISCORD_MAX_TEXT_CHARS = 2000
+DISCORD_EMBED_DESC_MAX_CHARS = 3900
+DISCORD_EMBED_TOTAL_MAX_CHARS = 5600
 SLACK_MAX_BLOCKS = 50
 SLACK_SECTION_MAX_CHARS = 3000
 SLACK_HEADER_MAX_CHARS = 150
+SLACK_RCA_ATTACHMENT_CHAR_THRESHOLD = 10_000
 
 _BLOCK_FENCE_RE = re.compile(r"(```[\s\S]*?```)")
+_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 _FENCE_RE = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", flags=re.MULTILINE)
 _SINGLE_LINE_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -31,7 +39,8 @@ _CALLOUT_HEADER_RE = re.compile(
     r"^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$",
     flags=re.IGNORECASE,
 )
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
+_BOLD_ITALIC_RE = re.compile(r"\*\*\*(?!\*)(.+?)(?<!\*)\*\*\*")
+_BOLD_RE = re.compile(r"\*\*(?!\*)(.+?)(?<!\*)\*\*|(?<!\w)__(?!_)(.+?)(?<!_)__(?!\w)")
 _STRIKE_RE = re.compile(r"~~(.+?)~~")
 _MD_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
 _TABLE_LINE_RE = re.compile(r"^\s*\|.*\|\s*$")
@@ -50,7 +59,6 @@ _CALLOUT_ICONS: dict[str, tuple[str, str]] = {
 }
 
 APPROVAL_REACTION_MAP: dict[str, str] = {
-    "\U0001f44d": "approve",
     "👍": "approve",
     "+1": "approve",
     "thumbsup": "approve",
@@ -58,7 +66,6 @@ APPROVAL_REACTION_MAP: dict[str, str] = {
     "like": "approve",
     "heart": "approve",
     "white_check_mark": "approve",
-    "\U0001f44e": "reject",
     "👎": "reject",
     "-1": "reject",
     "thumbsdown": "reject",
@@ -282,12 +289,78 @@ class MarkdownBlock:
 
 @dataclass(frozen=True, slots=True)
 class ParsedChannelOutput:
-    """Compiled channel response containing both fallback text and native rich UI blocks/cards."""
+    """Compiled channel response containing fallback text, native rich UI blocks/cards, and optional overflow/attachments."""
 
     channel: str
     text: str
     blocks_or_cards: Any = None
     ast: tuple[MarkdownBlock, ...] = ()
+    attachment_markdown: tuple[str, bytes] | None = None
+    overflow_texts: tuple[str, ...] = ()
+
+
+def format_duration_human(seconds: float | None) -> str:
+    """Format an investigation / triage duration in seconds into a compact human string (e.g. `42s`, `2m 15s`, `1h 5m`)."""
+    if seconds is None:
+        return ""
+    try:
+        secs = float(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if secs < 0:
+        return ""
+    if secs < 1.0:
+        return "<1s"
+    total = int(round(secs))
+    if total < 60:
+        return f"{total}s"
+    minutes, rem_secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {rem_secs}s" if rem_secs else f"{minutes}m"
+    hours, rem_mins = divmod(minutes, 60)
+    return f"{hours}h {rem_mins}m" if rem_mins else f"{hours}h"
+
+
+def build_rca_markdown_attachment(
+    analysis: str,
+    *,
+    title: str = "",
+    provider: str = "",
+    severity: str = "",
+    status: str = "completed",
+    source_url: str = "",
+    lg_thread_id: str = "",
+    duration_seconds: float | None = None,
+) -> tuple[str, bytes]:
+    """Build a standalone downloadable `.md` postmortem attachment `(filename, utf8_bytes)`."""
+    clean_title, inferred_prov = _clean_incident_title(title, provider) if title else ("Incident RCA", provider)
+    eff_prov = (provider or inferred_prov or "webhook").strip()
+    slug_source = re.sub(r"[^a-zA-Z0-9_-]+", "-", clean_title.lower()).strip("-")[:40]
+    if not slug_source:
+        slug_source = re.sub(r"[^a-zA-Z0-9_-]+", "-", (lg_thread_id or "report").lower()).strip("-")[:32] or "report"
+    filename = f"rca-{slug_source}.md"
+
+    dur = format_duration_human(duration_seconds)
+    lines: list[str] = [
+        f"# TalkOps Root Cause Analysis — {clean_title}",
+        "",
+        "| Field | Value |",
+        "| :--- | :--- |",
+        f"| **Status** | `{status}` |",
+    ]
+    if severity:
+        lines.append(f"| **Severity** | `{severity}` |")
+    if eff_prov:
+        lines.append(f"| **Provider** | `{eff_prov}` |")
+    if dur:
+        lines.append(f"| **Triage Time** | `{dur}` |")
+    if lg_thread_id:
+        lines.append(f"| **Thread ID** | `{lg_thread_id}` |")
+    if source_url:
+        lines.append(f"| **Alert Source** | {source_url} |")
+    lines.append(f"| **Generated At** | `{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}` |")
+    lines.extend(["", "---", "", analysis.strip(), ""])
+    return filename, "\n".join(lines).encode("utf-8")
 
 
 def _split_pipe_row(line: str) -> list[str]:
@@ -396,6 +469,7 @@ def _clean_table_cell(cell: str) -> str:
     """Strip inline Markdown code backticks and bold markers inside a monospace table cell."""
     cleaned = cell.strip()
     cleaned = re.sub(r"`([^`\n]+)`", r"\1", cleaned)
+    cleaned = _BOLD_ITALIC_RE.sub(r"\1", cleaned)
     cleaned = _BOLD_RE.sub(lambda m: m.group(1) or m.group(2) or "", cleaned)
     cleaned = _STRIKE_RE.sub(r"\1", cleaned)
     return cleaned.strip()
@@ -445,7 +519,9 @@ def _format_aligned_table(lines: list[str]) -> list[str]:
 
 def _convert_markdown_tables_to_code(text: str) -> str:
     """Wrap consecutive Markdown pipe-table lines in aligned triple-backtick code blocks for Slack."""
-    lines = text.splitlines()
+    if not text:
+        return ""
+    lines = text.replace("\r\n", "\n").split("\n")
     output: list[str] = []
     table_buf: list[str] = []
 
@@ -514,26 +590,123 @@ def _convert_markdown_lists_and_callouts(segment: str) -> str:
     return "\n".join(out)
 
 
+def _wrap_slack_inline_style(
+    inner: str,
+    open_marker: str,
+    close_marker: str,
+    placeholder_re: re.Pattern[str],
+) -> str:
+    """Wrap `inner` in Slack `mrkdwn` markers without wrapping inline code spans.
+
+    Slack's `mrkdwn` parser does not support nesting `*bold*`, `_italic_`, or
+    `~strike~` around `` `inline code` `` spans and renders literal markers when
+    attempted or when markers contain leading/trailing whitespace.
+    """
+    if not inner:
+        return ""
+
+    chunks = placeholder_re.split(inner)
+    if len(chunks) == 1:
+        core = inner.strip()
+        if not core:
+            return inner
+        lead = inner[: len(inner) - len(inner.lstrip())]
+        trail = inner[len(inner.rstrip()) :]
+        return f"{lead}{open_marker}{core}{close_marker}{trail}"
+
+    out: list[str] = []
+    last_idx = len(chunks) - 1
+    for idx, chunk in enumerate(chunks):
+        if idx % 2 == 1:
+            # Masked inline code span — never wrap in Slack mrkdwn style markers.
+            out.append(chunk)
+            continue
+        core = chunk.strip()
+        if not core:
+            out.append(chunk)
+            continue
+        lead = chunk[: len(chunk) - len(chunk.lstrip())]
+        trail = chunk[len(chunk.rstrip()) :]
+        # Avoid wrapping pure punctuation (e.g. ":" in "**`foo`:**") or text directly
+        # touching a backtick without whitespace (e.g. "**`pod`s**"), where Slack
+        # would otherwise display literal formatting characters.
+        touches_prev_code = idx > 0 and not lead
+        touches_next_code = idx < last_idx and not trail
+        if touches_prev_code or touches_next_code or not any(ch.isalnum() for ch in core):
+            out.append(chunk)
+        else:
+            out.append(f"{lead}{open_marker}{core}{close_marker}{trail}")
+    return "".join(out)
+
+
 def _format_inline_slack_mrkdwn(
     text: str,
     *,
     mention_allowlist: frozenset[str] | None = None,
 ) -> str:
-    """Convert inline Markdown outside code spans into Slack `mrkdwn`."""
+    """Convert inline Markdown outside fenced and inline code spans into Slack `mrkdwn`."""
     if not text:
         return ""
-    parts = _FENCE_RE.split(text)
+    block_parts = _BLOCK_FENCE_RE.split(text)
     transformed: list[str] = []
-    for idx, segment in enumerate(parts):
+    for idx, segment in enumerate(block_parts):
         if idx % 2 == 1:
             transformed.append(segment)
             continue
 
-        seg = _convert_markdown_lists_and_callouts(segment)
+        # Mask inline `code` spans with collision-free placeholders so surrounding
+        # `**...**`, `~~...~~`, `[label](url)`, and `# Heading` expressions stay intact
+        # while code interiors remain untouched.
+        sentinel = "\x00SLKCODE"
+        while sentinel in segment:
+            sentinel += "_"
+        code_spans: list[str] = []
+
+        def _mask_inline_code(match: re.Match[str], _sentinel: str = sentinel) -> str:
+            token = f"{_sentinel}{len(code_spans)}{_sentinel}"
+            code_spans.append(match.group(0))
+            return token
+
+        seg = _INLINE_CODE_RE.sub(_mask_inline_code, segment)
+        placeholder_re = re.compile(rf"({re.escape(sentinel)}\d+{re.escape(sentinel)})")
+
+        def _replace_heading(
+            match: re.Match[str],
+            _placeholder_re: re.Pattern[str] = placeholder_re,
+        ) -> str:
+            body = match.group(2).strip()
+            body = _BOLD_ITALIC_RE.sub(r"\1", body)
+            body = _BOLD_RE.sub(lambda m: m.group(1) or m.group(2) or "", body)
+            return _wrap_slack_inline_style(body, "*", "*", _placeholder_re)
+
+        seg = _convert_markdown_lists_and_callouts(seg)
         seg = _MD_LINK_RE.sub(r"<\2|\1>", seg)
-        seg = _HEADING_RE.sub(r"*\2*", seg)
-        seg = _BOLD_RE.sub(lambda m: f"*{m.group(1) or m.group(2)}*", seg)
-        seg = _STRIKE_RE.sub(r"~\1~", seg)
+        seg = _HEADING_RE.sub(_replace_heading, seg)
+        seg = _BOLD_ITALIC_RE.sub(
+            lambda m, _re=placeholder_re: _wrap_slack_inline_style(m.group(1), "_*", "*_", _re),
+            seg,
+        )
+        seg = _BOLD_RE.sub(
+            lambda m, _re=placeholder_re: _wrap_slack_inline_style(
+                m.group(1) or m.group(2) or "",
+                "*",
+                "*",
+                _re,
+            ),
+            seg,
+        )
+        seg = _STRIKE_RE.sub(
+            lambda m, _re=placeholder_re: _wrap_slack_inline_style(m.group(1), "~", "~", _re),
+            seg,
+        )
+        if code_spans:
+            # Slack mrkdwn cannot wrap `*`, `_`, or `~` directly around inline code spans
+            # (e.g. Markdown italic `*\`foo\`*`); unwrap so literal markers don't leak.
+            seg = re.sub(
+                rf"(?<!\w)(\*|_|~)({re.escape(sentinel)}\d+{re.escape(sentinel)})\1(?!\w)",
+                r"\2",
+                seg,
+            )
         seg = _SLACK_BROADCAST_RE.sub(
             lambda m: m.group(0).replace("<", "&lt;").replace(">", "&gt;"),
             seg,
@@ -545,6 +718,14 @@ def _format_inline_slack_mrkdwn(
                     if m.group(1) in mention_allowlist
                     else f"&lt;@{m.group(1)}&gt;"
                 ),
+                seg,
+            )
+
+        if code_spans:
+            seg = placeholder_re.sub(
+                lambda m, _spans=code_spans, _slen=len(sentinel): _spans[
+                    int(m.group(0)[_slen:-_slen])
+                ],
                 seg,
             )
         transformed.append(seg)
@@ -744,6 +925,44 @@ _INLINE_TOKEN_RE = re.compile(
 )
 
 
+def _append_rich_text_inline_code_runs(
+    text: str,
+    *,
+    base_style: dict[str, bool],
+    elements: list[dict[str, Any]],
+) -> None:
+    """Append Slack Block Kit `rich_text` runs, combining `code` with `base_style` when nested."""
+    if "`" not in text:
+        el: dict[str, Any] = {"type": "text", "text": text or " "}
+        if base_style:
+            el["style"] = dict(base_style)
+        elements.append(el)
+        return
+
+    pos = 0
+    for code_match in _INLINE_CODE_RE.finditer(text):
+        if code_match.start() > pos:
+            plain = text[pos : code_match.start()]
+            if plain:
+                el = {"type": "text", "text": plain}
+                if base_style:
+                    el["style"] = dict(base_style)
+                elements.append(el)
+        code_text = code_match.group(0)[1:-1]
+        if code_text:
+            code_style = dict(base_style)
+            code_style["code"] = True
+            elements.append({"type": "text", "text": code_text, "style": code_style})
+        pos = code_match.end()
+    if pos < len(text):
+        tail = text[pos:]
+        if tail:
+            el = {"type": "text", "text": tail}
+            if base_style:
+                el["style"] = dict(base_style)
+            elements.append(el)
+
+
 def _parse_cell_to_slack_rich_text(
     cell_text: str,
     *,
@@ -810,23 +1029,19 @@ def _parse_cell_to_slack_rich_text(
             elements.append(link_el)
         elif match.group("bold1") is not None or match.group("bold2") is not None:
             b_txt = match.group("bold1") or match.group("bold2") or " "
-            elements.append(
-                {
-                    "type": "text",
-                    "text": b_txt,
-                    "style": {"bold": True},
-                }
+            _append_rich_text_inline_code_runs(
+                b_txt,
+                base_style={"bold": True},
+                elements=elements,
             )
         elif match.group("strike") is not None:
             style = {"strike": True}
             if is_header:
                 style["bold"] = True
-            elements.append(
-                {
-                    "type": "text",
-                    "text": match.group("strike") or " ",
-                    "style": style,
-                }
+            _append_rich_text_inline_code_runs(
+                match.group("strike") or " ",
+                base_style=style,
+                elements=elements,
             )
         pos = match.end()
 
@@ -936,6 +1151,7 @@ def _build_slack_structured_table_sections(
         return [
             {
                 "type": "section",
+                "expand": True,
                 "text": {"type": "mrkdwn", "text": chunk[:SLACK_SECTION_MAX_CHARS]},
             }
             for chunk in chunk_text(joined, max_chars=SLACK_SECTION_MAX_CHARS)
@@ -951,10 +1167,72 @@ def _build_slack_structured_table_sections(
     return [
         {
             "type": "section",
+            "expand": True,
             "text": {"type": "mrkdwn", "text": chunk[:SLACK_SECTION_MAX_CHARS]},
         }
         for chunk in chunk_text(aligned, max_chars=SLACK_SECTION_MAX_CHARS)
     ]
+
+
+def strip_slack_expand_flags(blocks: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Return a shallow copy of Slack Block Kit blocks without the `expand` property.
+
+    Used as an automatic compatibility fallback when posting to legacy workspaces or
+    incoming webhooks that reject `section.expand` with `invalid_blocks`.
+    """
+    cleaned: list[dict[str, Any]] = []
+    for blk in blocks:
+        if isinstance(blk, Mapping):
+            cleaned.append({k: v for k, v in blk.items() if k != "expand"})
+    return cleaned
+
+
+def strip_slack_expand_flags_from_attachments(
+    attachments: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a shallow copy of Slack `attachments` with `section.expand` stripped from nested `blocks`."""
+    cleaned: list[dict[str, Any]] = []
+    for att in attachments:
+        if not isinstance(att, Mapping):
+            continue
+        item = dict(att)
+        if isinstance(item.get("blocks"), Sequence):
+            item["blocks"] = strip_slack_expand_flags(item["blocks"])
+        cleaned.append(item)
+    return cleaned
+
+
+def slack_incident_accent_color(
+    severity: str = "",
+    investigation_state: str = "investigating",
+) -> str:
+    """Return the Slack attachment vertical accent bar hex color for an incident card."""
+    state = (investigation_state or "investigating").strip().lower()
+    if state in {"completed", "resolved"}:
+        return "#2EB67D"
+    if state in {"error", "failed"}:
+        return "#ECB22E"
+    sev = (severity or "").strip().lower()
+    if sev in {"critical", "high", "p1", "sev1", "p2", "sev2", "error"}:
+        return "#E01E5A"
+    if sev in {"warning", "warn", "medium", "p3", "sev3"}:
+        return "#ECB22E"
+    if sev in {"ok", "resolved"}:
+        return "#2EB67D"
+    return "#36C5F0"
+
+
+def _table_fits_slack_native(table: MarkdownTable) -> bool:
+    """Return True when a MarkdownTable is compact enough to render crisply as a Slack `table` block."""
+    if not table.rows or not table.headers:
+        return False
+    num_cols = len(table.headers)
+    if num_cols > 5:
+        return False
+    total_chars = sum(len(h) for h in table.headers) + sum(
+        len(cell) for row in table.rows[:99] for cell in row
+    )
+    return total_chars <= 8500
 
 
 def build_slack_response_blocks(
@@ -963,43 +1241,62 @@ def build_slack_response_blocks(
     mention_allowlist: frozenset[str] | None = None,
     use_native_table: bool = True,
     tool_names: Sequence[str] = (),
+    top_level_header_max_level: int = 1,
+    expand_sections: bool = True,
 ) -> list[dict[str, Any]]:
     """Compile arbitrary LLM Markdown output into industry-standard Slack Block Kit blocks.
 
     Maps:
-    - `#` / `##` / `###` headings -> `header` block (plain_text, emoji=True)
+    - `#` headings (when `level <= top_level_header_max_level`) -> `header` block
+    - `##` / `###` / `####` section headings -> crisp bold `section` headings (no giant
+      header spam or excessive dividers competing with the main card banner)
     - `---` horizontal rules -> `divider` block
     - Pipe tables -> Native Slack `table` block (with rich_text inline code/bold/links) for the
-      first table, or structured `section` `fields` / bullet cards when `use_native_table=False`
+      first compact table (<= 5 columns), or structured expanded `section` cards as fallback
     - Callouts (`> [!NOTE]`, `> ...`) -> Styled blockquote `section` block
     - Fenced code blocks -> Monospace `section` blocks
-    - Prose & bullet lists -> `section` (`mrkdwn`) blocks with proper `•` / `◦` bullets
+    - Prose & bullet lists -> `section` (`mrkdwn`) blocks with `"expand": True` (preventing
+      Slack's thread sidebar from collapsing sections behind `"Show more"`)
     - Executed tool names -> Compact footer `context` block
     """
     ast_blocks = parse_markdown_blocks(text)
     if not ast_blocks:
         return []
 
+    def _section_block(mrkdwn_text: str) -> dict[str, Any]:
+        blk: dict[str, Any] = {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": mrkdwn_text[:SLACK_SECTION_MAX_CHARS]},
+        }
+        if expand_sections:
+            blk["expand"] = True
+        return blk
+
     slack_blocks: list[dict[str, Any]] = []
     emitted_native_table = False
     max_body_blocks = SLACK_MAX_BLOCKS - (1 if tool_names else 0)
+    section_dividers_used = 0
+    max_auto_dividers = 3
 
     for node in ast_blocks:
         if len(slack_blocks) >= max_body_blocks:
             break
 
         if node.kind == "divider":
-            slack_blocks.append({"type": "divider"})
+            if slack_blocks and slack_blocks[-1].get("type") != "divider":
+                slack_blocks.append({"type": "divider"})
 
         elif node.kind == "heading":
             clean_heading = _clean_table_cell(node.text)
-            if node.level <= 3 and clean_heading:
+            if node.level <= top_level_header_max_level and clean_heading:
                 if (
                     slack_blocks
                     and slack_blocks[-1].get("type") not in {"divider", "header"}
+                    and section_dividers_used < max_auto_dividers
                     and len(slack_blocks) + 1 < max_body_blocks
                 ):
                     slack_blocks.append({"type": "divider"})
+                    section_dividers_used += 1
                 slack_blocks.append(
                     {
                         "type": "header",
@@ -1011,21 +1308,26 @@ def build_slack_response_blocks(
                     }
                 )
             else:
+                if (
+                    node.level == 2
+                    and slack_blocks
+                    and slack_blocks[-1].get("type") not in {"divider", "header"}
+                    and section_dividers_used < max_auto_dividers
+                    and len(slack_blocks) + 1 < max_body_blocks
+                ):
+                    slack_blocks.append({"type": "divider"})
+                    section_dividers_used += 1
                 formatted_h = _format_inline_slack_mrkdwn(
-                    node.text, mention_allowlist=mention_allowlist
+                    f"#### {node.text}", mention_allowlist=mention_allowlist
                 )
-                slack_blocks.append(
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*{formatted_h}*"[:SLACK_SECTION_MAX_CHARS],
-                        },
-                    }
-                )
+                slack_blocks.append(_section_block(formatted_h))
 
         elif node.kind == "table" and node.table is not None:
-            if use_native_table and not emitted_native_table and len(node.table.rows) >= 1:
+            if (
+                use_native_table
+                and not emitted_native_table
+                and _table_fits_slack_native(node.table)
+            ):
                 slack_blocks.append(_build_slack_native_table_block(node.table))
                 emitted_native_table = True
             else:
@@ -1034,6 +1336,8 @@ def build_slack_response_blocks(
                 )
                 for sec in sections:
                     if len(slack_blocks) < max_body_blocks:
+                        if not expand_sections:
+                            sec = {k: v for k, v in sec.items() if k != "expand"}
                         slack_blocks.append(sec)
 
         elif node.kind == "callout":
@@ -1050,24 +1354,14 @@ def build_slack_response_blocks(
             else:
                 quoted_lines = [f"> {ln}" for ln in formatted_body.split("\n")]
             quoted_text = "\n".join(quoted_lines)
-            slack_blocks.append(
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": quoted_text[:SLACK_SECTION_MAX_CHARS]},
-                }
-            )
+            slack_blocks.append(_section_block(quoted_text))
 
         elif node.kind == "code":
             fenced = f"```\n{node.text}\n```"
             for chunk in chunk_text(fenced, max_chars=SLACK_SECTION_MAX_CHARS - 20):
                 if len(slack_blocks) >= max_body_blocks:
                     break
-                slack_blocks.append(
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": chunk[:SLACK_SECTION_MAX_CHARS]},
-                    }
-                )
+                slack_blocks.append(_section_block(chunk))
 
         elif node.kind == "paragraph":
             formatted_p = _format_inline_slack_mrkdwn(
@@ -1076,12 +1370,7 @@ def build_slack_response_blocks(
             for chunk in chunk_text(formatted_p, max_chars=SLACK_SECTION_MAX_CHARS - 20):
                 if len(slack_blocks) >= max_body_blocks:
                     break
-                slack_blocks.append(
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": chunk[:SLACK_SECTION_MAX_CHARS]},
-                    }
-                )
+                slack_blocks.append(_section_block(chunk))
 
     if tool_names and len(slack_blocks) < SLACK_MAX_BLOCKS:
         dedup_tools = list(dict.fromkeys(t for t in tool_names if t))
@@ -1093,7 +1382,7 @@ def build_slack_response_blocks(
                     "elements": [
                         {
                             "type": "mrkdwn",
-                            "text": f"🔧 *Tools used:* {tools_str}",
+                            "text": f"*Tools used:* {tools_str}",
                         }
                     ],
                 }
@@ -1227,63 +1516,128 @@ def _infer_scope_from_summary(summary: str, explicit_service: str = "") -> str:
     return ""
 
 
-def extract_rca_takeaway(analysis: str, max_chars: int = 280) -> str:
-    """Extract a concise 1-2 sentence executive takeaway from an RCA Markdown report."""
+_ORDERED_LIST_ITEM_RE = re.compile(r"^\d+[.)]\s+")
+
+
+def _truncate_clean_markdown(text: str, max_chars: int) -> str:
+    """Truncate `text` at a sentence or word boundary without breaking inline code or bold spans."""
+    cleaned = text.strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    window = cleaned[: max_chars - 1]
+
+    # Prefer ending at a complete sentence inside the upper two-thirds of the budget
+    sentence_end = -1
+    for m in re.finditer(r"[.!?](?:\s|$)", window):
+        if m.start() >= max_chars // 3:
+            sentence_end = m.start() + 1
+    if sentence_end > 0:
+        candidate = window[:sentence_end].rstrip()
+        if candidate.count("`") % 2 == 0 and candidate.count("**") % 2 == 0:
+            return candidate
+
+    # Fall back to the last word boundary outside any open inline code span
+    word_cut = window.rfind(" ")
+    candidate = window[:word_cut].rstrip(" ,;:-(") if word_cut > max_chars // 3 else window.rstrip()
+
+    # Repair unbalanced inline backticks so truncated tokens never break Slack/Discord rendering
+    if candidate.count("`") % 2 == 1:
+        last_tick = candidate.rfind("`")
+        if last_tick > 0:
+            candidate = candidate[:last_tick].rstrip(" ,;:-(")
+    if candidate.count("**") % 2 == 1:
+        last_bold = candidate.rfind("**")
+        if last_bold > 0:
+            candidate = candidate[:last_bold].rstrip(" ,;:-(")
+
+    return (candidate or window.rstrip()) + "…"
+
+
+def extract_rca_takeaway(analysis: str, max_chars: int = 320) -> str:
+    """Extract a concise, sentence-complete 1-2 sentence executive takeaway from an RCA Markdown report."""
     if not analysis or not analysis.strip():
         return ""
-    lines = [ln.strip() for ln in analysis.strip().splitlines()]
-    # Look for Executive Summary heading first
+
+    raw_lines = [ln.strip() for ln in analysis.replace("\r\n", "\n").strip().splitlines()]
+    in_code_fence = False
+
+    def _clean_summary_line(ln: str) -> str:
+        s = re.sub(r"^[-•*]\s+", "", ln)
+        s = re.sub(r"^>\s*", "", s)
+        s = re.sub(
+            r"^(?:\*\*TL;DR\*\*|\*TL;DR\*|TL;DR|\*\*Executive Summary\*\*|Executive Summary|\*\*Summary\*\*|Summary)\s*:\s*",
+            "",
+            s,
+            flags=re.IGNORECASE,
+        ).strip()
+        return s
+
+    # Pass 1: Look for an explicit Executive Summary / Root Cause / Summary section
     in_exec_summary = False
     collected: list[str] = []
-    for ln in lines:
-        if _SINGLE_LINE_HEADING_RE.match(ln):
-            if any(k in ln.lower() for k in ("executive summary", "summary", "tl;dr", "root cause")):
-                in_exec_summary = True
-                continue
+    for ln in raw_lines:
+        if ln.startswith("```"):
+            in_code_fence = not in_code_fence
             if in_exec_summary and collected:
                 break
             continue
-        if ln.startswith("---") or _TABLE_LINE_RE.match(ln) or ln.startswith("```"):
+        if in_code_fence:
+            continue
+        if _SINGLE_LINE_HEADING_RE.match(ln):
             if in_exec_summary and collected:
+                break
+            if any(k in ln.lower() for k in ("executive summary", "summary", "tl;dr", "root cause")):
+                in_exec_summary = True
+            continue
+        if not in_exec_summary:
+            continue
+        if ln.startswith("---") or _TABLE_LINE_RE.match(ln):
+            if collected:
                 break
             continue
         if not ln:
-            if in_exec_summary and collected:
+            if collected:
                 break
             continue
-        cleaned_ln = re.sub(r"^[-•*]\s+", "", ln)
-        cleaned_ln = re.sub(r"^>\s*", "", cleaned_ln)
-        cleaned_ln = re.sub(
-            r"^(?:\*\*TL;DR\*\*|\*TL;DR\*|TL;DR|\*\*Summary\*\*|Summary)\s*:\s*",
-            "",
-            cleaned_ln,
-            flags=re.IGNORECASE,
-        ).strip()
+        # Do not glue numbered steps onto an already-collected summary sentence
+        if collected and (_ORDERED_LIST_ITEM_RE.match(ln) or ln.startswith(("- ", "* ", "• "))):
+            break
+        cleaned_ln = _clean_summary_line(ln)
         if cleaned_ln:
             collected.append(cleaned_ln)
             if len(" ".join(collected)) >= max_chars:
                 break
 
+    # Pass 2: Fall back to the first cohesive prose paragraph (never gluing numbered steps or tables)
     if not collected:
-        for ln in lines:
-            if not ln or _SINGLE_LINE_HEADING_RE.match(ln) or ln.startswith("---") or ln.startswith("```"):
+        in_code_fence = False
+        for ln in raw_lines:
+            if ln.startswith("```"):
+                in_code_fence = not in_code_fence
+                if collected:
+                    break
                 continue
-            cleaned_ln = re.sub(r"^[-•*]\s+", "", ln)
-            cleaned_ln = re.sub(
-                r"^(?:\*\*TL;DR\*\*|\*TL;DR\*|TL;DR|\*\*Summary\*\*|Summary)\s*:\s*",
-                "",
-                cleaned_ln,
-                flags=re.IGNORECASE,
-            ).strip()
+            if in_code_fence:
+                continue
+            if _SINGLE_LINE_HEADING_RE.match(ln) or ln.startswith("---") or _TABLE_LINE_RE.match(ln):
+                if collected:
+                    break
+                continue
+            if not ln:
+                if collected:
+                    break
+                continue
+            if collected and (_ORDERED_LIST_ITEM_RE.match(ln) or ln.startswith(("- ", "* ", "• "))):
+                break
+            cleaned_ln = _clean_summary_line(ln)
             if cleaned_ln:
                 collected.append(cleaned_ln)
                 if len(" ".join(collected)) >= max_chars:
                     break
 
     takeaway = _highlight_technical_tokens(" ".join(collected).strip())
-    if len(takeaway) > max_chars:
-        takeaway = takeaway[: max_chars - 1].rstrip() + "…"
-    return takeaway
+    return _truncate_clean_markdown(takeaway, max_chars=max_chars)
 
 
 def build_slack_incident_blocks(
@@ -1295,14 +1649,16 @@ def build_slack_incident_blocks(
     service_name: str = "",
     source_url: str = "",
     lg_thread_id: str = "",
-    investigation_state: Literal["investigating", "completed", "error"] = "investigating",
+    investigation_state: Literal["investigating", "completed", "resolved", "error"] = "investigating",
     rca_preview: str = "",
+    duration_seconds: float | None = None,
     mention_allowlist: frozenset[str] | None = None,
+    expand_sections: bool = True,
 ) -> list[dict[str, Any]]:
-    """Build structured Slack Block Kit blocks for an incident thread root card.
+    """Build industry-standard Slack Block Kit blocks for an incident thread root card.
 
-    Uses clean, minimalist typography (single severity indicator dot, inline code
-    pills, compact bullets, and zero decorative emoji clutter).
+    Uses crisp scannable hierarchy (status-aware badges, 2-column metadata grid, triage duration,
+    expanded sections that never collapse behind `"Show more"`, and a sentence-clean takeaway).
     """
     view = _normalize_incident_view(
         title=title,
@@ -1314,12 +1670,16 @@ def build_slack_incident_blocks(
         lg_thread_id=lg_thread_id,
         investigation_state=investigation_state,
         rca_preview=rca_preview,
+        duration_seconds=duration_seconds,
     )
 
-    if investigation_state == "completed":
-        status_field_text = "*RCA Complete* _(in thread)_"
-    elif investigation_state == "error":
-        status_field_text = "*Investigation Failed*"
+    dur_suffix = f" · {view.duration_display}" if view.duration_display else ""
+    if view.investigation_state == "resolved":
+        status_field_text = f"*Resolved & Verified* _(in thread{dur_suffix})_"
+    elif view.investigation_state == "completed":
+        status_field_text = f"*RCA Complete* _(in thread{dur_suffix})_"
+    elif view.investigation_state == "error":
+        status_field_text = f"*Investigation Failed*{f' _({view.duration_display})_' if view.duration_display else ''}"
     else:
         status_field_text = "*Investigating...* _(in thread)_"
 
@@ -1334,6 +1694,15 @@ def build_slack_incident_blocks(
     if view.scope_display:
         fields.append({"type": "mrkdwn", "text": f"*Service / Scope*\n{view.scope_display}"})
     fields.append({"type": "mrkdwn", "text": f"*Status*\n{status_field_text}"})
+
+    def _sec(mrkdwn_text: str) -> dict[str, Any]:
+        blk: dict[str, Any] = {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": mrkdwn_text[:SLACK_SECTION_MAX_CHARS]},
+        }
+        if expand_sections:
+            blk["expand"] = True
+        return blk
 
     blocks: list[dict[str, Any]] = [
         {
@@ -1359,15 +1728,7 @@ def build_slack_incident_blocks(
             mention_allowlist=mention_allowlist,
         )
         quoted_overview = "\n".join(f"> {line}" for line in overview_mrkdwn.splitlines())
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*Alert Summary*\n{quoted_overview}"[:SLACK_SECTION_MAX_CHARS],
-                },
-            }
-        )
+        blocks.append(_sec(f"*Alert Summary*\n{quoted_overview}"))
 
     if view.signal_bullets or view.other_bullets:
         formatted_signals: list[str] = []
@@ -1377,7 +1738,7 @@ def build_slack_incident_blocks(
                 desc_highlighted,
                 mention_allowlist=mention_allowlist,
             )
-            formatted_signals.append(f"• *`{tgt}`* — {desc_mrkdwn}")
+            formatted_signals.append(f"• `{tgt}` — {desc_mrkdwn}")
 
         for item in view.other_bullets:
             item_highlighted = _highlight_technical_tokens(item)
@@ -1392,30 +1753,14 @@ def build_slack_incident_blocks(
         for chunk in chunk_text(signals_body, max_chars=SLACK_SECTION_MAX_CHARS - 20):
             if len(blocks) >= SLACK_MAX_BLOCKS - 3:
                 break
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": chunk[:SLACK_SECTION_MAX_CHARS],
-                    },
-                }
-            )
+            blocks.append(_sec(chunk))
 
     if view.takeaway:
         takeaway_mrkdwn = _format_inline_slack_mrkdwn(
             view.takeaway,
             mention_allowlist=mention_allowlist,
         )
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*Root Cause Takeaway*\n> {takeaway_mrkdwn}"[:SLACK_SECTION_MAX_CHARS],
-                },
-            }
-        )
+        blocks.append(_sec(f"*Root Cause Takeaway*\n> {takeaway_mrkdwn}"))
 
     blocks.append({"type": "divider"})
 
@@ -1424,9 +1769,11 @@ def build_slack_incident_blocks(
         footer_parts.append(f"Thread: `{view.extracted_thread_id}`")
     if view.extracted_source_url.startswith(("http://", "https://")):
         footer_parts.append(f"<{view.extracted_source_url}|Alert Source>")
-    if investigation_state == "completed":
+    if view.investigation_state == "resolved":
+        footer_parts.append("_Resolved & verified — full RCA in thread_")
+    elif view.investigation_state == "completed":
         footer_parts.append("_Full RCA & remediation steps in thread_")
-    elif investigation_state == "error":
+    elif view.investigation_state == "error":
         footer_parts.append("_Reply in thread to retry_")
     else:
         footer_parts.append("_Investigating in thread_")
@@ -1440,6 +1787,64 @@ def build_slack_incident_blocks(
     return blocks
 
 
+def build_slack_incident_attachment_payload(
+    *,
+    title: str,
+    summary: str = "",
+    provider: str = "",
+    severity: str = "",
+    service_name: str = "",
+    source_url: str = "",
+    lg_thread_id: str = "",
+    investigation_state: Literal["investigating", "completed", "resolved", "error"] = "investigating",
+    rca_preview: str = "",
+    duration_seconds: float | None = None,
+    mention_allowlist: frozenset[str] | None = None,
+    expand_sections: bool = True,
+) -> dict[str, Any]:
+    """Wrap the Slack incident root card in an `attachments` payload with a dynamic severity/status accent color bar.
+
+    Color transitions automatically on `chat.update` (e.g. `#E01E5A` Red while Critical/Investigating
+    -> `#2EB67D` Green once RCA Complete or Resolved), matching PagerDuty / Datadog / incident.io.
+    """
+    blocks = build_slack_incident_blocks(
+        title=title,
+        summary=summary,
+        provider=provider,
+        severity=severity,
+        service_name=service_name,
+        source_url=source_url,
+        lg_thread_id=lg_thread_id,
+        investigation_state=investigation_state,
+        rca_preview=rca_preview,
+        duration_seconds=duration_seconds,
+        mention_allowlist=mention_allowlist,
+        expand_sections=expand_sections,
+    )
+    view = _normalize_incident_view(
+        title=title,
+        summary=summary,
+        provider=provider,
+        severity=severity,
+        service_name=service_name,
+        source_url=source_url,
+        lg_thread_id=lg_thread_id,
+        investigation_state=investigation_state,
+        rca_preview=rca_preview,
+        duration_seconds=duration_seconds,
+    )
+    color = slack_incident_accent_color(view.sev_raw, view.investigation_state)
+    return {
+        "attachments": [
+            {
+                "color": color,
+                "fallback": f"{view.clean_title} ({view.sev_label}) — {view.status_label_plain}",
+                "blocks": blocks,
+            }
+        ]
+    }
+
+
 def build_slack_rca_blocks(
     analysis: str,
     *,
@@ -1449,65 +1854,154 @@ def build_slack_rca_blocks(
     status: str = "completed",
     source_url: str = "",
     lg_thread_id: str = "",
+    duration_seconds: float | None = None,
     tool_names: Sequence[str] = (),
     mention_allowlist: frozenset[str] | None = None,
     use_native_table: bool = True,
+    expand_sections: bool = True,
+    include_feedback_actions: bool = False,
+    attachment_filename: str = "",
 ) -> list[dict[str, Any]]:
-    """Compile an automated webhook RCA report into structured Slack Block Kit blocks."""
+    """Compile an automated webhook RCA report into industry-standard Slack Block Kit blocks.
+
+    Structure (modeled after incident.io / Rootly / PagerDuty):
+    1. Single top `header` banner (never competed with by `##`/`###` subheadings)
+    2. Compact metadata `context` strip (Status badge · Triage Time · Severity · Source · View Alert)
+    3. Clean `divider` -> fully expanded RCA body sections (`expand: true`) + compact native table
+    4. Clean `divider` -> footer `context` strip (+ optional interactive feedback buttons)
+    """
+    is_err = status.lower() in {"error", "failed"}
+    is_resolved = status.lower() == "resolved"
+    clean_title, inferred_prov = _clean_incident_title(title, provider) if title else ("", provider)
+    eff_prov_raw = (provider or inferred_prov or "").strip().lower()
+    eff_prov = (
+        _PROVIDER_DISPLAY_NAMES.get(
+            eff_prov_raw,
+            eff_prov_raw.upper() if len(eff_prov_raw) <= 4 else eff_prov_raw.title(),
+        )
+        if eff_prov_raw
+        else ""
+    )
+
+    if is_err:
+        banner_prefix = "Investigation Report"
+        status_chip = "*Investigation Failed*"
+    elif is_resolved:
+        banner_prefix = "Root Cause Analysis"
+        status_chip = "*Resolved & Verified*"
+    else:
+        banner_prefix = "Root Cause Analysis"
+        status_chip = "*RCA Complete*"
+
+    banner_title = (
+        f"{banner_prefix} — {clean_title}" if clean_title else f"TalkOps {banner_prefix}"
+    )
+
     body_blocks = build_slack_response_blocks(
         analysis,
         mention_allowlist=mention_allowlist,
         use_native_table=use_native_table,
         tool_names=tool_names,
+        top_level_header_max_level=0,
+        expand_sections=expand_sections,
     )
-    is_err = status.lower() in {"error", "failed"}
-    banner_title = "TalkOps Investigation Report" if is_err else "TalkOps Root Cause Analysis"
 
-    blocks: list[dict[str, Any]] = []
-    if not body_blocks or body_blocks[0].get("type") != "header":
-        blocks.append(
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": banner_title[:SLACK_HEADER_MAX_CHARS],
-                    "emoji": True,
-                },
-            }
-        )
-    elif body_blocks and body_blocks[0].get("type") == "header":
-        first_header_text = str(body_blocks[0].get("text", {}).get("text", ""))
-        if "root cause analysis" not in first_header_text.lower():
-            blocks.append(
-                {
-                    "type": "header",
-                    "text": {
-                        "type": "plain_text",
-                        "text": banner_title[:SLACK_HEADER_MAX_CHARS],
-                        "emoji": True,
-                    },
-                }
-            )
-            blocks.append({"type": "divider"})
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": banner_title[:SLACK_HEADER_MAX_CHARS],
+                "emoji": True,
+            },
+        }
+    ]
 
-    max_before_footer = SLACK_MAX_BLOCKS - 2
+    meta_parts: list[str] = [status_chip]
+    dur_str = format_duration_human(duration_seconds)
+    if dur_str:
+        meta_parts.append(f"Triage Time: *{dur_str}*")
+    sev_raw = severity.strip().lower()
+    if sev_raw:
+        sev_icon, sev_label = _SEVERITY_BADGES.get(sev_raw, ("⚪", sev_raw.capitalize()))
+        meta_parts.append(f"{sev_icon} *{sev_label}*")
+    if eff_prov:
+        meta_parts.append(f"Source: *{eff_prov}*")
+    clean_url = (source_url or "").strip()
+    if clean_url.startswith(("http://", "https://")):
+        meta_parts.append(f"<{clean_url}|View Alert>")
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": "  ·  ".join(meta_parts)}],
+        }
+    )
+    blocks.append({"type": "divider"})
+
+    reserved_tail = 3 if (include_feedback_actions and (lg_thread_id or "").strip()) else 2
+    if attachment_filename:
+        reserved_tail += 1
+    max_before_footer = SLACK_MAX_BLOCKS - reserved_tail
+    truncated_body = len(body_blocks) > max(0, max_before_footer - len(blocks))
     for b in body_blocks:
         if len(blocks) >= max_before_footer:
             break
         blocks.append(b)
 
-    footer_parts: list[str] = []
-    if provider:
-        eff_prov = _PROVIDER_DISPLAY_NAMES.get(provider.strip().lower(), provider.strip().upper())
+    if attachment_filename and len(blocks) < SLACK_MAX_BLOCKS - (reserved_tail - 1):
+        note_txt = (
+            f"_Full RCA report attached below as `{attachment_filename}` (condensed here to fit Slack limits)._"
+            if truncated_body
+            else f"_Full downloadable RCA report attached below as `{attachment_filename}`._"
+        )
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": note_txt}],
+            }
+        )
+
+    footer_parts: list[str] = ["*TalkOps SRE*"]
+    if eff_prov:
         footer_parts.append(f"Source: *{eff_prov}*")
-    if (source_url or "").strip().startswith(("http://", "https://")):
-        footer_parts.append(f"<{(source_url or '').strip()}|View Alert>")
-    if (lg_thread_id or "").strip():
-        footer_parts.append(f"Thread: `{(lg_thread_id or '').strip()}`")
+    if clean_url.startswith(("http://", "https://")):
+        footer_parts.append(f"<{clean_url}|View Alert>")
+    clean_tid = (lg_thread_id or "").strip()
+    if clean_tid:
+        footer_parts.append(f"Thread: `{clean_tid}`")
     footer_parts.append("_Reply in this thread to continue investigating_")
 
-    if blocks and blocks[-1].get("type") != "divider" and len(blocks) + 2 <= SLACK_MAX_BLOCKS:
+    if blocks and blocks[-1].get("type") != "divider" and len(blocks) + reserved_tail <= SLACK_MAX_BLOCKS:
         blocks.append({"type": "divider"})
+
+    if include_feedback_actions and clean_tid and len(blocks) + 2 <= SLACK_MAX_BLOCKS:
+        action_elements: list[dict[str, Any]] = [
+            {
+                "type": "button",
+                "style": "primary",
+                "text": {"type": "plain_text", "text": "Confirm RCA"},
+                "action_id": f"talkops_confirm:{clean_tid[:80]}",
+                "value": clean_tid[:80],
+            },
+            {
+                "type": "button",
+                "style": "danger",
+                "text": {"type": "plain_text", "text": "Dispute Hypothesis"},
+                "action_id": f"talkops_dispute:{clean_tid[:80]}",
+                "value": clean_tid[:80],
+            },
+        ]
+        if clean_url.startswith(("http://", "https://")):
+            action_elements.append(
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "View Alert"},
+                    "url": clean_url,
+                    "action_id": "talkops_open_alert_source",
+                }
+            )
+        blocks.append({"type": "actions", "elements": action_elements})
+
     if len(blocks) < SLACK_MAX_BLOCKS:
         blocks.append(
             {
@@ -1523,15 +2017,67 @@ def build_slack_rca_blocks(
     return blocks
 
 
+def _build_teams_native_table(table: MarkdownTable) -> dict[str, Any]:
+    """Build a native Microsoft Teams Adaptive Card v1.5 `Table` element."""
+    num_cols = max(1, len(table.headers))
+    columns = [{"width": 1} for _ in range(num_cols)]
+    header_row = {
+        "type": "TableRow",
+        "style": "accent",
+        "cells": [
+            {
+                "type": "TableCell",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": _clean_table_cell(table.headers[c]) or f"Col {c + 1}",
+                        "weight": "Bolder",
+                        "wrap": True,
+                    }
+                ],
+            }
+            for c in range(num_cols)
+        ],
+    }
+    rows: list[dict[str, Any]] = [header_row]
+    for r in table.rows[:25]:
+        rows.append(
+            {
+                "type": "TableRow",
+                "cells": [
+                    {
+                        "type": "TableCell",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": (r[c] if c < len(r) else "—") or "—",
+                                "wrap": True,
+                            }
+                        ],
+                    }
+                    for c in range(num_cols)
+                ],
+            }
+        )
+    return {
+        "type": "Table",
+        "firstRowAsHeader": True,
+        "showGridLines": True,
+        "gridStyle": "accent",
+        "columns": columns,
+        "rows": rows,
+    }
+
+
 def build_teams_response_card(
     text: str,
     *,
     tool_names: Sequence[str] = (),
 ) -> list[dict[str, Any]] | None:
-    """Compile structured LLM Markdown into a Microsoft Teams Adaptive Card v1.4 attachment.
+    """Compile structured LLM Markdown into a Microsoft Teams Adaptive Card v1.5 attachment.
 
     Returns `None` for simple single-paragraph messages so plain Teams Markdown is used,
-    or a list containing an Adaptive Card attachment when tables, headings, callouts,
+    or a list containing an Adaptive Card v1.5 attachment when tables, headings, callouts,
     or tool footers are present.
     """
     ast_blocks = parse_markdown_blocks(text)
@@ -1546,13 +2092,15 @@ def build_teams_response_card(
     body_elements: list[dict[str, Any]] = []
     for node in ast_blocks:
         if node.kind == "heading":
-            size = "Large" if node.level == 1 else ("Medium" if node.level == 2 else "Default")
+            size = "Medium" if node.level <= 2 else "Default"
             body_elements.append(
                 {
                     "type": "TextBlock",
                     "text": _clean_table_cell(node.text),
                     "size": size,
                     "weight": "Bolder",
+                    "spacing": "Medium",
+                    "separator": node.level <= 2 and bool(body_elements),
                     "wrap": True,
                 }
             )
@@ -1565,95 +2113,37 @@ def build_teams_response_card(
                 }
             )
         elif node.kind == "table" and node.table is not None:
-            if len(node.table.headers) == 2 and len(node.table.rows) <= 15:
-                # 2-column table: render each row as FactSet or ColumnSet
-                header_cols = [
-                    {
-                        "type": "Column",
-                        "width": "stretch",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": h,
-                                "weight": "Bolder",
-                                "wrap": True,
-                            }
-                        ],
-                    }
-                    for h in node.table.headers
-                ]
-                body_elements.append({"type": "ColumnSet", "columns": header_cols})
-                for r in node.table.rows:
-                    row_cols = [
-                        {
-                            "type": "Column",
-                            "width": "stretch",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": r[c] if c < len(r) else "—",
-                                    "wrap": True,
-                                }
-                            ],
-                        }
-                        for c in range(len(node.table.headers))
-                    ]
-                    body_elements.append(
-                        {"type": "ColumnSet", "separator": True, "columns": row_cols}
-                    )
-            else:
-                header_cols = [
-                    {
-                        "type": "Column",
-                        "width": "stretch",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": h,
-                                "weight": "Bolder",
-                                "wrap": True,
-                            }
-                        ],
-                    }
-                    for h in node.table.headers
-                ]
-                body_elements.append({"type": "ColumnSet", "columns": header_cols})
-                for r in node.table.rows[:25]:
-                    row_cols = [
-                        {
-                            "type": "Column",
-                            "width": "stretch",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": r[c] if c < len(r) else "—",
-                                    "wrap": True,
-                                }
-                            ],
-                        }
-                        for c in range(len(node.table.headers))
-                    ]
-                    body_elements.append(
-                        {"type": "ColumnSet", "separator": True, "columns": row_cols}
-                    )
+            body_elements.append(_build_teams_native_table(node.table))
         elif node.kind == "code":
             body_elements.append(
                 {
-                    "type": "TextBlock",
-                    "text": node.text,
-                    "fontType": "Monospace",
-                    "wrap": True,
+                    "type": "Container",
+                    "style": "emphasis",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": node.text,
+                            "fontType": "Monospace",
+                            "size": "Small",
+                            "wrap": True,
+                        }
+                    ],
                 }
             )
         elif node.kind == "callout":
             icon, label = _CALLOUT_ICONS.get(node.callout_type, ("ℹ️", "Note"))
-            prefix = f"**{icon} {label}:** " if node.callout_type != "quote" else "> "
+            prefix = f"**{icon} {label}:** " if node.callout_type != "quote" else ""
             body_elements.append(
                 {
-                    "type": "TextBlock",
-                    "text": f"{prefix}{node.text}",
-                    "wrap": True,
-                    "isSubtle": True,
+                    "type": "Container",
+                    "style": "warning" if node.callout_type in {"warning", "caution"} else "emphasis",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": f"{prefix}{node.text}",
+                            "wrap": True,
+                        }
+                    ],
                 }
             )
         elif node.kind == "paragraph":
@@ -1671,7 +2161,7 @@ def build_teams_response_card(
             body_elements.append(
                 {
                     "type": "TextBlock",
-                    "text": "🔧 **Tools used:** " + ", ".join(f"`{t}`" for t in dedup_tools[:8]),
+                    "text": "**Tools used:** " + ", ".join(f"`{t}`" for t in dedup_tools[:8]),
                     "size": "Small",
                     "isSubtle": True,
                     "separator": True,
@@ -1685,7 +2175,8 @@ def build_teams_response_card(
             "content": {
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "type": "AdaptiveCard",
-                "version": "1.4",
+                "version": "1.5",
+                "msteams": {"width": "Full"},
                 "body": body_elements,
             },
         }
@@ -1784,7 +2275,7 @@ def parse_channel_output(
         if tool_names:
             dedup_tools = list(dict.fromkeys(t for t in tool_names if t))
             if dedup_tools:
-                formatted_text += "\n\n_🔧 Tools used: " + ", ".join(f"`{t}`" for t in dedup_tools[:8]) + "_"
+                formatted_text += "\n\n_Tools used: " + ", ".join(f"`{t}`" for t in dedup_tools[:8]) + "_"
         return ParsedChannelOutput(
             channel="discord",
             text=formatted_text,
@@ -1812,7 +2303,8 @@ class _NormalizedIncidentView:
     extracted_source_url: str
     extracted_thread_id: str
     takeaway: str
-    investigation_state: Literal["investigating", "completed", "error"]
+    investigation_state: Literal["investigating", "completed", "resolved", "error"]
+    duration_display: str = ""
 
 
 def _normalize_incident_view(
@@ -1824,8 +2316,9 @@ def _normalize_incident_view(
     service_name: str | None = "",
     source_url: str | None = "",
     lg_thread_id: str | None = "",
-    investigation_state: Literal["investigating", "completed", "error"] = "investigating",
+    investigation_state: Literal["investigating", "completed", "resolved", "error"] = "investigating",
     rca_preview: str | None = "",
+    duration_seconds: float | None = None,
 ) -> _NormalizedIncidentView:
     summary = summary or ""
     provider = provider or ""
@@ -1834,6 +2327,7 @@ def _normalize_incident_view(
     source_url = source_url or ""
     lg_thread_id = lg_thread_id or ""
     rca_preview = rca_preview or ""
+    duration_display = format_duration_human(duration_seconds)
     clean_title, inferred_prov = _clean_incident_title(title, provider)
     eff_prov_raw = (provider or inferred_prov or "webhook").strip().lower()
     prov_display = _PROVIDER_DISPLAY_NAMES.get(
@@ -1853,14 +2347,15 @@ def _normalize_incident_view(
         ("⚪", sev_raw.capitalize() if sev_raw else "Unknown"),
     )
 
-    if investigation_state == "completed":
-        header_icon = ""
-        status_label_plain = "RCA Complete (in thread)"
+    dur_suffix = f" · {duration_display}" if duration_display else ""
+    header_icon = ""
+    if investigation_state == "resolved":
+        status_label_plain = f"Resolved & Verified (in thread{dur_suffix})"
+    elif investigation_state == "completed":
+        status_label_plain = f"RCA Complete (in thread{dur_suffix})"
     elif investigation_state == "error":
-        header_icon = ""
-        status_label_plain = "Investigation Failed"
+        status_label_plain = f"Investigation Failed{f' ({duration_display})' if duration_display else ''}"
     else:
-        header_icon = ""
         status_label_plain = "Investigating... (in thread)"
 
     overview_lines: list[str] = []
@@ -1919,6 +2414,7 @@ def _normalize_incident_view(
         extracted_thread_id=extracted_thread_id,
         takeaway=takeaway,
         investigation_state=investigation_state,
+        duration_display=duration_display,
     )
 
 
@@ -1931,10 +2427,11 @@ def build_teams_incident_card(
     service_name: str = "",
     source_url: str = "",
     lg_thread_id: str = "",
-    investigation_state: Literal["investigating", "completed", "error"] = "investigating",
+    investigation_state: Literal["investigating", "completed", "resolved", "error"] = "investigating",
     rca_preview: str = "",
+    duration_seconds: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Build a Microsoft Teams Adaptive Card v1.4 attachment for an incident root message."""
+    """Build a Microsoft Teams Adaptive Card v1.5 attachment for an incident root message."""
     view = _normalize_incident_view(
         title=title,
         summary=summary,
@@ -1945,22 +2442,58 @@ def build_teams_incident_card(
         lg_thread_id=lg_thread_id,
         investigation_state=investigation_state,
         rca_preview=rca_preview,
+        duration_seconds=duration_seconds,
     )
+    if view.investigation_state in {"completed", "resolved"}:
+        banner_style = "good"
+        banner_eyebrow = f"INCIDENT UPDATE · {view.prov_display.upper()}"
+    elif view.investigation_state == "error":
+        banner_style = "warning"
+        banner_eyebrow = f"INVESTIGATION FAILED · {view.prov_display.upper()}"
+    elif view.sev_raw in {"critical", "high", "p1", "sev1", "p2", "sev2"}:
+        banner_style = "attention"
+        banner_eyebrow = f"{view.sev_label.upper()} INCIDENT · {view.prov_display.upper()}"
+    elif view.sev_raw in {"warning", "warn", "medium", "p3", "sev3"}:
+        banner_style = "warning"
+        banner_eyebrow = f"{view.sev_label.upper()} ALERT · {view.prov_display.upper()}"
+    else:
+        banner_style = "accent"
+        banner_eyebrow = f"INCIDENT · {view.prov_display.upper()}"
+
+    # Microsoft Teams UX / WCAG guidance: avoid Unicode emojis in Adaptive Card status fields;
+    # rely on native semantic Container styles (`attention`/`warning`/`good`) + explicit text.
     facts: list[dict[str, str]] = [
-        {"title": "Severity", "value": f"{view.sev_icon} {view.sev_label}"},
+        {"title": "Severity", "value": view.sev_label},
         {"title": "Source", "value": view.prov_display},
     ]
     if view.scope_display:
         facts.append({"title": "Service / Scope", "value": view.scope_display})
     facts.append({"title": "Status", "value": view.status_label_plain})
+    if view.duration_display:
+        facts.append({"title": "Triage Time", "value": view.duration_display})
 
     body_elements: list[dict[str, Any]] = [
         {
-            "type": "TextBlock",
-            "text": view.clean_title,
-            "size": "Large",
-            "weight": "Bolder",
-            "wrap": True,
+            "type": "Container",
+            "style": banner_style,
+            "bleed": True,
+            "items": [
+                {
+                    "type": "TextBlock",
+                    "text": banner_eyebrow,
+                    "size": "Small",
+                    "weight": "Bolder",
+                    "wrap": True,
+                },
+                {
+                    "type": "TextBlock",
+                    "text": view.clean_title,
+                    "size": "Large",
+                    "weight": "Bolder",
+                    "spacing": "None",
+                    "wrap": True,
+                },
+            ],
         },
         {"type": "FactSet", "facts": facts},
     ]
@@ -2019,6 +2552,7 @@ def build_teams_incident_card(
         body_elements.append(
             {
                 "type": "Container",
+                "style": "good" if view.investigation_state in {"completed", "resolved"} else "emphasis",
                 "separator": True,
                 "items": [
                     {
@@ -2029,7 +2563,7 @@ def build_teams_incident_card(
                     },
                     {
                         "type": "TextBlock",
-                        "text": f"> {view.takeaway}",
+                        "text": view.takeaway,
                         "wrap": True,
                     },
                 ],
@@ -2053,7 +2587,8 @@ def build_teams_incident_card(
     card_content: dict[str, Any] = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.4",
+        "version": "1.5",
+        "msteams": {"width": "Full"},
         "body": body_elements,
     }
     if view.extracted_source_url.startswith(("http://", "https://")):
@@ -2072,6 +2607,10 @@ def build_teams_incident_card(
     ]
 
 
+def _teams_card_serialized_size(card_content: Mapping[str, Any]) -> int:
+    return len(json.dumps(card_content, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+
 def build_teams_rca_card(
     analysis: str,
     *,
@@ -2081,11 +2620,37 @@ def build_teams_rca_card(
     status: str = "completed",
     source_url: str = "",
     lg_thread_id: str = "",
+    duration_seconds: float | None = None,
     tool_names: Sequence[str] = (),
+    include_feedback_actions: bool = False,
+    max_card_bytes: int = TEAMS_ADAPTIVE_CARD_MAX_BYTES,
 ) -> list[dict[str, Any]]:
-    """Build a Microsoft Teams Adaptive Card v1.4 attachment for an automated RCA report."""
+    """Build a Microsoft Teams Adaptive Card v1.5 attachment for an automated RCA report.
+
+    Enforces Teams' 28 KB Adaptive Card limit (defaulting to a safe 24 KB ceiling) so large
+    RCAs never trigger `413 MessageSizeTooBig`.
+    """
     is_err = status.lower() in {"error", "failed"}
-    banner_title = "TalkOps Investigation Report" if is_err else "TalkOps Root Cause Analysis"
+    is_resolved = status.lower() == "resolved"
+    clean_title, inferred_prov = _clean_incident_title(title, provider) if title else ("", provider)
+    eff_prov_raw = (provider or inferred_prov or "").strip().lower()
+    eff_prov = (
+        _PROVIDER_DISPLAY_NAMES.get(
+            eff_prov_raw,
+            eff_prov_raw.upper() if len(eff_prov_raw) <= 4 else eff_prov_raw.title(),
+        )
+        if eff_prov_raw
+        else ""
+    )
+    banner_style = "warning" if is_err else "good"
+    eyebrow = (
+        "INVESTIGATION REPORT"
+        if is_err
+        else ("RESOLVED · ROOT CAUSE ANALYSIS" if is_resolved else "ROOT CAUSE ANALYSIS")
+    )
+    if eff_prov:
+        eyebrow += f" · {eff_prov.upper()}"
+    banner_title = clean_title or ("TalkOps Investigation Report" if is_err else "TalkOps Root Cause Analysis")
 
     base_cards = build_teams_response_card(analysis, tool_names=tool_names)
     if base_cards and isinstance(base_cards[0].get("content"), Mapping):
@@ -2099,54 +2664,229 @@ def build_teams_rca_card(
             }
         ]
 
-    body_elements: list[dict[str, Any]] = [
+    meta_facts: list[dict[str, str]] = [
         {
-            "type": "TextBlock",
-            "text": banner_title,
-            "size": "Large",
-            "weight": "Bolder",
-            "wrap": True,
-        },
-        *existing_body,
+            "title": "Status",
+            "value": "Failed" if is_err else ("Resolved & Verified" if is_resolved else "RCA Complete"),
+        }
     ]
-    footer_parts: list[str] = []
-    if provider:
-        eff_prov = _PROVIDER_DISPLAY_NAMES.get(provider.strip().lower(), provider.strip().upper())
+    dur_str = format_duration_human(duration_seconds)
+    if dur_str:
+        meta_facts.append({"title": "Triage Time", "value": dur_str})
+    sev_raw = severity.strip().lower()
+    if sev_raw:
+        _sev_icon, sev_label = _SEVERITY_BADGES.get(sev_raw, ("", sev_raw.capitalize()))
+        meta_facts.append({"title": "Severity", "value": sev_label})
+    if eff_prov:
+        meta_facts.append({"title": "Source", "value": eff_prov})
+
+    header_container: dict[str, Any] = {
+        "type": "Container",
+        "style": banner_style,
+        "bleed": True,
+        "items": [
+            {
+                "type": "TextBlock",
+                "text": eyebrow,
+                "size": "Small",
+                "weight": "Bolder",
+                "wrap": True,
+            },
+            {
+                "type": "TextBlock",
+                "text": banner_title,
+                "size": "Large",
+                "weight": "Bolder",
+                "spacing": "None",
+                "wrap": True,
+            },
+        ],
+    }
+    fact_set: dict[str, Any] = {"type": "FactSet", "facts": meta_facts}
+
+    footer_parts: list[str] = ["TalkOps SRE"]
+    if eff_prov:
         footer_parts.append(f"Source: {eff_prov}")
     if (lg_thread_id or "").strip():
         footer_parts.append(f"Thread: `{(lg_thread_id or '').strip()}`")
     footer_parts.append("Reply in this thread to continue investigating")
-    body_elements.append(
-        {
-            "type": "TextBlock",
-            "text": "  ·  ".join(footer_parts),
-            "size": "Small",
-            "isSubtle": True,
-            "separator": True,
-            "wrap": True,
-        }
-    )
-
-    card_content: dict[str, Any] = {
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "type": "AdaptiveCard",
-        "version": "1.4",
-        "body": body_elements,
+    footer_block: dict[str, Any] = {
+        "type": "TextBlock",
+        "text": "  ·  ".join(footer_parts),
+        "size": "Small",
+        "isSubtle": True,
+        "separator": True,
+        "wrap": True,
     }
-    if (source_url or "").strip().startswith(("http://", "https://")):
-        card_content["actions"] = [
-            {
-                "type": "Action.OpenUrl",
-                "title": "View Alert",
-                "url": (source_url or "").strip(),
-            }
+
+    def _assemble_card(items_slice: list[dict[str, Any]], *, truncated: bool = False) -> dict[str, Any]:
+        body: list[dict[str, Any]] = [
+            header_container,
+            fact_set,
+            {"type": "Container", "separator": True, "items": items_slice},
         ]
+        if truncated:
+            body.append(
+                {
+                    "type": "TextBlock",
+                    "text": "_Condensed to stay within Microsoft Teams' 28 KB Adaptive Card limit — continued in thread below._",
+                    "size": "Small",
+                    "isSubtle": True,
+                    "wrap": True,
+                }
+            )
+        body.append(footer_block)
+        content: dict[str, Any] = {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard",
+            "version": "1.5",
+            "msteams": {"width": "Full"},
+            "body": body,
+        }
+        clean_tid = (lg_thread_id or "").strip()
+        card_actions: list[dict[str, Any]] = []
+        if include_feedback_actions and clean_tid:
+            tid_short = clean_tid[:80]
+            card_actions.extend(
+                [
+                    {
+                        "type": "Action.Execute",
+                        "title": "Confirm RCA",
+                        "style": "positive",
+                        "verb": "talkops_confirm",
+                        "data": {
+                            "action_id": f"talkops_confirm:{tid_short}",
+                            "verdict": "helped",
+                            "lg_thread_id": tid_short,
+                        },
+                    },
+                    {
+                        "type": "Action.Execute",
+                        "title": "Dispute Hypothesis",
+                        "style": "destructive",
+                        "verb": "talkops_dispute",
+                        "data": {
+                            "action_id": f"talkops_dispute:{tid_short}",
+                            "verdict": "rejected",
+                            "lg_thread_id": tid_short,
+                        },
+                    },
+                ]
+            )
+        if (source_url or "").strip().startswith(("http://", "https://")):
+            card_actions.append(
+                {
+                    "type": "Action.OpenUrl",
+                    "title": "View Alert",
+                    "url": (source_url or "").strip(),
+                }
+            )
+        if card_actions:
+            content["actions"] = card_actions
+        return content
+
+    card_content = _assemble_card(existing_body, truncated=False)
+    if _teams_card_serialized_size(card_content) > max_card_bytes:
+        kept: list[dict[str, Any]] = []
+        for elem in existing_body:
+            candidate = _assemble_card([*kept, elem], truncated=True)
+            if _teams_card_serialized_size(candidate) <= max_card_bytes:
+                kept.append(elem)
+            else:
+                # If even the first element is huge, trim its text cleanly
+                if not kept:
+                    takeaway = extract_rca_takeaway(analysis, max_chars=1200)
+                    kept.append(
+                        {
+                            "type": "TextBlock",
+                            "text": takeaway or format_markdown_for_teams(analysis)[:1200],
+                            "wrap": True,
+                        }
+                    )
+                break
+        card_content = _assemble_card(kept, truncated=True)
+
     return [
         {
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": card_content,
         }
     ]
+
+
+def _render_discord_table(table: MarkdownTable, *, mention_allowlist: frozenset[str] | None = None) -> str:
+    """Render a `MarkdownTable` cleanly for Discord embeds (bullet cards for wide/verbose tables, aligned code block for compact ones)."""
+    num_cols = len(table.headers)
+    headers = [_clean_table_cell(h) or f"Col {i + 1}" for i, h in enumerate(table.headers)]
+    max_cell_len = max(
+        (len(_clean_table_cell(c)) for r in table.rows for c in r),
+        default=0,
+    )
+    # Compact narrow tables look great as aligned monospace blocks; verbose evidence tables
+    # wrap cleanly as structured bullet cards without overflowing Discord's embed width.
+    if num_cols <= 4 and max_cell_len <= 32 and len(table.rows) <= 12:
+        raw_lines = [
+            "| " + " | ".join(table.headers) + " |",
+            "| " + " | ".join("---" for _ in table.headers) + " |",
+            *("| " + " | ".join(r) + " |" for r in table.rows),
+        ]
+        return "```\n" + "\n".join(_format_aligned_table(raw_lines)) + "\n```"
+
+    lines: list[str] = []
+    for row in table.rows[:25]:
+        first_val = format_markdown_for_discord(
+            row[0] if len(row) > 0 else "—", mention_allowlist=mention_allowlist
+        )
+        rest_parts: list[str] = []
+        for c_idx in range(1, num_cols):
+            val = format_markdown_for_discord(
+                row[c_idx] if c_idx < len(row) else "—", mention_allowlist=mention_allowlist
+            )
+            if val:
+                rest_parts.append(f"**{headers[c_idx]}:** {val}")
+        if rest_parts:
+            lines.append(f"• **{headers[0]}:** {first_val}\n  " + " · ".join(rest_parts))
+        else:
+            lines.append(f"• {first_val}")
+    return "\n".join(lines)
+
+
+def _format_discord_rca_body(
+    analysis: str,
+    *,
+    mention_allowlist: frozenset[str] | None = None,
+) -> str:
+    """Compile arbitrary RCA Markdown AST into crisp Discord embed Markdown."""
+    ast_blocks = parse_markdown_blocks(analysis)
+    if not ast_blocks:
+        return format_markdown_for_discord(analysis, mention_allowlist=mention_allowlist)
+
+    parts: list[str] = []
+    for node in ast_blocks:
+        if node.kind == "divider":
+            continue
+        elif node.kind == "heading":
+            clean_h = _clean_table_cell(node.text)
+            if node.level <= 2:
+                parts.append(f"### {clean_h}")
+            else:
+                parts.append(f"**{clean_h}**")
+        elif node.kind == "table" and node.table is not None:
+            parts.append(_render_discord_table(node.table, mention_allowlist=mention_allowlist))
+        elif node.kind == "code":
+            lang = node.language.strip()
+            parts.append(f"```{lang}\n{node.text}\n```")
+        elif node.kind == "callout":
+            body_fmt = format_markdown_for_discord(node.text, mention_allowlist=mention_allowlist)
+            if node.callout_type and node.callout_type != "quote":
+                icon, label = _CALLOUT_ICONS.get(node.callout_type, ("ℹ️", node.callout_type.title()))
+                quoted = "\n".join(f"> {ln}" for ln in body_fmt.splitlines() if ln.strip())
+                parts.append(f"> {icon} **{label}**\n{quoted}")
+            else:
+                parts.append("\n".join(f"> {ln}" for ln in body_fmt.splitlines()))
+        elif node.kind == "paragraph":
+            parts.append(format_markdown_for_discord(node.text, mention_allowlist=mention_allowlist))
+    return "\n\n".join(p for p in parts if p.strip()).strip()
 
 
 def build_discord_incident_embed(
@@ -2158,11 +2898,16 @@ def build_discord_incident_embed(
     service_name: str = "",
     source_url: str = "",
     lg_thread_id: str = "",
-    investigation_state: Literal["investigating", "completed", "error"] = "investigating",
+    investigation_state: Literal["investigating", "completed", "resolved", "error"] = "investigating",
     rca_preview: str = "",
+    duration_seconds: float | None = None,
     mention_allowlist: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Build a Discord Rich Embed + Link Button component payload for an incident root message."""
+    """Build a Discord Rich Embed + Link Button payload for an incident root message.
+
+    Sets `suppress_content=True` so Discord renders ONLY the Rich Embed + button without
+    duplicating the entire message text and raw URL above the card.
+    """
     view = _normalize_incident_view(
         title=title,
         summary=summary,
@@ -2173,10 +2918,11 @@ def build_discord_incident_embed(
         lg_thread_id=lg_thread_id,
         investigation_state=investigation_state,
         rca_preview=rca_preview,
+        duration_seconds=duration_seconds,
     )
-    if investigation_state == "completed":
+    if view.investigation_state in {"completed", "resolved"}:
         color = 0x2EB67D
-    elif investigation_state == "error":
+    elif view.investigation_state == "error":
         color = 0xECB22E
     elif view.sev_raw in {"critical", "high", "p1", "sev1", "p2", "sev2"}:
         color = 0xE01E5A
@@ -2196,12 +2942,14 @@ def build_discord_incident_embed(
 
     if view.signal_bullets or view.other_bullets:
         sig_lines: list[str] = []
-        for _st, tgt, desc in view.signal_bullets:
+        for _st, tgt, desc in view.signal_bullets[:8]:
             desc_fmt = format_markdown_for_discord(
                 _highlight_technical_tokens(desc), mention_allowlist=mention_allowlist
             )
             sig_lines.append(f"• **`{tgt}`** — {desc_fmt}")
-        for item in view.other_bullets:
+        if len(view.signal_bullets) > 8:
+            sig_lines.append(f"• _+{len(view.signal_bullets) - 8} more signal(s) in thread_")
+        for item in view.other_bullets[:6]:
             item_fmt = format_markdown_for_discord(
                 _highlight_technical_tokens(item), mention_allowlist=mention_allowlist
             )
@@ -2220,23 +2968,29 @@ def build_discord_incident_embed(
         fields.append({"name": "Service / Scope", "value": view.scope_display, "inline": True})
     fields.append({"name": "Status", "value": view.status_label_plain, "inline": True})
 
+    footer_parts = ["TalkOps SRE"]
+    if view.extracted_thread_id:
+        footer_parts.append(f"Thread: {view.extracted_thread_id}")
+    if view.investigation_state in {"completed", "resolved"}:
+        footer_parts.append("Full RCA in thread")
+    elif view.investigation_state == "error":
+        footer_parts.append("Reply in thread to retry")
+    else:
+        footer_parts.append("Investigating in thread")
+
     embed: dict[str, Any] = {
+        "author": {"name": f"TalkOps SRE · {view.prov_display}"[:256]},
         "title": view.clean_title[:256],
-        "description": "\n\n".join(desc_sections)[:4000],
+        "description": "\n\n".join(desc_sections)[:DISCORD_EMBED_DESC_MAX_CHARS],
         "color": color,
         "fields": fields,
-        "footer": {
-            "text": (
-                f"TalkOps SRE · Thread: {view.extracted_thread_id}"
-                if view.extracted_thread_id
-                else "TalkOps SRE"
-            )[:2048]
-        },
+        "timestamp": datetime.now(UTC).isoformat(),
+        "footer": {"text": " · ".join(footer_parts)[:2048]},
     }
     if view.extracted_source_url.startswith(("http://", "https://")):
         embed["url"] = view.extracted_source_url
 
-    result: dict[str, Any] = {"embeds": [embed]}
+    result: dict[str, Any] = {"embeds": [embed], "suppress_content": True}
     if view.extracted_source_url.startswith(("http://", "https://")):
         result["components"] = [
             {
@@ -2263,51 +3017,377 @@ def build_discord_rca_embed(
     status: str = "completed",
     source_url: str = "",
     lg_thread_id: str = "",
+    duration_seconds: float | None = None,
     tool_names: Sequence[str] = (),
+    mention_allowlist: frozenset[str] | None = None,
+    attachment_filename: str = "",
+    include_feedback_actions: bool = True,
 ) -> dict[str, Any]:
-    """Build a Discord summary embed + Link Button metadata footer for an automated RCA report."""
-    is_err = status.lower() in {"error", "failed"}
-    banner_title = "TalkOps Investigation Report" if is_err else "TalkOps Root Cause Analysis"
-    takeaway = extract_rca_takeaway(analysis)
+    """Build industry-standard Discord Rich Embed(s) + Action Buttons for an automated RCA report.
 
-    footer_parts: list[str] = []
-    if provider:
-        eff_prov = _PROVIDER_DISPLAY_NAMES.get(provider.strip().lower(), provider.strip().upper())
+    Renders the full structured RCA inside Discord Embed(s) (with `suppress_content=True` so
+    plain `content` is never duplicated above the embed and raw URLs never clutter chat).
+    """
+    is_err = status.lower() in {"error", "failed"}
+    is_resolved = status.lower() == "resolved"
+    clean_title, inferred_prov = _clean_incident_title(title, provider) if title else ("", provider)
+    eff_prov_raw = (provider or inferred_prov or "").strip().lower()
+    eff_prov = (
+        _PROVIDER_DISPLAY_NAMES.get(
+            eff_prov_raw,
+            eff_prov_raw.upper() if len(eff_prov_raw) <= 4 else eff_prov_raw.title(),
+        )
+        if eff_prov_raw
+        else "TalkOps"
+    )
+
+    if is_err:
+        banner_title = f"Investigation Report — {clean_title}" if clean_title else "TalkOps Investigation Report"
+        status_val = "**Failed**"
+        color = 0xECB22E
+    elif is_resolved:
+        banner_title = f"Root Cause Analysis — {clean_title}" if clean_title else "TalkOps Root Cause Analysis"
+        status_val = "**Resolved & Verified**"
+        color = 0x2EB67D
+    else:
+        banner_title = f"Root Cause Analysis — {clean_title}" if clean_title else "TalkOps Root Cause Analysis"
+        status_val = "**RCA Complete**"
+        color = 0x2EB67D
+
+    fields: list[dict[str, Any]] = [
+        {"name": "Status", "value": status_val, "inline": True},
+    ]
+    dur_str = format_duration_human(duration_seconds)
+    if dur_str:
+        fields.append({"name": "Triage Time", "value": f"**{dur_str}**", "inline": True})
+    sev_raw = severity.strip().lower()
+    if sev_raw:
+        sev_icon, sev_label = _SEVERITY_BADGES.get(sev_raw, ("⚪", sev_raw.capitalize()))
+        fields.append({"name": "Severity", "value": f"{sev_icon} **{sev_label}**", "inline": True})
+    if provider or inferred_prov:
+        fields.append({"name": "Source", "value": f"**{eff_prov}**", "inline": True})
+
+    footer_parts: list[str] = ["TalkOps SRE"]
+    if provider or inferred_prov:
         footer_parts.append(f"Source: {eff_prov}")
     if tool_names:
         dedup_tools = list(dict.fromkeys(t for t in tool_names if t))
         if dedup_tools:
             footer_parts.append("Tools: " + ", ".join(dedup_tools[:6]))
-    if (lg_thread_id or "").strip():
-        footer_parts.append(f"Thread: {(lg_thread_id or '').strip()}")
+    clean_tid = (lg_thread_id or "").strip()
+    if clean_tid:
+        footer_parts.append(f"Thread: {clean_tid}")
+    footer_parts.append("Reply in thread to continue")
 
-    embed: dict[str, Any] = {
-        "title": banner_title[:256],
-        "description": (f"**Takeaway:** {takeaway}" if takeaway else "Investigation complete.")[:2000],
-        "color": 0xECB22E if is_err else 0x2EB67D,
-        "footer": {
-            "text": (" · ".join(footer_parts) or "TalkOps SRE")[:2048],
-        },
-    }
-    if (source_url or "").strip().startswith(("http://", "https://")):
-        embed["url"] = (source_url or "").strip()
+    formatted_body = _format_discord_rca_body(analysis, mention_allowlist=mention_allowlist)
+    desc_chunks = chunk_text(formatted_body, max_chars=DISCORD_EMBED_DESC_MAX_CHARS) or [
+        "Investigation complete."
+    ]
 
-    result: dict[str, Any] = {"embeds": [embed]}
-    if (source_url or "").strip().startswith(("http://", "https://")):
-        result["components"] = [
-            {
-                "type": 1,
-                "components": [
-                    {
-                        "type": 2,
-                        "style": 5,
-                        "label": "View Alert",
-                        "url": (source_url or "").strip(),
-                    }
-                ],
+    # Respect Discord's 6,000-character total-embed budget per message
+    embeds: list[dict[str, Any]] = []
+    budget = DISCORD_EMBED_TOTAL_MAX_CHARS - len(banner_title) - 360
+    clean_url = (source_url or "").strip()
+    was_truncated = False
+
+    for idx, chunk in enumerate(desc_chunks):
+        if idx > 0 and budget <= 200:
+            was_truncated = True
+            break
+        slice_txt = chunk[: max(200, min(DISCORD_EMBED_DESC_MAX_CHARS, budget))]
+        if len(slice_txt) < len(chunk):
+            slice_txt = _truncate_clean_markdown(slice_txt, max_chars=len(slice_txt))
+            was_truncated = True
+        budget -= len(slice_txt)
+        if idx == 0:
+            emb: dict[str, Any] = {
+                "author": {"name": f"TalkOps SRE · {eff_prov}"[:256]},
+                "title": banner_title[:256],
+                "description": slice_txt,
+                "color": color,
+                "fields": fields,
             }
-        ]
+            if clean_url.startswith(("http://", "https://")):
+                emb["url"] = clean_url
+            embeds.append(emb)
+        else:
+            embeds.append(
+                {
+                    "description": slice_txt,
+                    "color": color,
+                }
+            )
+
+    if embeds and attachment_filename:
+        note = (
+            f"\n\n*Full RCA report attached as `{attachment_filename}`.*"
+            if was_truncated
+            else f"\n\n*Downloadable RCA attached as `{attachment_filename}`.*"
+        )
+        if len(embeds[-1].get("description", "")) + len(note) <= DISCORD_EMBED_DESC_MAX_CHARS:
+            embeds[-1]["description"] = embeds[-1].get("description", "") + note
+
+    if embeds:
+        embeds[-1]["timestamp"] = datetime.now(UTC).isoformat()
+        embeds[-1]["footer"] = {"text": (" · ".join(footer_parts))[:2048]}
+
+    result: dict[str, Any] = {
+        "embeds": embeds,
+        "suppress_content": True,
+        "truncated": was_truncated,
+    }
+    buttons: list[dict[str, Any]] = []
+    if clean_url.startswith(("http://", "https://")):
+        buttons.append(
+            {
+                "type": 2,
+                "style": 5,
+                "label": "View Alert",
+                "url": clean_url,
+            }
+        )
+    if include_feedback_actions and clean_tid:
+        tid = clean_tid[:80]
+        buttons.extend(
+            [
+                {
+                    "type": 2,
+                    "style": 3,
+                    "label": "Confirm RCA",
+                    "custom_id": f"talkops_confirm:{tid}",
+                },
+                {
+                    "type": 2,
+                    "style": 4,
+                    "label": "Dispute Hypothesis",
+                    "custom_id": f"talkops_dispute:{tid}",
+                },
+            ]
+        )
+    if buttons:
+        result["components"] = [{"type": 1, "components": buttons[:5]}]
     return result
+
+
+def _is_dispute_verdict(verdict: str) -> bool:
+    return verdict.strip().lower() in {
+        "rejected",
+        "disputed",
+        "false_positive",
+        "misled",
+        "reject",
+        "dispute",
+    }
+
+
+def apply_rca_feedback_state_to_slack_blocks(
+    blocks: Sequence[Mapping[str, Any]],
+    *,
+    verdict: str,
+    actor: str,
+) -> list[dict[str, Any]]:
+    """Lock Slack RCA feedback buttons and insert a clean confirmation/dispute status line."""
+    is_dispute = _is_dispute_verdict(verdict)
+    actor_label = actor.strip() or "operator"
+    status_text = (
+        f"*Hypothesis Disputed* by {actor_label}  ·  "
+        "_Reply in this thread with corrections or missing context to re-investigate._"
+        if is_dispute
+        else f"*RCA Confirmed* by {actor_label}"
+    )
+    status_block: dict[str, Any] = {
+        "type": "context",
+        "block_id": "talkops_rca_feedback_status",
+        "elements": [{"type": "mrkdwn", "text": status_text}],
+    }
+
+    updated: list[dict[str, Any]] = []
+    inserted = False
+    for raw_block in blocks:
+        block = copy.deepcopy(dict(raw_block))
+        if block.get("block_id") == "talkops_rca_feedback_status":
+            updated.append(status_block)
+            inserted = True
+            continue
+        if block.get("type") == "actions":
+            elements = block.get("elements")
+            if isinstance(elements, list):
+                has_fb_btn = any(
+                    isinstance(el, Mapping)
+                    and (
+                        str(el.get("action_id") or "").startswith(
+                            ("talkops_confirm:", "talkops_dispute:", "talkops_feedback_")
+                        )
+                    )
+                    for el in elements
+                )
+                if has_fb_btn:
+                    if not inserted:
+                        updated.append(status_block)
+                        inserted = True
+                    remaining = [
+                        el
+                        for el in elements
+                        if isinstance(el, Mapping)
+                        and not str(el.get("action_id") or "").startswith(
+                            ("talkops_confirm:", "talkops_dispute:", "talkops_feedback_")
+                        )
+                    ]
+                    if remaining:
+                        block["elements"] = remaining
+                        updated.append(block)
+                    continue
+        updated.append(block)
+
+    if not inserted:
+        if updated and updated[-1].get("type") == "context":
+            updated.insert(-1, status_block)
+        else:
+            updated.append(status_block)
+    return updated[:SLACK_MAX_BLOCKS]
+
+
+def apply_rca_feedback_state_to_discord_payload(
+    embeds: Sequence[Mapping[str, Any]] | None,
+    components: Sequence[Mapping[str, Any]] | None,
+    *,
+    verdict: str,
+    actor: str,
+) -> dict[str, Any]:
+    """Lock Discord RCA feedback buttons and record the confirmation/dispute state on the embed."""
+    is_dispute = _is_dispute_verdict(verdict)
+    actor_label = actor.strip() or "operator"
+    status_title = "Hypothesis Disputed" if is_dispute else "RCA Confirmed"
+    status_value = (
+        f"Disputed by {actor_label} — *reply in this thread with corrections or missing context to re-investigate.*"
+        if is_dispute
+        else f"Confirmed by {actor_label}"
+    )
+
+    new_embeds: list[dict[str, Any]] = [copy.deepcopy(dict(e)) for e in (embeds or []) if isinstance(e, Mapping)]
+    if new_embeds:
+        last_embed = new_embeds[-1]
+        raw_fields = last_embed.get("fields")
+        fields: list[dict[str, Any]] = (
+            [dict(f) for f in raw_fields if isinstance(f, Mapping)]
+            if isinstance(raw_fields, list)
+            else []
+        )
+        fields = [
+            f
+            for f in fields
+            if str(f.get("name") or "").strip() not in {"RCA Confirmed", "Hypothesis Disputed", "Operator Feedback"}
+        ]
+        fields.append({"name": status_title, "value": status_value[:1024], "inline": False})
+        last_embed["fields"] = fields[:25]
+
+    kept_buttons: list[dict[str, Any]] = []
+    for row in components or []:
+        if not isinstance(row, Mapping):
+            continue
+        row_items = row.get("components")
+        if not isinstance(row_items, list):
+            continue
+        for item in row_items:
+            if not isinstance(item, Mapping):
+                continue
+            cid = str(item.get("custom_id") or "")
+            if cid.startswith(("talkops_confirm:", "talkops_dispute:", "talkops_feedback_")):
+                continue
+            kept_buttons.append(copy.deepcopy(dict(item)))
+
+    kept_buttons.append(
+        {
+            "type": 2,
+            "style": 4 if is_dispute else 3,
+            "label": status_title,
+            "custom_id": "talkops_feedback_locked",
+            "disabled": True,
+        }
+    )
+
+    return {
+        "embeds": new_embeds,
+        "components": [{"type": 1, "components": kept_buttons[:5]}],
+        "suppress_content": bool(new_embeds),
+    }
+
+
+def apply_rca_feedback_state_to_teams_cards(
+    cards: Sequence[Mapping[str, Any]],
+    *,
+    verdict: str,
+    actor: str,
+) -> list[dict[str, Any]]:
+    """Lock Microsoft Teams RCA Adaptive Card feedback actions and add a status banner container."""
+    is_dispute = _is_dispute_verdict(verdict)
+    actor_label = actor.strip() or "operator"
+    status_text = (
+        f"**Hypothesis Disputed** by {actor_label}  ·  "
+        "_Reply in this thread with corrections or missing context to re-investigate._"
+        if is_dispute
+        else f"**RCA Confirmed** by {actor_label}"
+    )
+    status_container: dict[str, Any] = {
+        "type": "Container",
+        "id": "talkops_rca_feedback_status",
+        "style": "attention" if is_dispute else "good",
+        "separator": True,
+        "items": [
+            {
+                "type": "TextBlock",
+                "text": status_text,
+                "wrap": True,
+                "size": "Small",
+            }
+        ],
+    }
+
+    updated_cards = [copy.deepcopy(dict(c)) for c in cards if isinstance(c, Mapping)]
+    if not updated_cards:
+        return updated_cards
+
+    content = updated_cards[-1].get("content")
+    if not isinstance(content, dict):
+        return updated_cards
+
+    raw_actions = content.get("actions")
+    if isinstance(raw_actions, list):
+        remaining_actions: list[dict[str, Any]] = []
+        for act in raw_actions:
+            if not isinstance(act, Mapping):
+                continue
+            verb = str(act.get("verb") or "").strip().lower()
+            data = act.get("data") if isinstance(act.get("data"), Mapping) else {}
+            act_id = str(data.get("action_id") or "")
+            if verb in {"talkops_confirm", "talkops_dispute"} or act_id.startswith(
+                ("talkops_confirm:", "talkops_dispute:")
+            ):
+                continue
+            remaining_actions.append(dict(act))
+        if remaining_actions:
+            content["actions"] = remaining_actions
+        else:
+            content.pop("actions", None)
+
+    body = content.get("body")
+    if isinstance(body, list):
+        replaced = False
+        new_body: list[dict[str, Any]] = []
+        for item in body:
+            if isinstance(item, Mapping) and item.get("id") == "talkops_rca_feedback_status":
+                new_body.append(status_container)
+                replaced = True
+            else:
+                new_body.append(item)
+        if not replaced:
+            if new_body and isinstance(new_body[-1], Mapping) and new_body[-1].get("isSubtle") is True:
+                new_body.insert(-1, status_container)
+            else:
+                new_body.append(status_container)
+        content["body"] = new_body
+
+    return updated_cards
 
 
 def parse_incident_output(
@@ -2320,8 +3400,9 @@ def parse_incident_output(
     service_name: str | None = "",
     source_url: str | None = "",
     lg_thread_id: str | None = "",
-    investigation_state: Literal["investigating", "completed", "error"] = "investigating",
+    investigation_state: Literal["investigating", "completed", "resolved", "error"] = "investigating",
     rca_preview: str | None = "",
+    duration_seconds: float | None = None,
     mention_allowlist: frozenset[str] | None = None,
 ) -> ParsedChannelOutput:
     """Channel-agnostic incident compiler producing both formatted text and native blocks/cards/embeds."""
@@ -2343,6 +3424,7 @@ def parse_incident_output(
         lg_thread_id=lg_thread_id,
         investigation_state=investigation_state,
         rca_preview=rca_preview,
+        duration_seconds=duration_seconds,
     )
 
     # Construct structured universal Markdown text (used as fallback or primary body)
@@ -2373,7 +3455,7 @@ def parse_incident_output(
     universal_md = "\n".join(md_lines).strip()
 
     if norm == "slack":
-        blocks = build_slack_incident_blocks(
+        att_payload = build_slack_incident_attachment_payload(
             title=title,
             summary=summary,
             provider=provider,
@@ -2383,12 +3465,13 @@ def parse_incident_output(
             lg_thread_id=lg_thread_id,
             investigation_state=investigation_state,
             rca_preview=rca_preview,
+            duration_seconds=duration_seconds,
             mention_allowlist=mention_allowlist,
         )
         return ParsedChannelOutput(
             channel="slack",
             text=format_markdown_for_slack(universal_md, mention_allowlist=mention_allowlist),
-            blocks_or_cards=blocks,
+            blocks_or_cards=att_payload,
         )
     if norm == "teams":
         cards = build_teams_incident_card(
@@ -2401,6 +3484,7 @@ def parse_incident_output(
             lg_thread_id=lg_thread_id,
             investigation_state=investigation_state,
             rca_preview=rca_preview,
+            duration_seconds=duration_seconds,
         )
         return ParsedChannelOutput(
             channel="teams",
@@ -2418,6 +3502,7 @@ def parse_incident_output(
             lg_thread_id=lg_thread_id,
             investigation_state=investigation_state,
             rca_preview=rca_preview,
+            duration_seconds=duration_seconds,
             mention_allowlist=mention_allowlist,
         )
         return ParsedChannelOutput(
@@ -2442,11 +3527,13 @@ def parse_rca_output(
     status: str = "completed",
     source_url: str | None = "",
     lg_thread_id: str | None = "",
+    duration_seconds: float | None = None,
     tool_names: Sequence[str] = (),
     mention_allowlist: frozenset[str] | None = None,
     use_native_table: bool = True,
+    include_feedback_actions: bool = False,
 ) -> ParsedChannelOutput:
-    """Channel-agnostic RCA report compiler producing formatted text and native blocks/cards/embeds."""
+    """Channel-agnostic RCA report compiler producing formatted text, native blocks/cards/embeds, and long-report `.md` attachments."""
     provider = provider or ""
     title = title or ""
     severity = severity or ""
@@ -2465,6 +3552,31 @@ def parse_rca_output(
     ast = tuple(parse_markdown_blocks(analysis))
 
     if norm == "slack":
+        full_body_blocks = build_slack_response_blocks(
+            analysis,
+            mention_allowlist=mention_allowlist,
+            use_native_table=use_native_table,
+            tool_names=tool_names,
+            top_level_header_max_level=0,
+        )
+        needs_md_attachment = (
+            len(full_body_blocks) > SLACK_MAX_BLOCKS - 6
+            or len(analysis) > SLACK_RCA_ATTACHMENT_CHAR_THRESHOLD
+        )
+        md_attachment = (
+            build_rca_markdown_attachment(
+                analysis,
+                title=title,
+                provider=provider,
+                severity=severity,
+                status=status,
+                source_url=source_url,
+                lg_thread_id=lg_thread_id,
+                duration_seconds=duration_seconds,
+            )
+            if needs_md_attachment
+            else None
+        )
         blocks = build_slack_rca_blocks(
             analysis,
             provider=provider,
@@ -2473,15 +3585,19 @@ def parse_rca_output(
             status=status,
             source_url=source_url,
             lg_thread_id=lg_thread_id,
+            duration_seconds=duration_seconds,
             tool_names=tool_names,
             mention_allowlist=mention_allowlist,
             use_native_table=use_native_table,
+            include_feedback_actions=include_feedback_actions,
+            attachment_filename=md_attachment[0] if md_attachment else "",
         )
         return ParsedChannelOutput(
             channel="slack",
             text=format_markdown_for_slack(universal_md, mention_allowlist=mention_allowlist),
             blocks_or_cards=blocks,
             ast=ast,
+            attachment_markdown=md_attachment,
         )
     if norm == "teams":
         cards = build_teams_rca_card(
@@ -2492,16 +3608,31 @@ def parse_rca_output(
             status=status,
             source_url=source_url,
             lg_thread_id=lg_thread_id,
+            duration_seconds=duration_seconds,
             tool_names=tool_names,
+            include_feedback_actions=include_feedback_actions,
         )
+        # If the Adaptive Card had to be condensed below Teams' 28 KB cap, emit clean Markdown overflow chunks
+        overflow_chunks: tuple[str, ...] = ()
+        card_body = cards[0]["content"].get("body", []) if cards else []
+        was_condensed = any(
+            isinstance(el, Mapping)
+            and "28 KB Adaptive Card limit" in str(el.get("text", ""))
+            for el in card_body
+        )
+        if was_condensed:
+            overflow_chunks = tuple(
+                chunk_text(format_markdown_for_teams(analysis), max_chars=TEAMS_MAX_TEXT_CHARS)
+            )
         return ParsedChannelOutput(
             channel="teams",
             text=format_markdown_for_teams(universal_md),
             blocks_or_cards=cards,
             ast=ast,
+            overflow_texts=overflow_chunks,
         )
     if norm == "discord":
-        embed_payload = build_discord_rca_embed(
+        preview_embed = build_discord_rca_embed(
             analysis,
             provider=provider,
             title=title,
@@ -2509,13 +3640,44 @@ def parse_rca_output(
             status=status,
             source_url=source_url,
             lg_thread_id=lg_thread_id,
+            duration_seconds=duration_seconds,
             tool_names=tool_names,
+            mention_allowlist=mention_allowlist,
         )
+        needs_md_attachment = bool(preview_embed.get("truncated"))
+        md_attachment = None
+        if needs_md_attachment:
+            md_attachment = build_rca_markdown_attachment(
+                analysis,
+                title=title,
+                provider=provider,
+                severity=severity,
+                status=status,
+                source_url=source_url,
+                lg_thread_id=lg_thread_id,
+                duration_seconds=duration_seconds,
+            )
+            embed_payload = build_discord_rca_embed(
+                analysis,
+                provider=provider,
+                title=title,
+                severity=severity,
+                status=status,
+                source_url=source_url,
+                lg_thread_id=lg_thread_id,
+                duration_seconds=duration_seconds,
+                tool_names=tool_names,
+                mention_allowlist=mention_allowlist,
+                attachment_filename=md_attachment[0],
+            )
+        else:
+            embed_payload = preview_embed
         return ParsedChannelOutput(
             channel="discord",
             text=format_markdown_for_discord(universal_md, mention_allowlist=mention_allowlist),
             blocks_or_cards=embed_payload,
             ast=ast,
+            attachment_markdown=md_attachment,
         )
     return ParsedChannelOutput(
         channel=norm,
@@ -2574,3 +3736,6 @@ def exposure_from_mapping(
     )
     exposure.validate(provider)
     return exposure
+
+
+# Re-export TalkOps v2 3-Stage SRE Hypothesis & Interactive Slack Block helpers

@@ -311,7 +311,8 @@ def _assistant_markdown_class() -> type[Markdown]:
         def __init__(self, markdown: Any, token: Any, code: str) -> None:
             """Initialize AssistantFence."""
             super().__init__(markdown, token, code)
-            self._apply_language_title()
+            lang = (self.lexer or "").strip().split(" ", 1)[0]
+            self.border_title = lang or None
 
         def _get_target_path(self, line_index: int | None = None) -> str | None:
             from talkops.editor import extract_file_path
@@ -324,9 +325,11 @@ def _assistant_markdown_class() -> type[Markdown]:
                         return path
             return extract_file_path(self.code or "")
 
-        def _apply_language_title(self) -> None:
+        def _apply_language_title(self, *, probe_files: bool = True) -> None:
             lang = (self.lexer or "").strip().split(" ", 1)[0]
             self.border_title = lang or None
+            if not probe_files:
+                return
             path = self._get_target_path()
             if path:
                 self.add_class("-is-file-link")
@@ -353,15 +356,15 @@ def _assistant_markdown_class() -> type[Markdown]:
 
         def on_mount(self) -> None:
             """Initialize component state when mounted into the DOM."""
-            self._apply_language_title()
+            self._apply_language_title(probe_files=True)
 
         def _copy_context(self, block: Any) -> None:
             super()._copy_context(block)
-            self._apply_language_title()
+            self._apply_language_title(probe_files=True)
 
         async def _update_from_block(self, block: Any) -> None:
             await super()._update_from_block(block)
-            self._apply_language_title()
+            self._apply_language_title(probe_files=False)
 
         async def on_click(self, event: Any) -> None:
             """Open file if this code fence contains an existing file path."""
@@ -563,19 +566,16 @@ class AssistantMessage(Vertical):
 
     def compose(self) -> ComposeResult:
         """Compose and yield child widgets for this component."""
-        yield _assistant_markdown_class()("", id="assistant-content", open_links=False)
+        initial_md = ""
+        if self._content_parts and not self._is_streaming:
+            from talkops.ui.widgets._links import autolink_file_paths
+
+            initial_md = autolink_file_paths(self._content)
+        yield _assistant_markdown_class()(initial_md, id="assistant-content", open_links=False)
 
     def on_mount(self) -> None:
         """Initialize component state when mounted into the DOM."""
-        from talkops.ui.widgets._links import autolink_file_paths
-
         self._markdown = self.query_one("#assistant-content", Markdown)
-        if self._content_parts and not self._is_streaming:
-            self.run_worker(
-                self._markdown.update(autolink_file_paths(self._content)),
-                exclusive=True,
-                thread=False,
-            )
 
     @property
     def content_text(self) -> str:

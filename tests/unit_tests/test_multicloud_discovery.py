@@ -18,13 +18,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from talkops.config.cloud_discovery import (
     AmbientCloudDetector,
-    CloudTargetContext,
     LocalCloudDiscoveryService,
     clear_ambient_probe_cache,
 )
@@ -33,7 +32,6 @@ from talkops.config.cloud_profiles import (
     get_active_cloud_target,
     has_local_aws_profile_in_files,
     invalidate_cloud_profile_cache,
-    set_active_cloud_target,
 )
 
 

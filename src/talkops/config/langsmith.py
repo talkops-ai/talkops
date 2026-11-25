@@ -148,8 +148,53 @@ def apply_tracing_settings(settings: Any = None) -> bool:
         pass
 
     enable_full_middleware_tracing()
+    if is_enabled and api_key:
+        configure_default_langsmith_anonymizer(
+            api_key=str(api_key).strip(),
+            api_url=str(endpoint).strip() if endpoint else None,
+        )
 
     return is_enabled and bool(api_key)
+
+
+def create_redacting_langsmith_client(
+    *,
+    api_key: str | None = None,
+    api_url: str | None = None,
+) -> Any:
+    """Instantiate a ``langsmith.Client`` pre-wired with TalkOps DevOps secret anonymizer."""
+    from langsmith import Client
+
+    from talkops.security.redaction import create_devops_secret_anonymizer
+
+    resolved_key = api_key or resolve_env_var("LANGSMITH_API_KEY") or resolve_env_var("LANGCHAIN_API_KEY")
+    resolved_url = api_url or resolve_env_var("LANGSMITH_ENDPOINT") or resolve_env_var("LANGCHAIN_ENDPOINT")
+    anonymizer = create_devops_secret_anonymizer()
+    kwargs: dict[str, Any] = {}
+    if resolved_key:
+        kwargs["api_key"] = resolved_key
+    if resolved_url:
+        kwargs["api_url"] = resolved_url
+    if anonymizer is not None:
+        kwargs["anonymizer"] = anonymizer
+    return Client(**kwargs)
+
+
+def configure_default_langsmith_anonymizer(
+    *,
+    api_key: str | None = None,
+    api_url: str | None = None,
+) -> None:
+    """Attach a secret-redacting ``langsmith.Client`` to LangSmith's global tracing context."""
+    try:
+        import langsmith.run_helpers as rh
+
+        client = create_redacting_langsmith_client(api_key=api_key, api_url=api_url)
+        configure_fn = getattr(rh, "configure", None)
+        if callable(configure_fn):
+            configure_fn(client=client)
+    except Exception as exc:
+        logger.debug("Could not configure global LangSmith anonymizer client: %s", exc)
 
 
 def enable_full_middleware_tracing() -> None:

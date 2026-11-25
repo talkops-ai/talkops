@@ -31,7 +31,8 @@ keeping it invisible to the main coordinator agent.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import AgentMiddleware, hook_config
@@ -242,17 +243,97 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
         self,
         agent_runnables: dict[str, Any] | None = None,
         *,
+        agent_mcp_configs: Mapping[str, dict[str, Any]] | None = None,
         model: Any | None = None,
     ) -> None:
         """Initialize with mapping of agent names to their compiled subagent graphs.
 
         Args:
             agent_runnables: Mapping of agent names/short names to compiled runnables.
+            agent_mcp_configs: Optional mapping of agent names to scoped MCP server configs.
             model: Optional chat model used to generate concise handoff summaries on exit.
         """
         super().__init__()
         self._agents: dict[str, Any] = dict(agent_runnables or {})
+        self._agent_mcp_configs: dict[str, dict[str, Any]] = {}
+        for k, cfg in (agent_mcp_configs or {}).items():
+            if isinstance(cfg, Mapping) and cfg:
+                self._register_agent_mcp_config(str(k), dict(cfg))
         self._model: Any | None = model
+        self._warmup_tasks: set[asyncio.Task[Any]] = set()
+
+    def _register_agent_mcp_config(self, name: str, mcp_configs: dict[str, Any]) -> None:
+        self._agent_mcp_configs[name] = mcp_configs
+        short = name.rsplit(":", 1)[-1]
+        if "@" in short:
+            short = short.split("@", 1)[0]
+        self._agent_mcp_configs[short] = mcp_configs
+        self._agent_mcp_configs[name.lower()] = mcp_configs
+        self._agent_mcp_configs[short.lower()] = mcp_configs
+
+    def _resolve_agent_mcp_configs(self, name: str) -> dict[str, Any] | None:
+        if not name:
+            return None
+        candidate = self._agent_mcp_configs.get(name)
+        if candidate is not None:
+            return candidate
+        clean = name.strip()
+        candidate = self._agent_mcp_configs.get(clean.lower())
+        if candidate is not None:
+            return candidate
+        short = clean.rsplit(":", 1)[-1]
+        if "@" in short:
+            short = short.split("@", 1)[0]
+        candidate = self._agent_mcp_configs.get(short)
+        if candidate is not None:
+            return candidate
+        return self._agent_mcp_configs.get(short.lower())
+
+    async def _ensure_agent_mcp_ready(self, agent_name: str) -> None:
+        """Ensure a dynamic subagent's scoped MCP servers are probed before invocation."""
+        servers = self._resolve_agent_mcp_configs(agent_name)
+        if not servers:
+            return
+        try:
+            from talkops.mcp.preload import (
+                is_mcp_server_info_cached,
+                preload_mcp_metadata,
+            )
+            from talkops.mcp.session_manager import MCPSessionManager
+
+            mgr = MCPSessionManager.get_instance(servers)
+            mgr.register_servers(servers)
+            uncached = {
+                srv_name: srv_cfg
+                for srv_name, srv_cfg in servers.items()
+                if isinstance(srv_cfg, Mapping)
+                and srv_cfg.get("enabled", True)
+                and not is_mcp_server_info_cached(srv_name, srv_cfg)
+            }
+            if uncached:
+                await preload_mcp_metadata(uncached)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("Agent session MCP readiness check failed for %s: %s", agent_name, exc)
+
+    def _schedule_agent_mcp_warmup(self, agent_name: str) -> None:
+        """Pre-warm a subagent's MCP servers asynchronously upon session activation."""
+        if not self._resolve_agent_mcp_configs(agent_name):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(
+            self._ensure_agent_mcp_ready(agent_name),
+            name=f"agent-mcp-warmup-{agent_name}",
+        )
+        self._warmup_tasks.add(task)
+        task.add_done_callback(self._warmup_tasks.discard)
+        task.add_done_callback(
+            lambda t: t.exception() if not t.cancelled() else None
+        )
 
     def _build_handoff_message_if_needed(
         self,
@@ -280,7 +361,13 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
         summary = await agenerate_agent_handoff_summary(self._model, agent_label, msgs)
         return build_agent_handoff_message(agent_label, summary)
 
-    def register_agent(self, name: str, runnable: Any) -> None:
+    def register_agent(
+        self,
+        name: str,
+        runnable: Any,
+        *,
+        mcp_configs: Mapping[str, Any] | None = None,
+    ) -> None:
         """Register or override a compiled subagent runnable."""
         self._agents[name] = runnable
         short = name.rsplit(":", 1)[-1]
@@ -289,6 +376,8 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
         self._agents[short] = runnable
         self._agents[name.lower()] = runnable
         self._agents[short.lower()] = runnable
+        if isinstance(mcp_configs, Mapping) and mcp_configs:
+            self._register_agent_mcp_config(name, dict(mcp_configs))
 
     def _resolve_agent(self, name: str) -> Any | None:
         """Look up runnable by exact name, short name, or case-insensitive."""
@@ -401,6 +490,8 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
             }
             if not prompt:
                 # Activation only, no LLM call yet
+                if is_async:
+                    self._schedule_agent_mcp_warmup(agent_name)
                 if is_async and prev_messages:
                     return self._async_activate_only_with_handoff(base, prev_active, prev_messages)
                 update_activate: dict[str, Any] = {
@@ -413,10 +504,21 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
                 return self._finish(update_activate)
 
             if agent_runnable is None:
+                err_msg = (
+                    f"Plugin agent '{agent_name}' is no longer available "
+                    "(plugin may have been uninstalled or disabled)."
+                )
                 logger.warning("Plugin agent runnable for '%s' not found", agent_name)
-                return self._finish(base)
+                self._emit_error_event(runtime, err_msg, agent_name=agent_name)
+                return {
+                    **self._finish(_cleared_agent_session()),
+                    "_agent_session_error": err_msg,
+                }
 
             input_data = {**inherited_state, "messages": [HumanMessage(content=str(prompt))]}
+            explicit_rubric = values.get("rubric")
+            if isinstance(explicit_rubric, str) and explicit_rubric.strip():
+                input_data["rubric"] = explicit_rubric
             context = getattr(runtime, "context", None)
             if is_async:
                 # Caller will await
@@ -441,6 +543,8 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
             transfers = result.get("_session_cost_transfers")
             if isinstance(transfers, dict) and transfers:
                 update["_session_cost_transfers"] = transfers
+            if result.get("_rubric_status") is not None:
+                update["_rubric_status"] = result.get("_rubric_status")
             return self._finish(update)
 
         if kind == "continue":
@@ -450,8 +554,16 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
                 "_active_agent_plugin_id": plugin_id,
             }
             if agent_runnable is None:
+                err_msg = (
+                    f"Plugin agent '{agent_name}' is no longer available "
+                    "(plugin may have been uninstalled or disabled)."
+                )
                 logger.warning("Plugin agent runnable for '%s' not found", agent_name)
-                return self._finish(base)
+                self._emit_error_event(runtime, err_msg, agent_name=agent_name)
+                return {
+                    **self._finish(_cleared_agent_session()),
+                    "_agent_session_error": err_msg,
+                }
 
             force_reset = bool(request.get("reset")) or (
                 bool(agent_name) and prev_active != agent_name
@@ -459,6 +571,9 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
             history = [] if force_reset else list(prev_messages)
             new_msg = HumanMessage(content=message)
             input_data = {**inherited_state, "messages": [*history, new_msg]}
+            explicit_rubric = values.get("rubric")
+            if isinstance(explicit_rubric, str) and explicit_rubric.strip():
+                input_data["rubric"] = explicit_rubric
             context = getattr(runtime, "context", None)
             if is_async:
                 return self._async_call_subagent(
@@ -488,6 +603,8 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
             transfers = result.get("_session_cost_transfers")
             if isinstance(transfers, dict) and transfers:
                 update["_session_cost_transfers"] = transfers
+            if result.get("_rubric_status") is not None:
+                update["_rubric_status"] = result.get("_rubric_status")
             return self._finish(update)
 
         logger.warning("Unknown agent_session_request kind: %r", kind)
@@ -529,6 +646,7 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
         prev_active: str | None = None,
         prev_messages: Sequence[Any] | None = None,
     ) -> dict[str, Any]:
+        await self._ensure_agent_mcp_ready(str(base.get("_active_agent_id") or ""))
         handoff_msg = (
             await self._abuild_handoff_message_if_needed(prev_active, prev_messages)
             if reset and prev_messages
@@ -546,6 +664,8 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
         transfers = result.get("_session_cost_transfers")
         if isinstance(transfers, dict) and transfers:
             update["_session_cost_transfers"] = transfers
+        if result.get("_rubric_status") is not None:
+            update["_rubric_status"] = result.get("_rubric_status")
         return self._finish(update)
 
     @staticmethod
@@ -557,6 +677,107 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
         if not values.get("_active_agent_id") and values.get("_agent_session_messages"):
             early["_agent_session_messages"] = {"reset": True}
         return early or None
+
+    def _extract_plugin_command_shortcut(
+        self,
+        values: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Detect an agent-plugin command shortcut in `custom_command_request` or `_active_command_permissions`.
+
+        Returns `(synthesized_agent_session_request, extra_state_cleanup)` when the
+        current turn invokes a command belonging to an agent plugin whose compiled
+        subagent runnable is registered on this middleware.
+        """
+        agent_name = ""
+        plugin_id: str | None = None
+        fallback_prompt = ""
+
+        raw_cc = values.get("custom_command_request")
+        if isinstance(raw_cc, dict) and raw_cc.get("is_agent_plugin") and raw_cc.get("agent"):
+            agent_name = str(raw_cc["agent"]).strip()
+            plugin_id = str(raw_cc["plugin_id"]) if raw_cc.get("plugin_id") else None
+            fallback_prompt = str(
+                raw_cc.get("custom_command_prompt")
+                or raw_cc.get("plugin_command_prompt")
+                or ""
+            )
+        else:
+            raw_perms = values.get("_active_command_permissions")
+            if (
+                isinstance(raw_perms, dict)
+                and raw_perms.get("is_agent_plugin")
+                and raw_perms.get("agent")
+            ):
+                agent_name = str(raw_perms["agent"]).strip()
+                plugin_id = str(raw_perms["plugin_id"]) if raw_perms.get("plugin_id") else None
+                fallback_prompt = str(raw_perms.get("command_prompt") or "")
+
+        if not agent_name or self._resolve_agent(agent_name) is None:
+            return None
+
+        prompt_text = fallback_prompt.strip()
+        if not prompt_text:
+            for msg in reversed(list(values.get("messages") or [])):
+                role = (
+                    str(msg.get("role", msg.get("type", ""))).lower()
+                    if isinstance(msg, dict)
+                    else getattr(msg, "type", type(msg).__name__).lower()
+                )
+                if role in ("human", "user", "humanmessage"):
+                    prompt_text = _extract_message_text(msg).strip()
+                    if prompt_text:
+                        break
+        if not prompt_text:
+            return None
+
+        if values.get("_active_agent_id") == agent_name:
+            synth_req: dict[str, Any] = {
+                "kind": "continue",
+                "agent_name": agent_name,
+                "plugin_id": plugin_id,
+                "message": prompt_text,
+            }
+        else:
+            synth_req = {
+                "kind": "start",
+                "agent_name": agent_name,
+                "plugin_id": plugin_id,
+                "prompt": prompt_text,
+            }
+
+        cleanup: dict[str, Any] = {"custom_command_request": None}
+        existing_perms = values.get("_active_command_permissions")
+        if isinstance(existing_perms, dict):
+            cleanup["_active_command_permissions"] = {
+                **existing_perms,
+                "is_agent_plugin": False,
+            }
+        return synth_req, cleanup
+
+    @staticmethod
+    def _merge_shortcut_reply(
+        turn_update: dict[str, Any],
+        cleanup: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Expose the specialist subagent's final AIMessage in `messages` for headless/API callers."""
+        merged = {**turn_update, **cleanup}
+        sess_msgs_val = merged.get("_agent_session_messages")
+        if isinstance(sess_msgs_val, dict):
+            sub_msgs = list(sess_msgs_val.get("messages") or [])
+        elif isinstance(sess_msgs_val, list):
+            sub_msgs = list(sess_msgs_val)
+        else:
+            sub_msgs = []
+
+        final_ai = next(
+            (m for m in reversed(sub_msgs) if isinstance(m, AIMessage)),
+            None,
+        )
+        if final_ai is not None:
+            existing_out = list(merged.get("messages") or [])
+            existing_out.append(final_ai)
+            merged["messages"] = existing_out
+        return merged
 
     @staticmethod
     async def _close_subagent_mcp_if_needed(
@@ -588,13 +809,20 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
 
     @hook_config(can_jump_to=["end"])
     def before_agent(self, state: AgentSessionChannels, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        """Handle a pending agent session request synchronously."""
+        """Handle a pending agent session request or agent-plugin command shortcut synchronously."""
         values: dict[str, Any] = dict(state)
         request = values.get("agent_session_request")
+        shortcut_cleanup: dict[str, Any] | None = None
         if not isinstance(request, dict):
-            return self._passthrough_cleanup(values)
+            shortcut = self._extract_plugin_command_shortcut(values)
+            if shortcut is None:
+                return self._passthrough_cleanup(values)
+            request, shortcut_cleanup = shortcut
         try:
-            return self._execute_turn(request, values, runtime, is_async=False)
+            out = self._execute_turn(request, values, runtime, is_async=False)
+            if shortcut_cleanup is not None and isinstance(out, dict):
+                return self._merge_shortcut_reply(out, shortcut_cleanup)
+            return out
         except GraphBubbleUp:
             raise
         except Exception as exc:
@@ -606,20 +834,27 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
                 "_active_agent_id": agent_name or None,
                 "_active_agent_plugin_id": plugin_id,
                 "_agent_session_error": str(exc),
+                **(shortcut_cleanup or {}),
             })
 
     @hook_config(can_jump_to=["end"])
     async def abefore_agent(self, state: AgentSessionChannels, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        """Handle a pending agent session request asynchronously."""
+        """Handle a pending agent session request or agent-plugin command shortcut asynchronously."""
         values: dict[str, Any] = dict(state)
         request = values.get("agent_session_request")
+        shortcut_cleanup: dict[str, Any] | None = None
         if not isinstance(request, dict):
-            return self._passthrough_cleanup(values)
+            shortcut = self._extract_plugin_command_shortcut(values)
+            if shortcut is None:
+                return self._passthrough_cleanup(values)
+            request, shortcut_cleanup = shortcut
         try:
             await self._close_subagent_mcp_if_needed(request, values)
             res = self._execute_turn(request, values, runtime, is_async=True)
             if hasattr(res, "__await__"):
-                return await res
+                res = await res
+            if shortcut_cleanup is not None and isinstance(res, dict):
+                return self._merge_shortcut_reply(res, shortcut_cleanup)
             return res
         except GraphBubbleUp:
             raise
@@ -632,6 +867,7 @@ class AgentSessionMiddleware(AgentMiddleware[AgentSessionChannels, Any]):
                 "_active_agent_id": agent_name or None,
                 "_active_agent_plugin_id": plugin_id,
                 "_agent_session_error": str(exc),
+                **(shortcut_cleanup or {}),
             })
 
 

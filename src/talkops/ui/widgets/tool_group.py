@@ -65,6 +65,7 @@ _TOOL_SUMMARY_CATEGORY: dict[str, str] = {
     "task": "task",
     "subagent": "task",
     "write_todos": "todos",
+    "manage_task": "manage_task",
 }
 
 # category -> (present verb, past verb, singular noun, plural noun).
@@ -80,6 +81,7 @@ _TOOL_SUMMARY_PHRASES: dict[str, tuple[str, str, str, str]] = {
     "js": ("Running", "Ran", "JS evaluation", "JS evaluations"),
     "fetch": ("Fetching", "Fetched", "URL", "URLs"),
     "task": ("Running", "Ran", "agent", "agents"),
+    "manage_task": ("Managing", "Managed", "background task", "background tasks"),
 }
 
 _Tense = Literal["present", "past"]
@@ -194,6 +196,7 @@ class ToolGroupSummary(Static):
         collapsible: list[Widget] | None = None,
         *,
         accessories: dict[Widget, list[Widget]] | None = None,
+        lazy_specs: list[dict[str, Any]] | None = None,
         live: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -201,6 +204,7 @@ class ToolGroupSummary(Static):
         super().__init__("", **kwargs)
         self._tools = list(tools or [])
         self._collapsible = list(collapsible or [])
+        self._lazy_specs: list[dict[str, Any]] = list(lazy_specs or [])
         self._accessories: dict[Widget, list[Widget]] = {}
         for owner, widgets in (accessories or {}).items():
             self._attach_accessories(owner, widgets)
@@ -211,6 +215,53 @@ class ToolGroupSummary(Static):
         self._present_text: str | None = None
         self._past_text: str | None = None
         self._present_key: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+
+    def iter_tool_outputs(self) -> list[tuple[str, str]]:
+        """Return `(call_id, output)` pairs across materialized and lazy member tools."""
+        pairs: list[tuple[str, str]] = []
+        for tool in self._tools:
+            out = getattr(tool, "_output", None) or getattr(tool, "_deferred_output", None) or ""
+            cid = getattr(tool, "_call_id", "") or "call_1"
+            if out:
+                pairs.append((cid, str(out)))
+        for spec in self._lazy_specs:
+            out = str(spec.get("result") or "")
+            cid = str(spec.get("call_id") or "call_1")
+            if out:
+                pairs.append((cid, out))
+        return pairs
+
+    def _materialize_lazy_members_if_needed(self) -> None:
+        """Instantiate and mount lazy historical tool rows when user expands this group."""
+        if self._lazy_specs:
+            from talkops.ui.widgets.tool_call_message import _strip_success_exit_line
+
+            for spec in self._lazy_specs:
+                name = str(spec.get("name") or "tool")
+                msg = ToolCallMessage(
+                    name,
+                    dict(spec.get("args") or {}),
+                )
+                msg._call_id = str(spec.get("call_id") or "")
+                is_ok = bool(spec.get("success", True))
+                raw_res = str(spec.get("result") or "")
+                msg._deferred_status = "success" if is_ok else "error"
+                msg._deferred_output = (
+                    _strip_success_exit_line(raw_res)
+                    if (is_ok and name != "ask_user")
+                    else raw_res
+                )
+                msg.add_class("-grouped")
+                self._tools.append(msg)
+                self._collapsible.append(msg)
+            self._lazy_specs.clear()
+        if self.is_attached and self.parent is not None:
+            unattached = [w for w in self._collapsible if not w.is_attached]
+            if unattached:
+                try:
+                    self.parent.mount_all(unattached, after=self)
+                except Exception:
+                    logger.warning("Failed to lazily mount tool group members", exc_info=True)
 
     def on_mount(self) -> None:
         """Apply initial visibility, render, and arm the spinner if live."""
@@ -252,7 +303,7 @@ class ToolGroupSummary(Static):
         in_progress = self._sync_lifecycle()
         if not self.is_attached:
             return
-        if self._tools:
+        if self._tools or self._lazy_specs:
             self._render_line(in_progress=in_progress)
         else:
             self._release_all_collapsible()
@@ -308,6 +359,8 @@ class ToolGroupSummary(Static):
             self._render_line()
             return
         with self.app.batch_update():
+            if not _collapsed:
+                self._materialize_lazy_members_if_needed()
             self._apply_visibility()
             self._render_line()
 
@@ -403,7 +456,7 @@ class ToolGroupSummary(Static):
         """Refresh the summary line for the current tense and collapsed state."""
         if not self.is_attached:
             return
-        if not self._tools:
+        if not self._tools and not self._lazy_specs:
             self.update(Content(""), layout=layout)
             return
         glyphs = get_glyphs()
@@ -430,9 +483,12 @@ class ToolGroupSummary(Static):
                 else glyphs.disclosure_expanded
             )
             if self._past_text is None:
-                self._past_text = summarize_tool_group(
-                    [tool.tool_name for tool in self._tools], tense="past"
+                names = (
+                    [tool.tool_name for tool in self._tools]
+                    if self._tools
+                    else [str(s.get("name") or "tool") for s in self._lazy_specs]
                 )
+                self._past_text = summarize_tool_group(names, tense="past")
             self.update(
                 Content.assemble(
                     (f"{mark} ", "$primary"), *_emphasize_counts(self._past_text)

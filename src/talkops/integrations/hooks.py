@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,21 +104,61 @@ def load_hooks(path: Path | None = None) -> list[HookConfig]:
 
     parsed: list[HookConfig] = []
 
-    def _parse_hooks_data(data: dict[str, Any], source_name: str) -> None:
-        for entry in data.get("hooks", []):
-            cmd = entry.get("command")
-            if not isinstance(cmd, list) or not cmd:
-                logger.warning("Skipping hook with invalid command from %s: %r", source_name, entry)
-                continue
-            events_raw = entry.get("events", [])
-            if not isinstance(events_raw, list):
-                events_raw = []
-            parsed.append(
-                HookConfig(
-                    command=cmd,
-                    events=frozenset(events_raw),
+    def _parse_hooks_data(
+        data: dict[str, Any],
+        source_name: str,
+        *,
+        skip_events: frozenset[str] = frozenset(),
+    ) -> None:
+        raw_hooks = data.get("hooks", data)
+        if isinstance(raw_hooks, list):
+            for entry in raw_hooks:
+                if not isinstance(entry, dict):
+                    continue
+                cmd = entry.get("command")
+                if isinstance(cmd, str) and cmd.strip():
+                    cmd = ["sh", "-c", cmd.strip()]
+                if not isinstance(cmd, list) or not cmd:
+                    logger.warning("Skipping hook with invalid command from %s: %r", source_name, entry)
+                    continue
+                events_raw = entry.get("events", [])
+                if not isinstance(events_raw, list):
+                    events_raw = []
+                filtered_events = frozenset(str(e) for e in events_raw if str(e) not in skip_events)
+                if events_raw and not filtered_events:
+                    continue
+                parsed.append(
+                    HookConfig(
+                        command=cmd,
+                        events=filtered_events,
+                    )
                 )
-            )
+        elif isinstance(raw_hooks, dict):
+            # Also support Antigravity / Claude Code event-dict hooks format
+            for event_name, matchers in raw_hooks.items():
+                if str(event_name) in skip_events:
+                    continue
+                if not isinstance(matchers, list):
+                    continue
+                for matcher_item in matchers:
+                    if not isinstance(matcher_item, dict):
+                        continue
+                    hook_defs = matcher_item.get("hooks")
+                    items = hook_defs if isinstance(hook_defs, list) else [matcher_item]
+                    for hook_def in items:
+                        if not isinstance(hook_def, dict):
+                            continue
+                        cmd = hook_def.get("command")
+                        if isinstance(cmd, str) and cmd.strip():
+                            cmd = ["sh", "-c", cmd.strip()]
+                        if not isinstance(cmd, list) or not cmd:
+                            continue
+                        parsed.append(
+                            HookConfig(
+                                command=cmd,
+                                events=frozenset([str(event_name)]),
+                            )
+                        )
 
     hooks_file = path or _default_hooks_path()
     if hooks_file.is_file():
@@ -133,17 +172,35 @@ def load_hooks(path: Path | None = None) -> list[HookConfig]:
     # Discover and merge plugin hooks
     try:
         from talkops.plugins.discovery import discover_plugins
+        from talkops.plugins.substitution import substitute_json
 
         plugins = discover_plugins().plugins
         for plugin in plugins:
-            plugin_hooks_file = plugin.root / "hooks" / "hooks.json"
-            if plugin_hooks_file.is_file():
-                try:
-                    p_data = json.loads(plugin_hooks_file.read_text(encoding="utf-8"))
-                    if isinstance(p_data, dict):
-                        _parse_hooks_data(p_data, f"plugin:{plugin.plugin_id}")
-                except (json.JSONDecodeError, OSError) as exc:
-                    logger.warning("Failed to parse plugin hooks config %s: %s", plugin_hooks_file, exc)
+            hook_candidates: list[Path] = []
+            for hp in getattr(plugin.inventory, "hooks_files", ()):
+                if hp not in hook_candidates:
+                    hook_candidates.append(hp)
+            for candidate in (plugin.root / "hooks.json", plugin.root / "hooks" / "hooks.json"):
+                if candidate not in hook_candidates:
+                    hook_candidates.append(candidate)
+
+            for plugin_hooks_file in hook_candidates:
+                if plugin_hooks_file.is_file():
+                    try:
+                        p_data = json.loads(plugin_hooks_file.read_text(encoding="utf-8"))
+                        if isinstance(p_data, dict):
+                            p_data = substitute_json(
+                                p_data,
+                                plugin_root=plugin.root,
+                                plugin_data=plugin.data_dir,
+                            )
+                            _parse_hooks_data(
+                                p_data,
+                                f"plugin:{plugin.plugin_id}",
+                                skip_events=frozenset({"PreToolUse", "PostToolUse"}),
+                            )
+                    except (json.JSONDecodeError, OSError) as exc:
+                        logger.warning("Failed to parse plugin hooks config %s: %s", plugin_hooks_file, exc)
     except Exception as exc:
         logger.debug("Plugin hook discovery skipped: %s", exc)
 

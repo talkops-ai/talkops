@@ -124,33 +124,58 @@ class TokenCostEstimator:
             return None
         usage_cls, calc_price_fn = backend
 
-        norm_provider = _PROVIDER_ALIASES.get(provider, provider)
+        provider_key = provider.strip().lower()
+        norm_provider = _PROVIDER_ALIASES.get(provider_key, provider_key) or None
         in_details = input_token_details or {}
         out_details = output_token_details or {}
 
         cache_read = cls._token_count(in_details.get("cache_read"))
         raw_writes = cls._cache_write_counts(in_details)
-        cache_read, (cache_write, cache_5m, cache_1h) = cls._clamp_cache_counts(input_tokens, cache_read, raw_writes)
+        cache_read, (generic_write, cache_5m, cache_1h) = cls._clamp_cache_counts(input_tokens, cache_read, raw_writes)
+        cache_write = generic_write or (cache_5m + cache_1h)
+        input_audio = min(cls._token_count(in_details.get("audio")), input_tokens)
+        if input_audio and (cache_read or cache_write or cache_5m or cache_1h):
+            input_audio = 0
 
         reasoning_tokens = cls._token_count(out_details.get("reasoning"))
+        if provider_key == "perplexity":
+            output_tokens += reasoning_tokens
+        output_audio = min(cls._token_count(out_details.get("audio")), output_tokens)
+        reasoning_tokens = min(reasoning_tokens, output_tokens)
 
         try:
             usage = usage_cls(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                cache_read_input_tokens=cache_read,
-                cache_creation_input_tokens=cache_write,
-                cache_creation_5m_input_tokens=cache_5m,
-                cache_creation_1h_input_tokens=cache_1h,
-                reasoning_output_tokens=reasoning_tokens,
+                cache_read_tokens=cache_read or None,
+                cache_write_tokens=cache_write or None,
+                cache_write_5m_tokens=cache_5m or None,
+                cache_write_1h_tokens=cache_1h or None,
+                input_audio_tokens=input_audio or None,
+                output_audio_tokens=output_audio or None,
+                output_reasoning_tokens=reasoning_tokens or None,
             )
-            price_result = calc_price_fn(usage, model=model_name, provider=norm_provider)
+        except Exception as exc:
+            cls._pricing_contract_broken = True
+            logger.debug("genai-prices rejected usage schema for %s:%s: %s", provider, model_name, exc)
+            return None
+        cls._pricing_contract_broken = False
+
+        try:
+            try:
+                price_result = calc_price_fn(usage, model_ref=model_name.strip(), provider_id=norm_provider)
+            except TypeError:
+                price_result = calc_price_fn(usage, model=model_name.strip(), provider=norm_provider)
             if price_result is None:
                 return None
-            total_cost = getattr(price_result, "total_cost", None)
-            if total_cost is not None and math.isnan(total_cost):
-                return None
-            return float(total_cost) if total_cost is not None else None
+            total_cost = getattr(price_result, "total_price", None)
+            if total_cost is None:
+                total_cost = getattr(price_result, "total_cost", None)
+            if total_cost is not None:
+                cost_val = float(total_cost)
+                if math.isfinite(cost_val) and cost_val >= 0:
+                    return cost_val
+            return None
         except Exception as exc:
             logger.debug("Cost estimation failed for %s:%s: %s", provider, model_name, exc)
             return None

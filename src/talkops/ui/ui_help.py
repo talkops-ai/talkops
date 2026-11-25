@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from rich.console import Console
-from rich.markup import escape
 
 from talkops._version import __version__
 from talkops.ui.theme import DC_MUTED, DC_TEAL

@@ -53,6 +53,11 @@ def _merge_dict(
     return {**existing, **new}
 
 
+def _replace_value(_existing: Any, new: Any) -> Any:
+    """Reducer that accepts concurrent updates in the same superstep by keeping the latest value."""
+    return new
+
+
 class TalkOpsAgentState(
     DeepAgentState,
     ResumeState,
@@ -165,6 +170,16 @@ class TalkOpsAgentState(
         PrivateStateAttr,
     ]
     """Active LangChain ModelRouterMiddleware choice answer for the current turn."""
+
+    # ── OpenWiki Durable Repository Context ───────────────
+    openwiki_digest: Annotated[NotRequired[dict[str, Any] | None], _replace_value]
+    """Cached OpenWiki routing digest (quickstart.md + INSTRUCTIONS.md + Git drift)."""
+
+    openwiki_grounded: Annotated[NotRequired[bool], _replace_value]
+    """Whether the agent has queried OpenWiki in the current session."""
+
+    openwiki_lifecycle_active: Annotated[NotRequired[bool], _replace_value]
+    """Whether an OpenWiki compilation/update lifecycle turn is active."""
 
 
 # Canonical aliases

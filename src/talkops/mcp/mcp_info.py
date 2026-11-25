@@ -65,6 +65,8 @@ class MCPServerInfo:
     env: dict[str, str] = field(default_factory=dict)
     disabled_tools: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] = ()
+    supports_resources: bool = False
+    instructions: str = ""
 
     def __post_init__(self) -> None:
         """Validate and normalize fields after dataclass initialization."""
@@ -133,7 +135,10 @@ class MCPServerInfo:
             "tool_count": self.tool_count,
             "tools": [t.to_dict() for t in self.tools],
             "enabled": self.enabled,
+            "supports_resources": self.supports_resources,
         }
+        if self.instructions:
+            res["instructions"] = self.instructions
         return res
 
     def needs_attention(self) -> bool:

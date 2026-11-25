@@ -16,7 +16,6 @@
 from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from talkops.middleware.goal_state_notice import build_goal_state_notice

@@ -129,6 +129,7 @@ def run_interactive(
         "mcp_config_path": mcp_config_path,
         "no_mcp": no_mcp,
         "trust_project_mcp": trust_project_mcp,
+        "project_root": resolved_cwd,
     }
 
     server_kwargs: dict[str, Any] = {
@@ -216,3 +217,9 @@ def run_interactive(
                 server_proc.stop()
             except Exception:
                 logger.debug("Failed to stop server process during interactive exit", exc_info=True)
+        try:
+            from talkops.storage.factory import close_operational_store
+
+            close_operational_store()
+        except Exception:
+            logger.debug("Failed to close operational store during interactive exit", exc_info=True)

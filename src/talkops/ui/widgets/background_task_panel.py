@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from textual.app import ComposeResult
     from textual.timer import Timer
 
-_TICK_INTERVAL = 0.1
+_TICK_INTERVAL = 1.0
 _COMPLETED_RETENTION_SECONDS = 8.0
 _MAX_VISIBLE_ROWS = 5
 _FALLBACK_WIDTH = 90
@@ -134,6 +134,7 @@ class BackgroundTaskPanel(Vertical):
         self._order: list[str] = []
         self._spinner = Spinner()
         self._timer: Timer | None = None
+        self._last_rendered_row_count: int = -1
 
     def compose(self) -> ComposeResult:
         """Compose and yield child widgets for this component."""
@@ -179,6 +180,9 @@ class BackgroundTaskPanel(Vertical):
             comp_float = float(completed_at) if isinstance(completed_at, (int, float)) else None
             if status not in {"running", "waiting_for_input"} and comp_float is not None:
                 if (now - comp_float) > _COMPLETED_RETENTION_SECONDS:
+                    self._records.pop(tid, None)
+                    if tid in self._order:
+                        self._order.remove(tid)
                     continue
             self._upsert_from_dict(item)
         self._sync_visibility_and_timer()
@@ -272,14 +276,43 @@ class BackgroundTaskPanel(Vertical):
             if data.get("log_path"):
                 rec.log_path = str(data["log_path"])
 
+    def _reconcile_live_record(self, rec: _TaskRowRecord) -> None:
+        """Reconcile an active UI row against the in-process `BackgroundTaskManager`."""
+        try:
+            from talkops.tasks.manager import get_background_task_manager
+
+            handle = get_background_task_manager().get_task(rec.task_id)
+        except Exception:
+            handle = None
+        if handle is None:
+            return
+
+        proc_rc = getattr(handle.proc, "returncode", None) if handle.proc is not None else None
+        if handle.status not in {"running", "waiting_for_input"}:
+            self._upsert_from_dict(dict(handle.to_record()))
+        elif proc_rc is not None:
+            data = dict(handle.to_record())
+            data["exit_code"] = int(proc_rc)
+            data["status"] = "completed" if int(proc_rc) == 0 else "failed"
+            data["completed_at"] = handle.completed_at or time.time()
+            self._upsert_from_dict(data)
+        else:
+            if handle.status != rec.status:
+                rec.status = handle.status
+            last_line = handle.last_non_empty_line()
+            if last_line:
+                rec.last_line = _sanitize(last_line, max_chars=100)
+
     def _visible_records(self) -> list[_TaskRowRecord]:
         now = time.time()
         visible: list[_TaskRowRecord] = []
         expired_ids: list[str] = []
-        for tid in self._order:
+        for tid in list(self._order):
             rec = self._records.get(tid)
             if rec is None:
                 continue
+            if rec.is_active():
+                self._reconcile_live_record(rec)
             if rec.is_active():
                 visible.append(rec)
             else:
@@ -319,9 +352,10 @@ class BackgroundTaskPanel(Vertical):
         visible = self._visible_records()
         if not visible:
             self._stop_timer()
+            self._last_rendered_row_count = -1
             self.remove_class("-visible")
             return
-        self._refresh()
+        self._refresh(visible=visible)
 
     def _panel_width(self) -> int:
         try:
@@ -330,10 +364,11 @@ class BackgroundTaskPanel(Vertical):
             w = 0
         return w if w and w > 20 else _FALLBACK_WIDTH
 
-    def _refresh(self) -> None:
+    def _refresh(self, *, visible: list[_TaskRowRecord] | None = None) -> None:
         if not self.is_mounted:
             return
-        visible = self._visible_records()
+        if visible is None:
+            visible = self._visible_records()
         if not visible:
             return
 
@@ -373,11 +408,14 @@ class BackgroundTaskPanel(Vertical):
             Content.styled(" " * spacer + hint, colors.muted),
         )
         try:
-            self.query_one("#bg-task-header", Static).update(header_content)
+            self.query_one("#bg-task-header", Static).update(
+                header_content, layout=False
+            )
         except NoMatches:
             pass
 
         if not self.expanded:
+            self._last_rendered_row_count = 0
             return
 
         shown = visible[:_MAX_VISIBLE_ROWS]
@@ -389,9 +427,13 @@ class BackgroundTaskPanel(Vertical):
             row_contents.append(
                 Content.styled(f"  … +{extra} more background task(s) (`/tasks ps`)", colors.muted)
             )
+        row_count = len(row_contents)
+        needs_layout = row_count != self._last_rendered_row_count
+        self._last_rendered_row_count = row_count
         try:
             self.query_one("#bg-task-rows", Static).update(
-                Content("\n").join(row_contents)
+                Content("\n").join(row_contents),
+                layout=needs_layout,
             )
         except NoMatches:
             pass

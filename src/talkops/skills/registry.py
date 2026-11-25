@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 
 import yaml
 
-from talkops.config import paths
 from talkops.config.settings import settings
 from talkops.utils.logger import get_logger
 

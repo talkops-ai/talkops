@@ -425,9 +425,9 @@ def _load_settings_disabled_plugins(path: Path) -> frozenset[str]:
 
 
 def _load_workspace_manifest_exclusions(project_root: Path) -> frozenset[str]:
-    """Read ``exclude`` entries from ``.talkops/plugins.json`` and ``.agents/plugins.json``."""
+    """Read ``exclude`` entries from workspace ``plugins.json`` manifests."""
     excluded: set[str] = set()
-    for dot_dir in (".talkops", ".agents"):
+    for dot_dir in (".talkops", ".agents", ".agent", "_agents", "_agent"):
         manifest_file = project_root / dot_dir / "plugins.json"
         if not manifest_file.is_file():
             continue
@@ -765,6 +765,7 @@ def load_installed_plugins(
             continue
         primary: InstalledPluginEntry | None = None
         if effective_root is not None:
+            matching_project_entries: list[InstalledPluginEntry] = []
             for e in entries:
                 if e.project_path:
                     try:
@@ -772,10 +773,14 @@ def load_installed_plugins(
                             e.project_path == str(effective_root)
                             or Path(e.project_path).resolve() == effective_root.resolve()
                         ):
-                            primary = e
-                            break
+                            matching_project_entries.append(e)
                     except (OSError, RuntimeError):
                         pass
+            if matching_project_entries:
+                primary = next(
+                    (e for e in matching_project_entries if e.scope == "local"),
+                    matching_project_entries[0],
+                )
             if primary is None:
                 for e in entries:
                     if e.scope in {"user", "global"}:
@@ -882,9 +887,17 @@ def add_installed_plugin(
     return entry
 
 
-def get_primary_install_entry(plugin_id: str) -> InstalledPluginEntry | None:
-    """Return the first install entry for a plugin id."""
-    return load_installed_plugins().get(plugin_id)
+def get_primary_install_entry(
+    plugin_id: str,
+    *,
+    project_root: Path | None = None,
+    include_foreign_projects: bool = True,
+) -> InstalledPluginEntry | None:
+    """Return the primary install entry for a plugin id."""
+    return load_installed_plugins(
+        project_root=project_root,
+        include_foreign_projects=include_foreign_projects,
+    ).get(plugin_id)
 
 
 def remove_installed_plugin(

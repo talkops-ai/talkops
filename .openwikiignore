@@ -1,0 +1,14 @@
+# TalkOps OpenWiki Ignore Rules
+dist/
+build/
+.venv/
+venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+tests/fixtures/
+*.lock
+*.min.js
+*.map

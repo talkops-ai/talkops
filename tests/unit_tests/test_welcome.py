@@ -28,7 +28,6 @@ from textual.widget import Widget
 
 from talkops.ui.widgets.welcome import (
     WelcomeBanner,
-    _BannerInfo,
     _InfoPanel,
     _LeftPanel,
 )
@@ -67,7 +66,7 @@ class WelcomeHarnessApp(App[None]):
 async def test_welcome_banner_renders_cleanly():
     """Verify WelcomeBanner mounts two panels without error."""
     app = WelcomeHarnessApp()
-    async with app.run_test(size=(120, 24)) as pilot:
+    async with app.run_test(size=(120, 24)):
         assert app.banner is not None
         left = app.banner.query_one(_LeftPanel)
         right = app.banner.query_one(_InfoPanel)

@@ -21,10 +21,9 @@ from typing import TYPE_CHECKING, Any
 
 from textual.containers import Vertical
 from textual.content import Content
-from textual.widgets import Markdown, Static
+from textual.widgets import Static
 
 from talkops.file_ops import is_sensitive_file_path
-from talkops.ui import theme
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult

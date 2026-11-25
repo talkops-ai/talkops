@@ -22,7 +22,6 @@ direct filesystem access needed by CLI commands and runtime discovery.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path

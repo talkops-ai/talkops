@@ -30,34 +30,24 @@ from talkops.commands.custom import (
     CustomCommandWatcher,
     activate_conditional_commands_for_paths,
     clear_custom_command_cache,
-    derive_command_name_from_path,
     discover_custom_commands,
     execute_inline_shell_commands,
     expand_braces,
     expand_custom_command_prompt,
-    extract_file_mentions,
-    format_command_xml_tags,
     get_command_usage_priority,
     load_custom_command_file,
     parse_custom_command_frontmatter,
-    peel_stacked_prompt_commands,
-    prepare_forked_command_context,
     record_command_usage,
-    resolve_command_with_colon_fallback,
     sanitize_command_arguments,
     substitute_arguments,
 )
 from talkops.middleware.custom_commands import (
     CustomCommandsMiddleware,
     create_custom_command_skill_tool,
-    is_tool_disallowed,
-    is_tool_preapproved,
-    matches_tool_permission_rule,
     resolve_command_model_spec,
 )
 from talkops.prompts.custom_commands import (
     build_skill_tool_prompt,
-    format_commands_for_budget,
 )
 from talkops.ui.command_registry import build_custom_commands
 

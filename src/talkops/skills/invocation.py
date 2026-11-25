@@ -381,7 +381,7 @@ def parse_skill_command(command: str) -> tuple[str, str]:
     return skill_name, args
 
 
-STATIC_SKILL_ALIASES: frozenset[str] = frozenset({"remember", "skill-creator"})
+STATIC_SKILL_ALIASES: frozenset[str] = frozenset({"openwiki", "remember", "skill-creator"})
 
 __all__ = [
     "MAX_SKILL_CONTENT_CHARS",

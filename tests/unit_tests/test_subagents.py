@@ -48,14 +48,34 @@ def test_subagents_middleware():
         "description": "Security compliance scanner",
         "source": "plugin:cloud-security",
         "skills": ["cve-scan"],
+        "mcp_servers": ["trivy", "opa"],
     })
     assert "plugin-secops" in mw.subagent_names
     prompt_block_with_plugin = mw._build_prompt_block()
-    assert "### 2. Plugin & Extension Subagents (Code Interpreter `js_eval`)" in prompt_block_with_plugin
+    assert "### 2. Plugin & Extension Subagents (Code Interpreter `js_eval` ONLY)" in prompt_block_with_plugin
     assert "`plugin-secops`" in prompt_block_with_plugin
     assert "Security compliance scanner" in prompt_block_with_plugin
+    assert "Isolated MCP servers — accessible ONLY via this subagent: `trivy`, `opa`" in prompt_block_with_plugin
     assert "`cve-scan`" not in prompt_block_with_plugin
     assert "Source:" not in prompt_block_with_plugin
+
+    # Verify top-level `task` tool description strips plugin subagents while preserving built-ins
+    from langchain_core.tools import StructuredTool
+
+    raw_task_tool = StructuredTool.from_function(
+        func=lambda description, subagent_type: "ok",
+        name="task",
+        description=(
+            "Launch an ephemeral subagent.\n\nAvailable agent types:\n"
+            "- cost-optimizer: Analyzes AWS spend\n"
+            "- plugin-secops: Security compliance scanner"
+        ),
+    )
+    filtered_tools = mw._filter_direct_task_tool_description([raw_task_tool])
+    assert filtered_tools is not None
+    assert "- cost-optimizer:" in filtered_tools[0].description
+    assert "- plugin-secops:" not in filtered_tools[0].description
+    assert "js_eval" in filtered_tools[0].description
 
     # Test before_agent state injection
     empty_state: Any = {}
@@ -65,12 +85,53 @@ def test_subagents_middleware():
     assert "_subagent_registry" in state_update
     assert "eks-specialist" in state_update["_subagent_registry"]
     assert state_update["_subagent_registry"]["plugin-secops"]["is_plugin"] is True
+    assert state_update["_subagent_registry"]["plugin-secops"]["mcp_servers"] == ["trivy", "opa"]
 
     # Test planning_mode
     mw_planning = SubagentsMiddleware(subagent_metas=metas, planning_mode=True)
     prompt_block_planning = mw_planning._build_prompt_block()
     assert "## Subagent Delegation & Operational Capabilities" in prompt_block_planning
     assert "`eks-specialist`" in prompt_block_planning
+
+
+def test_plugin_subagents_enrichment_extracts_mcp_servers_and_keywords(tmp_path) -> None:
+    """Verify plugin_subagents extracts isolated MCP server names and keywords from plugin bundles."""
+    import json
+
+    from talkops.plugins.adapters.agents import plugin_subagents
+    from talkops.plugins.manifest import load_manifest
+    from talkops.plugins.models import ComponentInventory, PluginInstance
+
+    plugin_dir = tmp_path / "obs-plugin"
+    (plugin_dir / ".claude-plugin").mkdir(parents=True)
+    (plugin_dir / "agents").mkdir()
+    (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "obs-plugin", "version": "0.1.0", "keywords": ["observability", "metrics", "traces"]}),
+        encoding="utf-8",
+    )
+    mcp_file = plugin_dir / ".mcp.json"
+    mcp_file.write_text(
+        json.dumps({"mcpServers": {"prometheus": {"command": "prom-mcp"}, "tempo": {"command": "tempo-mcp"}}}),
+        encoding="utf-8",
+    )
+    agent_md = plugin_dir / "agents" / "obs-plugin.md"
+    agent_md.write_text("---\nname: obs-plugin\ndescription: Observability specialist\n---\nPrompt", encoding="utf-8")
+
+    manifest, _, _ = load_manifest(plugin_dir)
+    inst = PluginInstance(
+        plugin_id="obs-plugin@marketplace",
+        name="obs-plugin",
+        marketplace="marketplace",
+        root=plugin_dir,
+        manifest=manifest,
+        inventory=ComponentInventory(agents=(agent_md,), mcp_files=(mcp_file,)),
+    )
+    subs = plugin_subagents([inst])
+    assert len(subs) == 1
+    assert subs[0]["name"] == "obs-plugin@marketplace"
+    assert subs[0].get("is_plugin") is True
+    assert subs[0].get("mcp_servers") == ["prometheus", "tempo"]
+    assert subs[0].get("keywords") == ["observability", "metrics", "traces"]
 
 
 def test_get_built_in_subagents_empty():

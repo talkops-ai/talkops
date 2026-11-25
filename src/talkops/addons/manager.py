@@ -73,6 +73,14 @@ logger = get_logger(__name__)
 # Global programmatic registry for custom addons registered via `register_addon()`
 _PROGRAMMATIC_ADDONS: dict[str, Any] = {}
 
+# Backward-compatible aliases for legacy standalone addon specs (`talkops_channels` / `talkops_webhooks`)
+_LEGACY_ADDON_MODULE_ALIASES: dict[str, str] = {
+    "talkops_channels": "talkops.addons.builtin.channels",
+    "talkops_channels.addon": "talkops.addons.builtin.channels",
+    "talkops_webhooks": "talkops.addons.builtin.webhooks",
+    "talkops_webhooks.addon": "talkops.addons.builtin.webhooks",
+}
+
 
 def register_addon(
     addon_or_factory: ServerAddon | BaseServerAddon | type[Any] | Callable[[], Any],
@@ -277,8 +285,12 @@ def load_addon_from_spec(
     try:
         module = importlib.import_module(target_part)
     except Exception as exc:
-        logger.warning("Failed to import addon module '%s': %s", target_part, exc)
-        return None
+        alias_target = _LEGACY_ADDON_MODULE_ALIASES.get(target_part)
+        if alias_target:
+            module = importlib.import_module(alias_target)
+        else:
+            logger.warning("Failed to import addon module '%s': %s", target_part, exc)
+            return None
 
     return _extract_addon_from_module(
         module,
@@ -591,7 +603,14 @@ class AddonManager:
 
         for name, addon in self._discovered.items():
             src = str(getattr(addon, "source", ""))
-            if (src.startswith("file:") or src.startswith("package:")) and getattr(addon, "enabled_by_default", False):
+            is_explicit_or_external = (
+                src.startswith("file:")
+                or src.startswith("package:")
+                or src.startswith("programmatic:")
+                or src in {"explicit", "custom"}
+                or addon in self._extra_addons
+            )
+            if is_explicit_or_external and getattr(addon, "enabled_by_default", False):
                 if name not in disabled_set:
                     raw_configs.setdefault(name, {})["enabled"] = True
 
@@ -748,6 +767,13 @@ class AddonManager:
                 logger.warning("Addon '%s' raised error during on_shutdown: %s", addon.name, exc)
 
         await ctx.cancel_background_tasks()
+        try:
+            await self._gateway.aclose()
+        except Exception:
+            pass
+        from talkops.storage.factory import aclose_operational_store
+
+        await aclose_operational_store()
         self._started = False
 
     async def _start_secondary_port_servers(self) -> None:

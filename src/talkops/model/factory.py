@@ -20,6 +20,7 @@ active model spec (``provider:model``) and reasoning effort configuration.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import importlib
 import importlib.util
@@ -27,8 +28,8 @@ import json
 import logging
 import os
 import re
-import threading
 import sys
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -110,16 +111,16 @@ class _FireworksProtoGuardFinder:
 if not any(type(f).__name__ == "_FireworksProtoGuardFinder" for f in sys.meta_path):
     sys.meta_path.insert(0, _FireworksProtoGuardFinder())
 
-from langchain_core.language_models import BaseChatModel
+from langchain_core.language_models import BaseChatModel  # noqa: E402
 
-from talkops.config.settings import get_settings, resolve_env_var
-from talkops.exceptions import (
+from talkops.config.settings import get_settings, resolve_env_var  # noqa: E402
+from talkops.exceptions import (  # noqa: E402
     MissingCredentialsError,
     MissingProviderPackageError,
     ModelConfigError,
     NoCredentialsConfiguredError,
 )
-from talkops.model.config import (
+from talkops.model.config import (  # noqa: E402
     IMPLICIT_AUTH_PROVIDERS,
     PROVIDER_KEY_ALIASES,
     PROVIDER_SETTINGS_FIELD_MAP,
@@ -135,7 +136,7 @@ from talkops.model.config import (
     normalize_model_spec,
     provider_package_name,
 )
-from talkops.utils.logger import get_logger
+from talkops.utils.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -231,6 +232,143 @@ def _get_default_model_spec() -> str:
     raise NoCredentialsConfiguredError(
         "No model is configured yet. Run /model to choose one."
     )
+
+
+_VERTEX_Invalid_PROJECT_PLACEHOLDERS = frozenset(
+    {"unconfigured", "unassigned", "local-credentials", "unknown", ""}
+)
+
+
+def _resolve_gcp_project_from_toml() -> str | None:
+    """Resolve GCP project ID from [gcp] or [cloud.gcp] in config.toml if configured."""
+    try:
+        from talkops.config.manifest import load_config_toml
+
+        data = load_config_toml()
+        gcp_sec = data.get("gcp")
+        if isinstance(gcp_sec, dict):
+            pid = gcp_sec.get("project_id")
+            if isinstance(pid, str) and pid.strip() and pid.strip().lower() not in _VERTEX_Invalid_PROJECT_PLACEHOLDERS:
+                if not _is_google_api_key_value(pid.strip()):
+                    return pid.strip()
+
+        cloud_sec = data.get("cloud")
+        if isinstance(cloud_sec, dict):
+            cloud_gcp = cloud_sec.get("gcp")
+            if isinstance(cloud_gcp, dict):
+                for key in ("account_or_project", "project_id", "target_id"):
+                    val = cloud_gcp.get(key)
+                    if (
+                        isinstance(val, str)
+                        and val.strip()
+                        and val.strip().lower() not in _VERTEX_Invalid_PROJECT_PLACEHOLDERS
+                        and val.strip().lower() != "default"
+                        and not _is_google_api_key_value(val.strip())
+                    ):
+                        return val.strip()
+            if str(cloud_sec.get("active_provider") or "").strip().lower() == "gcp":
+                val = cloud_sec.get("account_or_project")
+                if (
+                    isinstance(val, str)
+                    and val.strip()
+                    and val.strip().lower() not in _VERTEX_Invalid_PROJECT_PLACEHOLDERS
+                    and not _is_google_api_key_value(val.strip())
+                ):
+                    return val.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _default_vertex_user_agent() -> str:
+    """Return the Antigravity CLI aidev_client User-Agent string for Vertex AI."""
+    os_map = {"darwin": "darwin", "linux": "linux", "win32": "windows"}
+    os_type = os_map.get(sys.platform, sys.platform)
+    import platform
+
+    raw_arch = platform.machine().lower()
+    arch_map = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}
+    arch = arch_map.get(raw_arch, raw_arch or "arm64")
+    return f"antigravity/cli/1.5.6 (aidev_client; os_type={os_type}; arch={arch}; auth_method=gcp)"
+
+
+def _build_vertex_additional_headers(
+    *,
+    existing_headers: Any = None,
+    project: str | None = None,
+) -> dict[str, str]:
+    """Build HTTP headers for ChatGoogleGenerativeAI(vertexai=True) requests."""
+    headers: dict[str, str] = (
+        {str(k): str(v) for k, v in existing_headers.items()}
+        if isinstance(existing_headers, Mapping)
+        else {}
+    )
+    quota_project = (
+        resolve_env_var("GOOGLE_CLOUD_QUOTA_PROJECT")
+        or (project if project and not _is_google_api_key_value(project) else None)
+    )
+    if quota_project and not _is_google_api_key_value(str(quota_project)):
+        headers.setdefault("X-Goog-User-Project", str(quota_project).strip())
+
+    shared_req_type = (
+        resolve_env_var("VERTEXAI_SHARED_REQUEST_TYPE")
+        or resolve_env_var("VERTEXAI_SERVICE_TIER")
+        or "shared"
+    )
+    tier_norm = str(shared_req_type).strip().lower()
+    if tier_norm == "flex":
+        headers.setdefault("X-Vertex-AI-LLM-Shared-Request-Type", "shared")
+    elif tier_norm not in ("standard", "off", "none", "false", "0", ""):
+        headers.setdefault("X-Vertex-AI-LLM-Shared-Request-Type", str(shared_req_type).strip())
+
+    user_agent = resolve_env_var("VERTEXAI_USER_AGENT") or _default_vertex_user_agent()
+    if str(user_agent).strip().lower() not in ("off", "none", "false", "0", ""):
+        if not any(k.lower() == "user-agent" for k in headers):
+            headers["user-agent"] = str(user_agent).strip()
+
+    stream_id = resolve_env_var("VERTEXAI_STREAM_ID") or "antigravity.cli.env_prod.tier_paid"
+    if str(stream_id).strip().lower() not in ("off", "none", "false", "0", ""):
+        raw_bytes = str(stream_id).strip().encode("utf-8")
+        if 0 < len(raw_bytes) < 128:
+            proto_bytes = bytes([0x0A, len(raw_bytes)]) + raw_bytes
+            headers.setdefault(
+                "X-Goog-Ext-525006001-bin",
+                base64.b64encode(proto_bytes).decode("ascii"),
+            )
+    return headers
+
+
+def _build_vertex_labels(*, existing_labels: Any = None) -> dict[str, str]:
+    """Build GenerateContentConfig labels for ChatGoogleGenerativeAI(vertexai=True)."""
+    labels: dict[str, str] = (
+        {str(k): str(v) for k, v in existing_labels.items()}
+        if isinstance(existing_labels, Mapping)
+        else {}
+    )
+    env_labels = resolve_env_var("VERTEXAI_LABELS")
+    if env_labels:
+        raw = str(env_labels).strip()
+        if raw.startswith("{"):
+            with contextlib.suppress(Exception):
+                parsed = json.loads(raw)
+                if isinstance(parsed, Mapping):
+                    for k, v in parsed.items():
+                        if k and v is not None:
+                            labels[str(k)] = str(v)
+        else:
+            for pair in raw.split(","):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    if k.strip():
+                        labels[k.strip()] = v.strip()
+
+    labels.setdefault("client", "antigravity-cli")
+    labels.setdefault(
+        "goog-originating-logical-product-id",
+        "48c6cd67-05ce-4112-a170-ad8e0c7c136c",
+    )
+    labels.setdefault("goog-originating-service-id", "a153-a454-6272")
+    return labels
 
 
 def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dict[str, Any]:
@@ -421,6 +559,7 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
     if provider in ("google_genai", "google"):
         result.setdefault("vertexai", False)
     elif provider == "google_vertexai":
+        result["vertexai"] = True
         vertex_api_key = (
             resolve_env_var("VERTEXAI_API_KEY")
             or resolve_env_var("GOOGLE_VERTEXAI_API_KEY")
@@ -437,25 +576,42 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
             project_env = None
             os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
 
-        if vertex_api_key and not project_env:
-            result["vertexai"] = True
+        if not project_env and not os.environ.get("PYTEST_CURRENT_TEST"):
+            project_env = _resolve_gcp_project_from_toml()
+
+        location_env = (
+            resolve_env_var("GOOGLE_CLOUD_LOCATION")
+            or resolve_env_var("GCP_LOCATION")
+            or resolve_env_var("CLOUD_ML_REGION")
+            or resolve_env_var("VERTEXAI_LOCATION")
+            or getattr(settings, "google_cloud_location", None)
+        )
+
+        if vertex_api_key:
             result["google_api_key"] = str(vertex_api_key).strip()
-            result.pop("project", None)
-            result.pop("location", None)
+
+        if project_env:
+            result["project"] = str(project_env).strip()
+            os.environ["GOOGLE_CLOUD_PROJECT"] = str(project_env).strip()
         else:
-            if project_env:
-                result["project"] = project_env
-                os.environ["GOOGLE_CLOUD_PROJECT"] = str(project_env)
-            location_env = (
-                resolve_env_var("GOOGLE_CLOUD_LOCATION")
-                or resolve_env_var("GCP_LOCATION")
-                or resolve_env_var("CLOUD_ML_REGION")
-                or resolve_env_var("VERTEXAI_LOCATION")
-                or getattr(settings, "google_cloud_location", None)
-            )
-            if location_env:
-                result["location"] = location_env
-                os.environ["GOOGLE_CLOUD_LOCATION"] = str(location_env)
+            result.pop("project", None)
+
+        if location_env:
+            result["location"] = str(location_env).strip()
+            os.environ["GOOGLE_CLOUD_LOCATION"] = str(location_env).strip()
+        elif project_env:
+            result["location"] = "global"
+            os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
+        else:
+            result.pop("location", None)
+
+        api_ver = resolve_env_var("VERTEXAI_API_VERSION") or result.get("api_version") or "v1"
+        result["api_version"] = str(api_ver).strip()
+        result["additional_headers"] = _build_vertex_additional_headers(
+            existing_headers=result.get("additional_headers"),
+            project=str(project_env).strip() if project_env else None,
+        )
+        result["labels"] = _build_vertex_labels(existing_labels=result.get("labels"))
     elif provider == "google_anthropic_vertex":
         project_env = (
             resolve_env_var("GOOGLE_CLOUD_PROJECT")
@@ -463,6 +619,8 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
             or resolve_env_var("VERTEXAI_PROJECT")
             or getattr(settings, "google_cloud_project", None)
         )
+        if not project_env and not os.environ.get("PYTEST_CURRENT_TEST"):
+            project_env = _resolve_gcp_project_from_toml()
         if project_env and not _is_google_api_key_value(str(project_env)):
             result["project"] = project_env
             os.environ["GOOGLE_CLOUD_PROJECT"] = str(project_env)
@@ -498,13 +656,42 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
         with_effort_model_params,
     )
 
+    spec = f"{provider}:{model_name}" if model_name else provider
     effort = getattr(settings, "reasoning_effort", None)
     if effort:
-        spec = f"{provider}:{model_name}" if model_name else provider
         if is_effort_supported_for_model(spec, str(effort)):
             result = with_effort_model_params(spec, result, str(effort))
 
     return result
+
+
+def _provider_retry_disable_kwargs(
+    provider: str,
+    model_kwargs: Mapping[str, Any],
+) -> dict[str, int]:
+    """Return constructor kwargs that disable provider-owned SDK retry loops.
+
+    TalkOps's CodeModelRetryMiddleware owns the retry budget and status streaming,
+    so integrations with a known retry-count parameter receive their provider-specific
+    disable value at construction time (ported from dcode).
+    """
+    from talkops.model.config import (
+        RETRY_DISABLE_VALUE_BY_PROVIDER,
+        RETRY_PARAM_BY_PROVIDER,
+    )
+
+    canon = canonicalize_provider(provider) if provider else ""
+    retry_param = RETRY_PARAM_BY_PROVIDER.get(canon, RETRY_PARAM_BY_PROVIDER.get(provider))
+    if retry_param is None:
+        if "max_retries" in model_kwargs:
+            retry_param = "max_retries"
+        else:
+            return {}
+    disable_value = RETRY_DISABLE_VALUE_BY_PROVIDER.get(
+        canon,
+        RETRY_DISABLE_VALUE_BY_PROVIDER.get(provider, 0),
+    )
+    return {retry_param: disable_value}
 
 
 _TALKOPS_PROFILES_REGISTERED = False
@@ -666,17 +853,29 @@ def _create_model_via_init(
 
     target_provider = provider
     vertex_express_api_key: str | None = None
+    configured_vertex_project: str | None = None
+    configured_vertex_location: str | None = None
+    vertex_adc_mode = False
     if provider in ("openai_codex", "typesafe"):
         target_provider = "openai"
-    elif provider == "google_vertexai" and (
-        init_kwargs.get("vertexai") is True or init_kwargs.get("google_api_key")
-    ):
+    elif provider == "google_vertexai":
         target_provider = "google_genai"
         init_kwargs["vertexai"] = True
-        init_kwargs.pop("project", None)
-        init_kwargs.pop("location", None)
+        api_ep = init_kwargs.pop("api_endpoint", None)
+        if api_ep and "base_url" not in init_kwargs:
+            init_kwargs["base_url"] = (
+                str(api_ep) if "://" in str(api_ep) else f"https://{api_ep}"
+            )
         if init_kwargs.get("google_api_key"):
             vertex_express_api_key = str(init_kwargs["google_api_key"]).strip()
+            raw_proj = init_kwargs.pop("project", None)
+            raw_loc = init_kwargs.pop("location", None)
+            if raw_proj and not _is_google_api_key_value(str(raw_proj)):
+                configured_vertex_project = str(raw_proj).strip()
+            if raw_loc:
+                configured_vertex_location = str(raw_loc).strip()
+        else:
+            vertex_adc_mode = True
     elif provider in ("cerebras", "sambanova"):
         try:
             has_dedicated_pkg = importlib.util.find_spec(f"langchain_{provider}") is not None
@@ -712,6 +911,10 @@ def _create_model_via_init(
         os.environ.pop("GEMINI_API_KEY", None)
         os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
         os.environ.pop("GOOGLE_CLOUD_LOCATION", None)
+    elif vertex_adc_mode:
+        for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY"):
+            saved_env[k] = os.environ.get(k)
+            os.environ.pop(k, None)
 
     try:
         if target_provider:
@@ -719,7 +922,12 @@ def _create_model_via_init(
         else:
             model = init_chat_model(model_name, **init_kwargs)
         if vertex_express_api_key:
-            _configure_vertex_express_model(model, vertex_express_api_key)
+            _configure_vertex_express_model(
+                model,
+                vertex_express_api_key,
+                project=configured_vertex_project,
+                location=configured_vertex_location,
+            )
         return model
     except ImportError as e:
         package = provider_package_name(provider)
@@ -740,7 +948,7 @@ def _create_model_via_init(
     except (ValueError, TypeError) as e:
         raise ModelConfigError(f"Invalid configuration for '{provider}:{model_name}': {e}") from e
     finally:
-        if vertex_express_api_key:
+        if saved_env:
             for k, old_val in saved_env.items():
                 if k == "GOOGLE_CLOUD_PROJECT" and _is_google_api_key_value(old_val):
                     os.environ.pop(k, None)
@@ -756,8 +964,119 @@ _ANTHROPIC_CACHE_CONTROL_PATCHED = False
 _OLLAMA_MESSAGE_COMPAT_PATCHED = False
 _VERTEX_EXPRESS_PROJECT_CACHE: dict[str, str] = {}
 _VERTEX_EXPRESS_CLIENT_PATCHED = False
+_GOOGLE_GENAI_HTTPX_PATCHED = False
+_GOOGLE_GENAI_XHIGH_PATCHED = False
 _VERTEX_PROBE_LOG_FILTER_INSTALLED = False
+_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS = 120.0
 _VERTEX_PROJECT_PATH_RE = re.compile(r"projects/([0-9A-Za-z_-]+)/locations/([0-9A-Za-z_-]+)/publishers/")
+
+
+def _ensure_google_genai_xhigh_thinking_support() -> None:
+    """Enable `xhigh` thinking level in google-genai and ChatGoogleGenerativeAI (for Gemini 4 Hydrogen)."""
+    global _GOOGLE_GENAI_XHIGH_PATCHED
+    if _GOOGLE_GENAI_XHIGH_PATCHED:
+        return
+    with contextlib.suppress(Exception):
+        from google.genai import types as _genai_types
+
+        thinking_cls = getattr(_genai_types, "ThinkingLevel", None)
+        if thinking_cls is not None and "XHIGH" not in thinking_cls._member_map_:
+            xhigh_member = str.__new__(thinking_cls, "XHIGH")
+            xhigh_member._name_ = "XHIGH"  # type: ignore[attr-defined]
+            xhigh_member._value_ = "XHIGH"  # type: ignore[attr-defined]
+            thinking_cls._member_map_["XHIGH"] = xhigh_member
+            thinking_cls._member_names_.append("XHIGH")
+            thinking_cls._value2member_map_["XHIGH"] = xhigh_member
+            type.__setattr__(thinking_cls, "XHIGH", xhigh_member)
+
+    with contextlib.suppress(Exception):
+        from typing import Literal, get_args
+
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        eff_field = ChatGoogleGenerativeAI.model_fields.get("reasoning_effort")
+        if eff_field is not None:
+            flat_args: set[Any] = set()
+            for arg in get_args(eff_field.annotation):
+                flat_args.update(get_args(arg) or (arg,))
+            if "xhigh" not in flat_args:
+                eff_field.annotation = Literal["minimal", "low", "medium", "high", "xhigh"] | None
+                ChatGoogleGenerativeAI.model_rebuild(force=True)
+
+    _GOOGLE_GENAI_XHIGH_PATCHED = True
+
+
+def _ensure_google_genai_httpx_transport() -> None:
+    """Force google-genai onto bounded httpx transport instead of unbounded aiohttp/None timeouts."""
+    global _GOOGLE_GENAI_HTTPX_PATCHED
+    _ensure_google_genai_xhigh_thinking_support()
+    with contextlib.suppress(Exception):
+        from google.genai import _api_client as _genai_api_client
+        from google.genai import models as _genai_models
+
+        _genai_api_client.has_aiohttp = False
+        _genai_models.Models._logged_afc_warning = True
+        _genai_models.AsyncModels._logged_afc_warning = True
+
+        if not _GOOGLE_GENAI_HTTPX_PATCHED:
+            base_cls = getattr(_genai_api_client, "BaseApiClient", None)
+            orig_ensure_ssl = (
+                getattr(base_cls, "_ensure_httpx_ssl_ctx", None) if base_cls is not None else None
+            )
+            if orig_ensure_ssl is not None and not getattr(orig_ensure_ssl, "_talkops_timeout_patched", False):
+                import httpx
+
+                def _patched_ensure_httpx_ssl_ctx(*args: Any, **kwargs: Any) -> Any:
+                    sync_args, async_args = orig_ensure_ssl(*args, **kwargs)
+                    default_timeout = httpx.Timeout(
+                        connect=10.0,
+                        read=_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS,
+                        write=30.0,
+                        pool=10.0,
+                    )
+                    default_limits = httpx.Limits(
+                        max_connections=20,
+                        max_keepalive_connections=10,
+                        keepalive_expiry=20.0,
+                    )
+                    for client_args in (sync_args, async_args):
+                        if isinstance(client_args, dict):
+                            if client_args.get("timeout") is None:
+                                client_args["timeout"] = default_timeout
+                            client_args.setdefault("limits", default_limits)
+                    return sync_args, async_args
+
+                setattr(_patched_ensure_httpx_ssl_ctx, "_talkops_timeout_patched", True)
+                base_cls._ensure_httpx_ssl_ctx = staticmethod(_patched_ensure_httpx_ssl_ctx)  # type: ignore[method-assign]
+            _ensure_vertex_express_api_client_patch()
+            _GOOGLE_GENAI_HTTPX_PATCHED = True
+
+
+def _provider_timeout_kwargs(provider: str, model_kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    """Return finite default request timeout kwargs when no explicit timeout was configured."""
+    if any(k in model_kwargs for k in ("timeout", "request_timeout", "default_request_timeout")):
+        return {}
+    canon = canonicalize_provider(provider) if provider else ""
+    if canon in ("google_genai", "google", "google_vertexai") or provider in (
+        "google_genai",
+        "google",
+        "google_vertexai",
+    ):
+        return {"timeout": _DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS}
+    if canon in ("openai", "openai_codex", "azure_openai", "openrouter", "deepseek") or provider in (
+        "openai",
+        "openai_codex",
+        "azure_openai",
+        "openrouter",
+        "deepseek",
+    ):
+        return {"request_timeout": _DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS}
+    if canon in ("anthropic", "google_anthropic_vertex") or provider in (
+        "anthropic",
+        "google_anthropic_vertex",
+    ):
+        return {"default_request_timeout": _DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS}
+    return {}
 
 
 class _VertexProbeLogFilter(logging.Filter):
@@ -889,14 +1208,40 @@ def _ensure_vertex_express_api_client_patch() -> None:
         base_cls._request_once = _patched_request_once  # type: ignore[method-assign]
 
     if orig_async is not None and not getattr(orig_async, "_talkops_vertex_express_patched", False):
+        import asyncio
+
+        def _rebind_async_httpx_client_if_needed(client_self: Any, *, force: bool = False) -> None:
+            try:
+                cur_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            bound_loop = getattr(client_self, "_talkops_bound_loop", None)
+            if force or (bound_loop is not None and bound_loop is not cur_loop):
+                cur_client = getattr(client_self, "_async_httpx_client", None)
+                client_args = getattr(client_self, "_async_httpx_client_args", None)
+                if cur_client is not None and isinstance(client_args, dict):
+                    async def _noop_stale_aclose() -> None:
+                        return None
+
+                    with contextlib.suppress(Exception):
+                        setattr(cur_client, "aclose", _noop_stale_aclose)
+                    client_self._async_httpx_client = type(cur_client)(**client_args)
+            setattr(client_self, "_talkops_bound_loop", cur_loop)
+
         async def _patched_async_request_once(
             self: Any,
             http_request: Any,
             *args: Any,
             **kwargs: Any,
         ) -> Any:
+            _rebind_async_httpx_client_if_needed(self)
             try:
                 return await orig_async(self, http_request, *args, **kwargs)
+            except RuntimeError as rt_exc:
+                if "Event loop is closed" in str(rt_exc):
+                    _rebind_async_httpx_client_if_needed(self, force=True)
+                    return await orig_async(self, http_request, *args, **kwargs)
+                raise
             except _genai_errors.ClientError as exc:
                 if _rewrite_express_url_on_404(self, http_request, exc):
                     return await orig_async(self, http_request, *args, **kwargs)
@@ -908,19 +1253,30 @@ def _ensure_vertex_express_api_client_patch() -> None:
     _VERTEX_EXPRESS_CLIENT_PATCHED = True
 
 
-def _configure_vertex_express_model(model: BaseChatModel, api_key: str) -> None:
+def _configure_vertex_express_model(
+    model: BaseChatModel,
+    api_key: str,
+    *,
+    project: str | None = None,
+    location: str | None = None,
+) -> None:
     """Configure ChatGoogleGenerativeAI's underlying BaseApiClient for Vertex AI Express Mode."""
     _ensure_vertex_express_api_client_patch()
-    proj = _resolve_vertex_express_project(api_key)
+    proj = (
+        str(project).strip()
+        if (project and not _is_google_api_key_value(str(project)))
+        else _resolve_vertex_express_project(api_key)
+    )
     if not proj:
         return
+    loc = str(location).strip() if (location and str(location).strip()) else "global"
     for client_attr in ("client", "async_client"):
         client_obj = getattr(model, client_attr, None)
         api_client = getattr(client_obj, "_api_client", None) if client_obj is not None else None
         if api_client is not None and getattr(api_client, "vertexai", False) and getattr(api_client, "api_key", None):
             api_client.project = proj
-            if not getattr(api_client, "location", None):
-                api_client.location = "global"
+            if not getattr(api_client, "location", None) or location:
+                api_client.location = loc
 
 
 def _sanitize_content_for_ollama(content: Any) -> Any:
@@ -1082,6 +1438,9 @@ def create_model(
     if not model_spec:
         model_spec = _get_default_model_spec()
 
+    if model_spec and any(tok in model_spec.lower() for tok in ("google", "gemini", "vertex")):
+        _ensure_google_genai_httpx_transport()
+
     settings_effort = getattr(get_settings(), "reasoning_effort", None) or os.environ.get("TALKOPS_REASONING_EFFORT")
     cache_key = json.dumps(
         {
@@ -1205,11 +1564,12 @@ def create_model(
             kwargs.pop("thinking_budget", None)
         if explicitly_disabled or not supports_thoughts:
             kwargs.pop("include_thoughts", None)
-        with contextlib.suppress(Exception):
-            from google.genai import models as _genai_models
+        _ensure_google_genai_httpx_transport()
 
-            _genai_models.Models._logged_afc_warning = True
-            _genai_models.AsyncModels._logged_afc_warning = True
+    for retry_k, retry_v in _provider_retry_disable_kwargs(provider, kwargs).items():
+        kwargs.setdefault(retry_k, retry_v)
+    for timeout_k, timeout_v in _provider_timeout_kwargs(provider, kwargs).items():
+        kwargs.setdefault(timeout_k, timeout_v)
 
     config = ModelConfig.load()
     class_path = config.get_class_path(provider) if provider else None
@@ -1258,7 +1618,9 @@ def create_model(
         _ensure_ollama_message_compatibility(model)
     if provider:
         with contextlib.suppress(Exception):
-            from talkops.middleware.cost_tracking import _set_configured_provider_metadata
+            from talkops.middleware.cost_tracking import (
+                _set_configured_provider_metadata,
+            )
 
             _set_configured_provider_metadata(model, provider)
 

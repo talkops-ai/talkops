@@ -22,13 +22,14 @@ across canonical names, aliases, and bypass tiers.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
+
+import pytest
 
 from talkops.commands import discover_command_handlers
 from talkops.commands._base import BaseCommandHandler
-from talkops.commands._types import BypassTier
 from talkops.ui.command_registry import (
     COMMAND_DESCRIPTORS,
-    CommandDescriptor,
     CommandEntry,
     autocomplete_entries,
     command_lookup,
@@ -42,7 +43,7 @@ def test_command_descriptors_match_discovered_handlers() -> None:
     handlers = {handler.name for handler in discover_command_handlers()}
 
     assert descriptors == handlers
-    assert len(descriptors) == 50
+    assert len(descriptors) == 53
 
 
 def test_aliases_parity() -> None:
@@ -137,3 +138,68 @@ def test_get_command_resolution() -> None:
 
     # Unknown command
     assert get_command("/nonexistent_cmd_xyz") is None
+
+
+@pytest.mark.asyncio
+async def test_yolo_command_descriptor_and_handler() -> None:
+    """Verify /yolo command descriptor, handler, and StatusBar integration."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from talkops.approval_mode import ApprovalMode
+    from talkops.commands._base import CommandContext
+    from talkops.commands.power.ui_toggles import YoloApprovalHandler
+    from talkops.ui.widgets.status import StatusBar
+
+    desc = get_command("/yolo")
+    assert desc is not None
+    assert desc.name == "/yolo"
+    assert desc.description == "Switch to YOLO approval mode (no review)"
+    assert desc.handler_type is YoloApprovalHandler
+
+    mock_app = MagicMock()
+    mock_app._set_approval_mode = AsyncMock(return_value=True)
+    ctx = CommandContext(
+        app=mock_app,
+        session=None,
+        agent=None,
+        settings=MagicMock(),
+        raw_command="/yolo",
+        args="",
+    )
+    res = await YoloApprovalHandler().execute(ctx)
+    assert res.success is True
+    mock_app._set_approval_mode.assert_awaited_once_with(ApprovalMode.YOLO)
+
+    bar = StatusBar()
+    bar.set_approval_mode("yolo")
+    assert bar.approval_mode == "yolo"
+    assert bar.auto_approve is True
+
+
+@pytest.mark.asyncio
+async def test_tui_startup_and_yolo_toggle_integration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Verify TalkOpsApp mounts cleanly with check_workspace_trust=True and handles YoloModeNoticeScreen actions."""
+    from talkops.approval_mode import ApprovalMode, has_yolo_acknowledgement
+    from talkops.ui.app import TalkOpsApp
+    from talkops.ui.widgets.yolo_mode_notice import YoloModeNoticeScreen
+
+    ack_path = tmp_path / "approval.json"
+    monkeypatch.setattr("talkops.security.approval_mode.approval_state_path", lambda: ack_path)
+
+    app = TalkOpsApp(check_workspace_trust=True)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._approval_mode == ApprovalMode.MANUAL
+        await app._handle_command("/yolo")
+        await pilot.pause()
+        assert app._approval_mode == ApprovalMode.YOLO
+        assert isinstance(app.screen, YoloModeNoticeScreen)
+
+        # Press Enter to confirm YOLO mode on YoloModeNoticeScreen
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, YoloModeNoticeScreen)
+        assert app._approval_mode == ApprovalMode.YOLO
+        assert has_yolo_acknowledgement(ack_path) is True
+        assert app._status_bar is not None
+        assert app._status_bar.approval_mode == "yolo"

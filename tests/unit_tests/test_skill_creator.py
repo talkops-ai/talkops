@@ -23,8 +23,6 @@ import pytest
 from talkops.commands import CommandContext, CommandRouter
 from talkops.commands.power.skill_creator import SkillCreatorHandler
 from talkops.ui.command_registry import (
-    _STATIC_SKILL_ALIASES,
-    COMMANDS,
     build_skill_commands,
     get_all_entries,
     get_command,
@@ -248,8 +246,9 @@ def test_build_skill_commands_autocomplete_entries():
     assert aws_entry.description == "Sign in to AWS"
 
     all_entries = get_all_entries(entries)
-    all_names = [e.name for e in all_entries]
-    assert "/skill-creator" in all_names
-    assert "/skill:skill-creator" in all_names
-    assert "/aws-eks" in all_names
-    assert "/my-plugin:audit" in all_names
+    entries_by_name = {e.name: e for e in all_entries}
+    assert "/skill-creator" in entries_by_name
+    assert "/skill:skill-creator" not in entries_by_name
+    assert "/skill:skill-creator" in entries_by_name["/skill-creator"].aliases
+    assert "/aws-eks" in entries_by_name
+    assert "/my-plugin:audit" in entries_by_name

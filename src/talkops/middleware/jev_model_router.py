@@ -35,7 +35,7 @@ from langchain.agents.middleware.types import (
     ResponseT,
 )
 from langchain_core.callbacks.manager import adispatch_custom_event
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_typesafe import ChoiceAnswer, ClassifierRequest, TypeSafeClassifier
 from langchain_typesafe.experimental.middleware import (
     ModelChoice,
@@ -70,6 +70,7 @@ def _resolve_active_capabilities(
     explicit_capabilities: Sequence[Any] | None = None,
     subagent_meta: Mapping[str, Any] | None = None,
     available_subagents: Sequence[str] | None = None,
+    available_subagent_metas: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[str]:
     """Filter out active capabilities specific to the orchestrator or subagent."""
     capabilities: list[str] = []
@@ -82,18 +83,42 @@ def _resolve_active_capabilities(
             "system_synthesis_and_reporting",
             "workspace_and_git_inspection",
         ])
-        # Dynamic capabilities derived from available subagents in ecosystem
-        avail = [s.lower() for s in (available_subagents or [])]
-        if any("finops" in s or "cost" in s or "billing" in s for s in avail):
+        # Dynamic capabilities derived from available subagents and plugin metadata
+        corpus_tokens: list[str] = [s.lower() for s in (available_subagents or [])]
+        has_plugin = False
+        for m in available_subagent_metas or ():
+            if m.get("is_plugin") or "@" in str(m.get("name", "")) or "plugin" in str(m.get("source", "")).lower():
+                has_plugin = True
+            for field_val in (m.get("name"), m.get("description")):
+                if isinstance(field_val, str) and field_val:
+                    corpus_tokens.append(field_val.lower())
+            for list_key in ("keywords", "mcp_servers"):
+                seq = m.get(list_key)
+                if isinstance(seq, Sequence) and not isinstance(seq, (str, bytes)):
+                    corpus_tokens.extend(str(x).lower() for x in seq if x)
+
+        if has_plugin or any("@" in s for s in (available_subagents or [])):
+            capabilities.append("plugin_subagent_js_eval_orchestration")
+        if any(tok in s for s in corpus_tokens for tok in ("finops", "cost", "billing", "spend")):
             capabilities.append("finops_cost_optimization")
-        if any("sre" in s or "incident" in s or "monitor" in s for s in avail):
+        if any(
+            tok in s
+            for s in corpus_tokens
+            for tok in ("sre", "incident", "monitor", "observability", "telemetry", "metrics", "logs", "traces", "alert")
+        ):
             capabilities.append("sre_incident_triage")
-        if any("iac" in s or "terraform" in s for s in avail):
+        if any(tok in s for s in corpus_tokens for tok in ("iac", "terraform", "opentofu", "pulumi", "cloudformation")):
             capabilities.append("iac_modular_refactoring")
-        if any("security" in s or "secops" in s or "iam" in s for s in avail):
+        if any(tok in s for s in corpus_tokens for tok in ("security", "secops", "iam", "compliance", "policy")):
             capabilities.append("security_and_compliance_governance")
-        if any("deploy" in s or "release" in s for s in avail):
+        if any(
+            tok in s
+            for s in corpus_tokens
+            for tok in ("deploy", "release", "delivery", "rollout", "gitops", "helm", "argocd", "canary")
+        ):
             capabilities.append("deployment_and_rollout_orchestration")
+        if any("browser" in s or "web" in s for s in (available_subagents or [])):
+            capabilities.append("browser_web_automation")
         return capabilities
 
     # Subagent Specialist Capabilities (strictly domain-scoped, never includes multi_agent_delegation)
@@ -131,6 +156,11 @@ def _resolve_active_capabilities(
             "security_policy_evaluation",
             "least_privilege_audit",
         ])
+    elif "browser" in name_lower or any(t in {"snapshot", "screenshot", "browser_handoff"} for t in meta_tools):
+        capabilities.extend([
+            "browser_web_automation",
+            "multimodal_dom_and_visual_inspection",
+        ])
     else:
         clean_name = name_lower.split("@")[0].replace("-", "_") if name_lower else "domain"
         capabilities.append(f"{clean_name}_specialist_execution")
@@ -158,8 +188,23 @@ def _apply_confidence_safeguards(
     confidence: float,
     user_text: str,
     is_subagent: bool,
+    *,
+    is_webhook_incident: bool = False,
+    has_plugin_subagents: bool = False,
 ) -> str:
     """Escalate model selection when Jev classification confidence falls below acceptable thresholds."""
+    # Autonomous webhook / incident RCA runs on the main orchestrator with installed
+    # plugin subagents require multi-agent js_eval orchestration + 5-section RCA synthesis.
+    if is_webhook_incident and not is_subagent:
+        if has_plugin_subagents and selected_route != "powerful":
+            logger.info(
+                "Jev Safety Escalation: Webhook incident RCA with installed plugin subagents -> Escalating from '%s' to 'powerful'",
+                selected_route,
+            )
+            return "powerful"
+        if selected_route == "fast":
+            return "standard"
+
     if confidence >= 0.55:
         return selected_route
 
@@ -217,8 +262,19 @@ def _build_jev_routing_state(
     agent_name = subagent_name or str(ctx.get("subagent_name") or "") or ("subagent" if is_subagent else "talkops-supervisor")
 
     subagent_names: list[str] = []
+    subagent_metas_list: list[Mapping[str, Any]] = []
     subagent_ecosystem: list[str] | None = None
     sub_meta: Mapping[str, Any] | None = None
+
+    from pathlib import Path
+
+    raw_proj_root = (
+        ctx.get("project_root")
+        or ctx.get("cwd")
+        or os.environ.get("TALKOPS_SERVER_PROJECT_ROOT")
+        or os.environ.get("TALKOPS_SERVER_CWD")
+    )
+    effective_proj_root = Path(str(raw_proj_root)) if raw_proj_root else None
 
     if is_subagent:
         # Subagent ecosystem is strictly None (nil) for subagents
@@ -226,7 +282,7 @@ def _build_jev_routing_state(
         try:
             from talkops.subagents.loader import list_subagents
 
-            for meta in list_subagents():
+            for meta in list_subagents(project_root=effective_proj_root):
                 m_name = meta.get("name")
                 if m_name and (m_name == agent_name or m_name.startswith(agent_name) or agent_name.startswith(m_name.split("@")[0])):
                     sub_meta = meta
@@ -237,10 +293,11 @@ def _build_jev_routing_state(
         try:
             from talkops.subagents.loader import list_subagents
 
-            for meta in list_subagents():
+            for meta in list_subagents(project_root=effective_proj_root):
                 n = meta.get("name")
                 if n and n not in subagent_names:
                     subagent_names.append(n)
+                    subagent_metas_list.append(meta)
         except Exception:
             pass
         subagent_ecosystem = subagent_names[:8]
@@ -251,16 +308,27 @@ def _build_jev_routing_state(
         explicit_capabilities=explicit_capabilities,
         subagent_meta=sub_meta,
         available_subagents=subagent_names,
+        available_subagent_metas=subagent_metas_list,
     )
+
+    is_webhook_incident = False
+    try:
+        from talkops.middleware.webhook_sre import is_webhook_sre_turn
+
+        msg_text = user_msg.content if isinstance(user_msg.content, str) else str(user_msg.content)
+        if msg_text.lstrip().startswith(("[WEBHOOK ALERT]", "[INCIDENT ALERT]", "[CHANNEL ALERT]")):
+            is_webhook_incident = True
+        elif ctx.get("webhook_provider") or ctx.get("webhook_incident_id") or str(ctx.get("source_addon") or "").lower() == "webhooks":
+            is_webhook_incident = is_webhook_sre_turn(runtime=runtime, messages=[user_msg])
+    except Exception:
+        pass
 
     has_tf = False
     has_k8s = False
     try:
-        from pathlib import Path
-
-        cwd = Path.cwd()
+        cwd = effective_proj_root if (effective_proj_root and effective_proj_root.is_dir()) else Path.cwd()
         has_tf = bool(list(cwd.glob("*.tf")) or (cwd / "terraform").is_dir())
-        has_k8s = bool((cwd / "k8s").is_dir() or (cwd / "templates").is_dir() or list(cwd.glob("*.yaml")))
+        has_k8s = bool((cwd / "k8s").is_dir() or (cwd / "manifests").is_dir() or (cwd / "templates").is_dir() or list(cwd.glob("*.yaml")))
     except Exception:
         pass
 
@@ -283,12 +351,64 @@ def _build_jev_routing_state(
             "role": agent_role,
             "agent_name": agent_name,
             "is_subagent": is_subagent,
+            "is_webhook_incident": is_webhook_incident,
             "available_subagents": subagent_ecosystem,
             "active_capabilities": active_capabilities,
             "workspace_profile": workspace_profile,
         },
     }
     return routing_state
+
+
+def _patch_system_message_model_identity(
+    system_message: Any,
+    *,
+    model_name: str,
+    provider: str,
+) -> SystemMessage | None:
+    """Update `### Model Identity` in *system_message* to match Jev's dynamically routed model."""
+    if not isinstance(system_message, SystemMessage) or not model_name:
+        return None
+    try:
+        from talkops.model.config import get_model_profile
+        from talkops.prompts import MODEL_IDENTITY_RE, build_model_identity_section
+
+        spec = f"{provider}:{model_name}" if provider else model_name
+        profile = get_model_profile(spec)
+        ctx_limit = getattr(profile, "max_input_tokens", None) if profile else None
+        new_identity = build_model_identity_section(
+            model_name,
+            provider=provider or None,
+            context_limit=ctx_limit,
+        )
+
+        content = getattr(system_message, "content", None)
+        if isinstance(content, str):
+            match = MODEL_IDENTITY_RE.search(content)
+            if match is not None:
+                patched = content[: match.start()] + new_identity + content[match.end() :]
+                if patched != content:
+                    return SystemMessage(content=patched)
+            return None
+
+        blocks = list(getattr(system_message, "content_blocks", None) or [])
+        changed = False
+        new_blocks: list[Any] = []
+        for blk in blocks:
+            if isinstance(blk, Mapping) and blk.get("type") == "text" and isinstance(blk.get("text"), str):
+                txt = blk["text"]
+                match = MODEL_IDENTITY_RE.search(txt)
+                if match is not None:
+                    patched = txt[: match.start()] + new_identity + txt[match.end() :]
+                    if patched != txt:
+                        blk = {**blk, "text": patched}
+                        changed = True
+            new_blocks.append(blk)
+        if changed:
+            return SystemMessage(content_blocks=new_blocks)
+    except Exception:
+        pass
+    return None
 
 
 def _split_spec(spec: str) -> tuple[str, str]:
@@ -833,6 +953,16 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
 
         try:
             ctx = _extract_runtime_context(runtime)
+            if (
+                ctx.get("explicit_model") is True
+                or os.environ.get("TALKOPS_SERVER_EXPLICIT_MODEL", "").lower() == "true"
+            ):
+                logger.debug("Jev Dynamic Router: explicit CLI model pinned (-M); skipping dynamic model replacement.")
+                if isinstance(state, Mapping) and (
+                    state.get("model_route") is not None or state.get("_dynamic_model_route") is not None
+                ):
+                    return {"model_route": None, "_dynamic_model_route": None}
+                return None
             base_spec = self._get_base_spec(ctx)
 
             is_subagent = bool(
@@ -884,12 +1014,26 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
             selected_route = choice_answer.choice
             confidence = getattr(choice_answer, "confidence", 1.0)
 
+            agent_ctx = routing_state.get("agent_context") if isinstance(routing_state, Mapping) else {}
+            active_caps = agent_ctx.get("active_capabilities", []) if isinstance(agent_ctx, Mapping) else []
+            is_webhook_inc = bool(agent_ctx.get("is_webhook_incident")) if isinstance(agent_ctx, Mapping) else False
+            has_plugins = "plugin_subagent_js_eval_orchestration" in active_caps or bool(
+                isinstance(state, Mapping)
+                and isinstance(state.get("_subagent_registry"), Mapping)
+                and any(
+                    isinstance(v, Mapping) and v.get("is_plugin")
+                    for v in state["_subagent_registry"].values()
+                )
+            )
+
             # Apply confidence calibration & safeguards
             calibrated_route = _apply_confidence_safeguards(
                 selected_route=selected_route,
                 confidence=confidence,
                 user_text=user_text,
                 is_subagent=is_subagent,
+                is_webhook_incident=is_webhook_inc,
+                has_plugin_subagents=has_plugins,
             )
             if calibrated_route != selected_route:
                 logger.info(
@@ -1028,6 +1172,11 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
             selected_route = TIER_TO_ROUTE_MAP.get(dyn_route.get("tier", 1))
 
         ctx = _extract_runtime_context(runtime)
+        if (
+            ctx.get("explicit_model") is True
+            or os.environ.get("TALKOPS_SERVER_EXPLICIT_MODEL", "").lower() == "true"
+        ):
+            return await handler(request)
         base_spec = self._get_base_spec(ctx)
         is_subagent = bool(
             self._subagent_name is not None
@@ -1089,10 +1238,18 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
                 )
         if provider != "anthropic" and "cache_control" in merged_settings:
             merged_settings = {k: v for k, v in merged_settings.items() if k != "cache_control"}
-        updated_request = request.override(
-            model=selected_model or chat_model,
-            model_settings=merged_settings,
+        override_kwargs: dict[str, Any] = {
+            "model": selected_model or chat_model,
+            "model_settings": merged_settings,
+        }
+        patched_sys = _patch_system_message_model_identity(
+            getattr(request, "system_message", None),
+            model_name=model_name,
+            provider=provider,
         )
+        if patched_sys is not None:
+            override_kwargs["system_message"] = patched_sys
+        updated_request = request.override(**override_kwargs)
         return await handler(updated_request)
 
     def wrap_model_call(
@@ -1119,6 +1276,11 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
             selected_route = TIER_TO_ROUTE_MAP.get(dyn_route.get("tier", 1))
 
         ctx = _extract_runtime_context(runtime)
+        if (
+            ctx.get("explicit_model") is True
+            or os.environ.get("TALKOPS_SERVER_EXPLICIT_MODEL", "").lower() == "true"
+        ):
+            return handler(request)
         base_spec = self._get_base_spec(ctx)
         is_subagent = bool(
             self._subagent_name is not None
@@ -1180,10 +1342,18 @@ class JevDynamicModelRouterMiddleware(AgentMiddleware[Any, Any]):
                 )
         if provider != "anthropic" and "cache_control" in merged_settings:
             merged_settings = {k: v for k, v in merged_settings.items() if k != "cache_control"}
-        updated_request = request.override(
-            model=selected_model or chat_model,
-            model_settings=merged_settings,
+        override_kwargs: dict[str, Any] = {
+            "model": selected_model or chat_model,
+            "model_settings": merged_settings,
+        }
+        patched_sys = _patch_system_message_model_identity(
+            getattr(request, "system_message", None),
+            model_name=model_name,
+            provider=provider,
         )
+        if patched_sys is not None:
+            override_kwargs["system_message"] = patched_sys
+        updated_request = request.override(**override_kwargs)
         return handler(updated_request)
 
 

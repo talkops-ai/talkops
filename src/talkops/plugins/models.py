@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,9 +24,71 @@ JsonObject = dict[str, Any]
 JsonValue = Any
 
 MarketplaceSourceType = Literal["directory", "file", "github", "git", "url"]
-InstallScope = Literal["global", "user", "team", "project", "local"]
+InstallScope = Literal["global", "user", "team", "project", "local", "workspace"]
 ExternalPluginRepositorySourceType = Literal["github", "git-subdir", "url"]
-UnsupportedComponent = Literal["hooks"]
+UnsupportedComponent = str
+ExecutionTrustProfile = Literal[
+    "readonly-metadata",
+    "gitops-pr",
+    "hitl-gated",
+    "autonomous-tnr",
+]
+
+EXECUTION_PROFILE_RESTRICTIVENESS: dict[ExecutionTrustProfile, int] = {
+    "readonly-metadata": 4,
+    "gitops-pr": 3,
+    "hitl-gated": 2,
+    "autonomous-tnr": 1,
+}
+
+
+def normalize_execution_profile(
+    raw: str | None,
+    *,
+    default: ExecutionTrustProfile = "hitl-gated",
+) -> ExecutionTrustProfile:
+    """Normalize an execution trust profile name (supporting ``watson-readonly`` alias)."""
+    if not isinstance(raw, str) or not raw.strip():
+        return default
+    cleaned = raw.strip().lower().replace("_", "-")
+    if cleaned in ("watson-readonly", "readonly-metadata", "watson", "read-only-metadata"):
+        return "readonly-metadata"
+    if cleaned in ("gitops-pr", "gitops"):
+        return "gitops-pr"
+    if cleaned in ("hitl-gated", "hitl", "manual"):
+        return "hitl-gated"
+    if cleaned in ("autonomous-tnr", "autonomous", "tnr"):
+        return "autonomous-tnr"
+    return default
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PluginWorkflowsSpec:
+    """Typed workflow declarations in Plugin Manifest v2.1."""
+
+    preflight: Path | None = None
+    post_remediation: Path | None = None
+    scheduled: Path | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PluginRubricsSpec:
+    """Two-stage AutoQA rubric declarations in Plugin Manifest v2.1."""
+
+    deterministic_gates: Path | None = None
+    scorecard: Path | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PluginPoliciesSpec:
+    """Graduated execution trust & scope policies in Plugin Manifest v2.1."""
+
+    default_execution_profile: ExecutionTrustProfile = "hitl-gated"
+    metadata_only_datastores: bool = False
+    egress_allowlist: tuple[str, ...] = ()
+    scope_guards: Path | None = None
+    companion_checklists: Path | None = None
+    escalation_rules: Path | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -59,29 +121,76 @@ MarketplaceSource = LocalMarketplaceSource | RepositoryMarketplaceSource | UrlMa
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PluginManifest:
-    """Parsed plugin manifest."""
+    """Parsed plugin manifest (supports v1.0 and v2.1 SRE capabilities)."""
 
     name: str | None
     version: str | None = "1.0.0"
+    schema_version: str = "1.0"
     display_name: str | None = None
     description: str | None = None
     author: str | JsonObject | None = None
-    component_paths: dict[str, tuple[Path, ...]] = ()  # type: ignore[assignment]
-    inline_mcp: JsonObject = ()  # type: ignore[assignment]
+    disabled: bool = False
+    keywords: tuple[str, ...] = ()
+    environments: tuple[str, ...] = ()
+    component_paths: dict[str, tuple[Path, ...]] = field(default_factory=dict)
+    inline_mcp: JsonObject = field(default_factory=dict)
+    mcp_lockfile: Path | None = None
+    workflows: PluginWorkflowsSpec = field(default_factory=PluginWorkflowsSpec)
+    rubrics: PluginRubricsSpec = field(default_factory=PluginRubricsSpec)
+    policies: PluginPoliciesSpec = field(default_factory=PluginPoliciesSpec)
+    simulations_paths: tuple[Path, ...] = ()
     agents_dir: Path | None = None
     skills_dir: Path | None = None
-    mcp_config: JsonObject = ()  # type: ignore[assignment]
-    hooks_config: JsonObject = ()  # type: ignore[assignment]
+    mcp_config: JsonObject = field(default_factory=dict)
+    hooks_config: JsonObject = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PluginManifest:
         """Create a PluginManifest from a dictionary."""
+        raw_schema = data.get("schemaVersion") or data.get("schema_version") or "1.0"
+        raw_envs = data.get("environments")
+        envs = (
+            tuple(str(e).strip() for e in raw_envs if isinstance(e, str) and e.strip())
+            if isinstance(raw_envs, (list, tuple))
+            else ()
+        )
+        raw_policies = data.get("policies") if isinstance(data.get("policies"), dict) else {}
+        profile = normalize_execution_profile(
+            raw_policies.get("defaultExecutionProfile") or raw_policies.get("default_execution_profile")
+        )
+        raw_egress = raw_policies.get("egressAllowlist") or raw_policies.get("egress_allowlist")
+        egress = (
+            tuple(str(h).strip() for h in raw_egress if isinstance(h, str) and h.strip())
+            if isinstance(raw_egress, (list, tuple))
+            else ()
+        )
+        policies = PluginPoliciesSpec(
+            default_execution_profile=profile,
+            metadata_only_datastores=bool(
+                raw_policies.get(
+                    "metadataOnlyDatastores",
+                    raw_policies.get("metadata_only_datastores", profile == "readonly-metadata"),
+                )
+            ),
+            egress_allowlist=egress,
+        )
+        raw_keywords = data.get("keywords")
+        keywords = (
+            tuple(str(k).strip() for k in raw_keywords if isinstance(k, str) and k.strip())
+            if isinstance(raw_keywords, (list, tuple))
+            else ()
+        )
         return cls(
             name=data.get("name"),
             version=data.get("version", "1.0.0"),
-            display_name=data.get("display_name"),
+            schema_version=str(raw_schema),
+            display_name=data.get("displayName") or data.get("display_name"),
             description=data.get("description"),
             author=data.get("author"),
+            disabled=bool(data.get("disabled", False)),
+            keywords=keywords,
+            environments=envs,
+            policies=policies,
         )
 
 
@@ -93,6 +202,11 @@ class ComponentInventory:
     mcp_files: tuple[Path, ...] = ()
     agents: tuple[Path, ...] = ()
     commands: tuple[Path, ...] = ()
+    hooks_files: tuple[Path, ...] = ()
+    simulations: tuple[Path, ...] = ()
+    workflows: dict[str, Path] = field(default_factory=dict)
+    rubrics: dict[str, Path] = field(default_factory=dict)
+    mcp_lockfile: Path | None = None
     unsupported: tuple[UnsupportedComponent, ...] = ()
     warnings: tuple[str, ...] = ()
 
@@ -186,17 +300,22 @@ class PluginInstance:
         return self.root
 
     @property
+    def scope(self) -> InstallScope:
+        """Return the installation or discovery scope of this plugin."""
+        return self.source
+
+    @property
+    def is_workspace_plugin(self) -> bool:
+        """Return True if this plugin was discovered directly from the active workspace."""
+        return self.source == "workspace" or self.marketplace == "project"
+
+    @property
     def is_agent_plugin(self) -> bool:
         """Return True if this plugin provides autonomous agents (agent-based plugin)."""
         if self.inventory.agents:
-            return any(
-                (p.is_dir() and any(p.glob("*.md"))) or (p.is_file() and p.suffix == ".md")
-                for p in self.inventory.agents
-                if p.exists()
-            )
+            return any(_dir_or_file_has_agent_md(p) for p in self.inventory.agents if p.exists())
         if self.root and isinstance(self.root, Path):
-            agents_dir = self.root / "agents"
-            return agents_dir.is_dir() and any(agents_dir.glob("*.md"))
+            return is_agent_plugin_dir(self.root)
         return False
 
     @property
@@ -215,10 +334,26 @@ class PluginInstance:
         return not self.is_agent_plugin and not self.is_partner_plugin and bool(self.inventory.skills)
 
 
+def _dir_or_file_has_agent_md(path: Path) -> bool:
+    """Return True if ``path`` is an agent markdown file or a directory containing agent markdown definitions."""
+    try:
+        if path.is_file():
+            return path.suffix.lower() == ".md"
+        if path.is_dir():
+            if any(path.glob("*.md")):
+                return True
+            return any(
+                child.is_dir() and any(child.glob("*.md"))
+                for child in path.iterdir()
+            )
+    except OSError:
+        return False
+    return False
+
+
 def is_agent_plugin_dir(plugin_dir: Path) -> bool:
     """Return True if a plugin directory contains an agents/ component with markdown definitions."""
-    agents_dir = plugin_dir / "agents"
-    return agents_dir.is_dir() and any(agents_dir.glob("*.md"))
+    return _dir_or_file_has_agent_md(plugin_dir / "agents")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

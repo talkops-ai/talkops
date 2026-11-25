@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Static
+from textual.containers import VerticalScroll
+from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from talkops.ui.widgets.modal_base import PillTabs
@@ -382,3 +384,202 @@ async def test_refresh_single_marketplace_shows_intermediate_status_and_complete
             assert screen._is_refreshing_marketplaces is False
             assert "Marketplace refreshed" in str(screen._status)
             assert "Marketplace refreshed" in str(status_widget.content)
+
+
+@pytest.mark.asyncio
+async def test_large_plugin_details_keep_install_scope_and_uninstall_options_visible() -> None:
+    """Regression test: rich plugin manifests must not push Install/Uninstall options off-screen."""
+    long_description = (
+        "Principal Kubernetes Application Onboarding, GitOps & Progressive Delivery Engineer: "
+        "end-to-end workload packaging and release management with Helm (chart discovery, values "
+        "validation, security scanning, atomic upgrades, rollbacks), GitOps continuous delivery "
+        "with ArgoCD (repository/project onboarding, sync orchestration, drift remediation, "
+        "history rollbacks), progressive delivery with Argo Rollouts (Deployment-to-Rollout "
+        "migration, canary/blue-green strategies, Prometheus AnalysisTemplate gating, experiments), "
+        "multi-stage freight promotion pipelines with Kargo (Warehouse discovery, Stage DAGs, "
+        "freight promotion/approval, stage verification), and ingress/traffic routing with "
+        "Traefik v3 (HTTP/TCP/UDP IngressRoutes, weighted canary services, traffic mirroring, "
+        "middlewares, TLS/mTLS policies, NGINX annotation migration, and security posture auditing)."
+    )
+    many_skills = tuple(f"kubernetes-delivery-skill-{idx:02d}-long-identifier" for idx in range(24))
+
+    discover_row = _PluginRow(
+        plugin_id="kubernetes-observability-engineer@talkops-devops-plugins",
+        description=long_description,
+        enabled=False,
+        version="0.2.0",
+        author="TalkOps",
+        display_name="Kubernetes Observability Engineer",
+        skill_count=len(many_skills),
+        agent_names=("kubernetes-observability-engineer",),
+        skill_names=many_skills,
+        command_names=("alerts", "metrics", "traces", "logs"),
+        mcp_server_names=("prometheus", "alertmanager", "tempo", "loki"),
+    )
+    installed_row = _PluginRow(
+        plugin_id="kubernetes-delivery-engineer@talkops-devops-plugins",
+        description=long_description,
+        enabled=False,
+        version="0.2.0",
+        author="TalkOps",
+        display_name="Kubernetes Delivery Engineer",
+        scope="local",
+        project_path="/tmp/devops-codebase",
+        skill_count=len(many_skills),
+        agent_names=("kubernetes-delivery-engineer",),
+        skill_names=many_skills,
+        command_names=("canary", "deploy", "onboard", "rollback"),
+        mcp_server_names=("helm", "argocd", "argo-rollout", "kargo", "traefik"),
+    )
+    rich_state = _ManagerState(
+        available_plugins=(discover_row,),
+        installed_plugins=(installed_row,),
+        marketplaces=(
+            _MarketplaceRow(
+                name="talkops-devops-plugins",
+                source="local",
+                plugin_count=2,
+                installed_count=1,
+            ),
+        ),
+        errors=(),
+    )
+
+    screen = PluginManagerScreen(project_root=Path("/tmp/devops-codebase"))
+
+    class SelectEvent:
+        """Synthetic OptionList selection event."""
+
+        def __init__(self, opt_id: str) -> None:
+            self.option = Option(opt_id, id=opt_id)
+
+    with patch("talkops.ui.widgets.plugin_manager._load_manager_state", return_value=rich_state):
+        app = DummyModalApp(screen)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            assert screen.dialog is not None
+
+            # 1. Discover -> Install details must keep user/project/local scope options on-screen
+            await screen.on_option_list_option_selected(
+                cast(Any, SelectEvent(f"detail:{discover_row.plugin_id}"))
+            )
+            await pilot.pause()
+
+            options = screen.query_one("#plugin-manager-options", OptionList)
+            details_scroll = screen.query_one("#plugin-manager-details-scroll", VerticalScroll)
+
+            option_ids = [options.get_option_at_index(i).id for i in range(options.option_count)]
+            assert option_ids == [
+                "action:install-user",
+                "action:install-project",
+                "action:install-local",
+                "details-back",
+            ]
+            option_prompts = [
+                str(options.get_option_at_index(i).prompt) for i in range(options.option_count)
+            ]
+            assert any("user / global" in p for p in option_prompts)
+            assert any("project scope" in p for p in option_prompts)
+            assert any("workspace" in p and "local scope" in p for p in option_prompts)
+
+            assert options.display is True
+            assert options.highlighted == 0
+            assert options.region.height >= 4
+            assert options.region.y >= screen.dialog.region.y
+            assert options.region.bottom <= screen.dialog.region.bottom
+
+            # Details body overflows inside its scroll container and PgDn scrolls it without losing option focus
+            assert details_scroll.max_scroll_y > 0
+            await pilot.press("pagedown")
+            await pilot.pause()
+            assert details_scroll.scroll_y > 0
+            assert options.has_focus
+
+            # Return to list and open Installed -> plugin details
+            screen.action_cancel()
+            await pilot.pause()
+            screen._select_tab("installed")
+            await pilot.pause()
+
+            await screen.on_option_list_option_selected(
+                cast(Any, SelectEvent(f"installed:{installed_row.plugin_id}"))
+            )
+            await pilot.pause()
+
+            installed_option_ids = [
+                options.get_option_at_index(i).id for i in range(options.option_count)
+            ]
+            assert "action:toggle-enabled" in installed_option_ids
+            assert "action:uninstall" in installed_option_ids
+            assert "details-back" in installed_option_ids
+
+            assert options.display is True
+            assert options.highlighted == 0
+            assert options.region.height >= 4
+            assert options.region.y >= screen.dialog.region.y
+            assert options.region.bottom <= screen.dialog.region.bottom
+
+
+@pytest.mark.asyncio
+async def test_installed_details_toggle_enabled_updates_selected_plugin_row() -> None:
+    """Toggling Enable/Disable in installed_details updates Status and button label immediately."""
+    disabled_row = _PluginRow(
+        plugin_id="kubernetes-delivery-engineer@talkops-devops-plugins",
+        description="Kubernetes delivery plugin.",
+        enabled=False,
+        version="0.2.0",
+        author="TalkOps",
+        display_name="Kubernetes Delivery Engineer",
+        scope="local",
+        project_path="/tmp/devops-codebase",
+    )
+    enabled_row = _PluginRow(
+        plugin_id="kubernetes-delivery-engineer@talkops-devops-plugins",
+        description="Kubernetes delivery plugin.",
+        enabled=True,
+        version="0.2.0",
+        author="TalkOps",
+        display_name="Kubernetes Delivery Engineer",
+        scope="local",
+        project_path="/tmp/devops-codebase",
+    )
+    states = [
+        _ManagerState(available_plugins=(), installed_plugins=(disabled_row,), marketplaces=(), errors=()),
+        _ManagerState(available_plugins=(), installed_plugins=(enabled_row,), marketplaces=(), errors=()),
+    ]
+
+    screen = PluginManagerScreen(project_root=Path("/tmp/devops-codebase"))
+
+    class SelectEvent:
+        """Synthetic OptionList selection event."""
+
+        def __init__(self, opt_id: str) -> None:
+            self.option = Option(opt_id, id=opt_id)
+
+    with (
+        patch("talkops.ui.widgets.plugin_manager._load_manager_state", side_effect=states),
+        patch("talkops.ui.widgets.plugin_manager.set_installed_plugin_enabled"),
+    ):
+        app = DummyModalApp(screen)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            screen._select_tab("installed")
+            await pilot.pause()
+
+            await screen.on_option_list_option_selected(
+                cast(Any, SelectEvent(f"installed:{disabled_row.plugin_id}"))
+            )
+            await pilot.pause()
+
+            options = screen.query_one("#plugin-manager-options", OptionList)
+            assert str(options.get_option_at_index(0).prompt) == "Enable plugin"
+
+            await screen.on_option_list_option_selected(
+                cast(Any, SelectEvent("action:toggle-enabled"))
+            )
+            await pilot.pause()
+
+            assert screen._selected_plugin is not None
+            assert screen._selected_plugin.enabled is True
+            assert str(options.get_option_at_index(0).prompt) == "Disable plugin"
+

@@ -49,8 +49,8 @@ When generating a requested report:
 4. DO NOT re-summarize the entire report in your text response. Simply provide the file path and highlight the top 2 critical findings.
 
 ## Context Management & Summarization
-- You are equipped with automatic context compaction and the `compact_conversation` tool.
-- If your delegated task requires extensive exploration, executing many CLI/API commands, or reading large files, older turns are automatically summarized into concise milestones and offloaded to `/conversation_history/` on the workspace backend to preserve your context window.
+- You are equipped with automatic harness-driven context compaction.
+- If your delegated task requires extensive exploration, executing many CLI/API commands, or reading large files, older turns are automatically summarized into concise milestones and offloaded to `/conversation_history/` and `.system_generated/logs/transcript.jsonl` on the workspace backend to preserve your context window.
 - When delivering your final result back to the orchestrator, provide a crisp, direct summary of your actions, discovered findings, and modified resources so the parent agent has immediate clarity.
 """
 

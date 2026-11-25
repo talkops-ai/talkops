@@ -9,18 +9,20 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "anyio>=4.14.2",
     "boto3>=1.43.51",
-    "deepagents[quickjs]>=0.7.29",
+    "cryptography>=42.0.0",
+    "deepagents[quickjs,video]>=0.7.29",
     "deepagents-acp>=0.0.9",
     "filelock>=3.18.0",
     "httpx>=0.28.1",
     "langchain>=1.3.14",
     "langchain-core>=1.5.3",
-    "langchain-mcp-adapters>=0.3.0",
+    "langchain-mcp-adapters>=0.3.2",
     "langchain-openai>=1.4.1",
     "langchain-anthropic>=1.5.3",
     "google-genai>=2.33.0",
     "langchain-google-genai>=4.4.2",
     "langgraph>=1.2.10",
+    "langgraph-api>=0.17.8",
     "langgraph-cli[inmem]>=0.4.31",
     "langgraph-checkpoint-sqlite>=3.1.0",
     "langgraph-checkpoint-postgres>=2.0.16",
@@ -28,7 +30,7 @@ dependencies = [
     "langsmith>=0.10.6",
     "markdown-it-py>=4.2.0",
     "markdownify>=1.2.3",
-    "mcp>=1.28.1",
+    "mcp>=1.28.1,<2.0.0",
     "packaging>=26.2",
     "pillow>=12.3.0",
     "pydantic>=2.13.4",
@@ -40,6 +42,7 @@ dependencies = [
     "requests>=2.34.2",
     "rich>=15.0.0",
     "rich-pixels>=3.0.0",
+    "starlette>=0.40.0",
     "tavily-python>=0.7.26",
     "textual>=8.2.8",
     "textual-image>=0.14.1",
@@ -84,6 +87,7 @@ dependencies = [
     "langchain-agentcore-codeinterpreter>=0.0.5",
     "langchain-vercel-sandbox>=0.0.2",
     "vercel>=0.5.9",
+    "langchain-stagehand>=0.0.1",
 ]
 
 [project.optional-dependencies]
@@ -149,6 +153,11 @@ dev = [
     "pytest-cov>=5.0",
     "agentevals>=0.0.8",
     "langsmith>=0.10.6",
+    "vcrpy>=9.4.2",
+    "pytest-recording>=0.15.0",
+    "openevals>=0.2.0",
+    "judgy>=0.1.0",
+    "python-dotenv>=1.2.3",
 ]
 
 [project.scripts]
@@ -170,6 +179,7 @@ exclude = [
 exclude = [
     "src/talkops/benchmarks",
     "src/talkops/cli/commands/benchmark.py",
+    "tests/evals",
 ]
 
 [tool.pyright]
@@ -186,13 +196,19 @@ python-interpreter-path = ".venv/bin/python"
 site-package-path = [".venv/lib/python3.12/site-packages"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit_tests"]
 pythonpath = ["src", "."]
 asyncio_mode = "auto"
 markers = [
     "unit: Fast deterministic unit tests (no API keys needed)",
     "integration: Tests requiring real LLM APIs and external services",
     "eval: Agent behavior evaluation tests with LangSmith datasets",
+    "eval_regression: Solved-behavior scenario regression gate (~100% expected pass rate)",
+    "eval_capability: Challenging hill-climbing capability scenario eval",
+    "eval_scope(name): Five-Scope isolation boundary (router_logic, single_node, partial_subflow, deep_agent_outcome, multiturn_simulation)",
+    "eval_category(name): Scenario capability domain (tool_use, retrieval, file_operations, memory, conversation, summarization, profile_isolation, guardrails, graph_routing, webhook_rca, calibration)",
+    "serve_profile(name): Target talkops serve profile(s) under test (default, api-only, webhook-worker, sre, enterprise-full)",
+    "postgres: Requires TALKOPS_EVAL_POSTGRES_URI for PostgreSQL operational store & checkpointer eval",
 ]
 
 [tool.ruff]

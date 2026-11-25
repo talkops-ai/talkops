@@ -27,7 +27,6 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from talkops.middleware.tool_filter import (
     ToolFilterMiddleware,
-    _entry_matches_tool,
     _expand_tool_patterns,
     _parse_mcp_pattern,
 )

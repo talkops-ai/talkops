@@ -140,7 +140,7 @@ def test_format_rubric_event_removes_hourglass_emoji():
 @pytest.mark.asyncio
 async def test_sync_goal_state_from_checkpoint_marks_goal_complete():
     """Verify sync goal state from checkpoint marks goal complete."""
-    from talkops.commands.power.goal import GoalHandler, get_goal_state
+    from talkops.commands.power.goal import get_goal_state
 
     app = TalkOpsApp(defer_server_start=True)
     goal_state = get_goal_state(app)

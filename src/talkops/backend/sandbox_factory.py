@@ -23,16 +23,16 @@ from __future__ import annotations
 
 import atexit
 import contextlib
-from contextlib import contextmanager
-from datetime import timedelta
 import importlib
 import importlib.util
 import os
-from pathlib import Path
 import shlex
 import string
 import threading
 import time
+from contextlib import contextmanager
+from datetime import timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol
 
 from talkops.backend.local import LocalShellBackend
@@ -45,8 +45,10 @@ from talkops.config.paths import find_project_root
 from talkops.utils.logger import AgentLogger
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping
+    from collections.abc import Generator
+
     from deepagents.backends.protocol import SandboxBackendProtocol
+
     from talkops.backend.sandbox_registry import SandboxRegistry
 
 logger = AgentLogger("SandboxFactory")

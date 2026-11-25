@@ -26,8 +26,6 @@ from textual.geometry import Offset
 from talkops.ui.theme import get_css_variable_defaults
 from talkops.ui.widgets.messages import (
     MessageList,
-    ToolCallMessage,
-    UserMessage,
     compute_wheel_speed,
 )
 from talkops.ui.widgets.status import StatusBar

@@ -54,3 +54,4 @@ dist/
 .ruff_cache/
 .langgraph_api*
 docs/research.md
+openwiki/

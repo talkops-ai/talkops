@@ -99,7 +99,7 @@ from talkops.security.approval_mode import (
     approval_mode_key,
     coerce_approval_mode,
 )
-from talkops.security.jev_classifier import JevSecurityClassifier, JevToolVerdict
+from talkops.security.jev_classifier import JevSecurityClassifier
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -1473,6 +1473,8 @@ def _deterministic_allow(
 ) -> bool:
     """Fast-path deterministic allow for known-safe operations."""
     name = call["name"]
+    if name in {"list_resources", "read_resource"}:
+        return True
     if name == "call_mcp_tool":
         from talkops.middleware.headless_mcp_guard import is_call_mcp_tool_read_only
 

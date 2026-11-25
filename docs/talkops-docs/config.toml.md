@@ -4,6 +4,10 @@ TalkOps stores your persistent preferences in `~/.talkops/config.toml`.
 
 When you change settings in the TUI—such as saving a default model with `/model --default`, configuring your model pool with `/pool`, switching cloud profiles with `/cloud`, or updating values via `/config set`—TalkOps automatically creates and updates `~/.talkops/config.toml` for you. You can also edit this file directly in any text editor and apply your changes live with `/reload`.
 
+> [!NOTE]
+> **Looking for `talkops serve` addon settings (Slack, Teams, Discord, webhook routing, custom ports)?**
+> `~/.talkops/config.toml` is intentionally scoped to **user-global CLI/TUI preferences** (and is rewritten in-place by interactive TUI commands). Server Mode addons use layered **`addons.json`** files (supporting Git-committable project scope, `${ENV_VAR}` secret references, and `--addons-config`) or `TALKOPS_ADDON_*` environment variables instead—see **[Server Addons & `addons.json`](./server-addons.md#why-addonsjson-is-separate-from-configtoml)**.
+
 ---
 
 ## Starter `config.toml` Template

@@ -26,7 +26,32 @@ from typing import Any
 
 import httpx
 import pytest
-from starlette.testclient import TestClient
+
+from talkops.addons import (
+    AddonManager,
+    HookEventBus,
+    discover_marketplace_addons,
+    ensure_addon_python_dependencies,
+    find_addon_manifest_path,
+    find_missing_python_dependencies,
+    list_available_addons,
+    load_addon_manifest,
+)
+from talkops.addons.builtin.webhooks import (
+    WebhookAddon,
+    set_webhook_dispatcher,
+)
+from talkops.addons.commands_cli import execute_addon_command, setup_addon_parser
+from talkops.config.addons import (
+    get_effective_default_addon_marketplace_configs,
+)
+from talkops.integrations.thread_store import ThreadStore
+from talkops.webhooks.dispatcher import WebhookDispatcher
+from talkops.webhooks.models import (
+    WebhookConfig,
+    parse_outbound_channel_routes,
+)
+from talkops.webhooks.sinks import WebhookRunResult
 
 try:
     from talkops_channels import (  # type: ignore[import-not-found]
@@ -55,37 +80,6 @@ _SKIP_EXTERNAL_CHANNELS = pytest.mark.skipif(
     not _HAS_TALKOPS_CHANNELS or not _LIBS_CHANNELS_DIR.exists(),
     reason="Requires external talkops_channels package and libs/channels directory",
 )
-
-from talkops.addons import (
-    AddonManager,
-    HookEventBus,
-    add_addon_marketplace_source,
-    discover_marketplace_addons,
-    ensure_addon_python_dependencies,
-    find_addon_manifest_path,
-    find_missing_python_dependencies,
-    install_addon,
-    list_available_addons,
-    load_addon_manifest,
-    set_installed_addon_enabled,
-    uninstall_addon,
-)
-from talkops.addons.builtin.webhooks import (
-    WebhookAddon,
-    set_webhook_dispatcher,
-)
-from talkops.addons.commands_cli import execute_addon_command, setup_addon_parser
-from talkops.config.addons import (
-    DefaultAddonMarketplaceConfig,
-    get_effective_default_addon_marketplace_configs,
-)
-from talkops.integrations.thread_store import ThreadStore
-from talkops.webhooks.dispatcher import WebhookDispatcher
-from talkops.webhooks.models import (
-    WebhookConfig,
-    parse_outbound_channel_routes,
-)
-from talkops.webhooks.sinks import WebhookRunResult
 
 
 @_SKIP_EXTERNAL_CHANNELS

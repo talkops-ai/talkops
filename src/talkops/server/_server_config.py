@@ -40,6 +40,7 @@ class ServerConfig:
     """Configuration payload passed to the LangGraph server subprocess."""
 
     model: str | None = None
+    explicit_model: bool = False
     assistant_id: str = DEFAULT_ASSISTANT_ID
     system_prompt: str | None = None
     auto_approve: bool = False
@@ -69,6 +70,7 @@ class ServerConfig:
     user_id: str | None = None
     no_subagents: bool = False
     tnr: bool = False
+    central_server: bool = False
     profile: str | None = None
     addons: tuple[str, ...] | None = None
     disable_addons: tuple[str, ...] | None = None
@@ -98,6 +100,8 @@ class ServerConfig:
         }
         if self.model:
             env[f"{SERVER_ENV_PREFIX}MODEL"] = self.model
+        if self.explicit_model:
+            env[f"{SERVER_ENV_PREFIX}EXPLICIT_MODEL"] = "true"
         if self.system_prompt:
             env[f"{SERVER_ENV_PREFIX}SYSTEM_PROMPT"] = self.system_prompt
         effective_cwd = self.cwd or str(Path.cwd().resolve())
@@ -137,6 +141,8 @@ class ServerConfig:
             env["TALKOPS_API_KEY"] = self.api_key
         if self.user_id:
             env["TALKOPS_USER_ID"] = self.user_id
+        if self.central_server:
+            env["TALKOPS_CENTRAL_SERVER"] = "1"
         if self.profile:
             env["TALKOPS_SERVER_PROFILE"] = self.profile
         if self.addons:
@@ -186,6 +192,7 @@ class ServerConfig:
 
         return cls(
             model=_read_env_str("MODEL"),
+            explicit_model=_read_env_bool("EXPLICIT_MODEL", default=False),
             assistant_id=_read_env_str("ASSISTANT_ID") or DEFAULT_ASSISTANT_ID,
             system_prompt=_read_env_str("SYSTEM_PROMPT"),
             auto_approve=_read_env_bool("AUTO_APPROVE", default=False),
@@ -215,6 +222,7 @@ class ServerConfig:
             user_id=os.environ.get("TALKOPS_USER_ID"),
             no_subagents=_read_env_bool("NO_SUBAGENTS", default=False),
             tnr=_read_env_bool("TNR", default=False),
+            central_server=str(os.environ.get("TALKOPS_CENTRAL_SERVER") or "").strip().lower() in {"1", "true", "yes"},
             profile=os.environ.get("TALKOPS_SERVER_PROFILE") or os.environ.get("TALKOPS_PROFILE"),
             addons=addons,
             disable_addons=disable_addons,
@@ -239,6 +247,7 @@ class ServerConfig:
         project_context: Any = None,
         model_name: str | None = None,
         model: str | None = None,
+        explicit_model: bool = False,
         assistant_id: str = DEFAULT_ASSISTANT_ID,
         system_prompt: str | None = None,
         auto_approve: bool = False,
@@ -268,6 +277,7 @@ class ServerConfig:
         user_id: str | None = None,
         no_subagents: bool = False,
         tnr: bool = False,
+        central_server: bool = False,
         profile: str | None = None,
         addons: tuple[str, ...] | list[str] | None = None,
         disable_addons: tuple[str, ...] | list[str] | None = None,
@@ -301,6 +311,7 @@ class ServerConfig:
         effective_user_id = user_id or os.environ.get("TALKOPS_USER_ID")
         return cls(
             model=model or model_name,
+            explicit_model=explicit_model,
             assistant_id=assistant_id,
             system_prompt=system_prompt,
             auto_approve=auto_approve,
@@ -330,6 +341,7 @@ class ServerConfig:
             user_id=effective_user_id,
             no_subagents=no_subagents,
             tnr=tnr,
+            central_server=central_server,
             profile=profile,
             addons=tuple(addons) if addons else None,
             disable_addons=tuple(disable_addons) if disable_addons else None,

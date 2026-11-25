@@ -50,18 +50,22 @@ _GUARDED_TOOLS: frozenset[str] = frozenset(
 
 ONBOARDING_NAME_MEMORY_START = "<!-- talkops:onboarding-name:start -->"
 ONBOARDING_NAME_MEMORY_END = "<!-- talkops:onboarding-name:end -->"
+OPENWIKI_MEMORY_START = "<!-- OPENWIKI:START -->"
+OPENWIKI_MEMORY_END = "<!-- OPENWIKI:END -->"
 
 _MANAGED_START_MARKERS = (
     "<!-- talkops:onboarding-name:start -->",
     "<!-- talkops:managed-memory:start -->",
     "<!-- deepagents:onboarding-name:start -->",
     "<!-- managed:start -->",
+    OPENWIKI_MEMORY_START,
 )
 _MANAGED_END_MARKERS = (
     "<!-- talkops:onboarding-name:end -->",
     "<!-- talkops:managed-memory:end -->",
     "<!-- deepagents:onboarding-name:end -->",
     "<!-- managed:end -->",
+    OPENWIKI_MEMORY_END,
 )
 
 _REJECTION_MESSAGE = (
@@ -93,14 +97,33 @@ class _RestoreOutcome(Enum):
     FAILED = "failed"
 
 
-def extract_onboarding_name_block(text: str) -> str | None:
-    """Return the managed onboarding name block (markers included) if present."""
+def extract_managed_blocks(text: str) -> list[str]:
+    """Return all managed memory blocks (markers included) present in text."""
+    blocks: list[str] = []
     for start_marker, end_marker in zip(_MANAGED_START_MARKERS, _MANAGED_END_MARKERS, strict=False):
         start = text.find(start_marker)
         end = text.find(end_marker)
         if start != -1 and end != -1 and start < end:
-            return text[start : end + len(end_marker)]
-    return None
+            blocks.append(text[start : end + len(end_marker)])
+    return blocks
+
+
+def extract_onboarding_name_block(text: str) -> str | None:
+    """Return the managed onboarding name block (markers included) if present."""
+    blocks = extract_managed_blocks(text)
+    return blocks[0] if blocks else None
+
+
+def _extract_matching_block(text: str, reference_block: str) -> str | None:
+    """Extract the block from text whose marker pair matches reference_block."""
+    for start_marker, end_marker in zip(_MANAGED_START_MARKERS, _MANAGED_END_MARKERS, strict=False):
+        if reference_block.startswith(start_marker):
+            start = text.find(start_marker)
+            end = text.find(end_marker)
+            if start != -1 and end != -1 and start < end:
+                return text[start : end + len(end_marker)]
+            return None
+    return extract_onboarding_name_block(text)
 
 
 def strip_onboarding_name_markers(text: str) -> str:
@@ -111,9 +134,19 @@ def strip_onboarding_name_markers(text: str) -> str:
     return res
 
 
+def _strip_matching_markers(text: str, reference_block: str) -> str:
+    """Remove marker occurrences matching reference_block from text."""
+    for start_marker, end_marker in zip(_MANAGED_START_MARKERS, _MANAGED_END_MARKERS, strict=False):
+        if reference_block.startswith(start_marker):
+            return text.replace(start_marker, "").replace(end_marker, "")
+    return strip_onboarding_name_markers(text)
+
+
 def _upsert_onboarding_name_memory(existing: str, block: str) -> str:
     """Insert or replace the managed onboarding name memory block."""
     for start_marker, end_marker in zip(_MANAGED_START_MARKERS, _MANAGED_END_MARKERS, strict=False):
+        if not block.startswith(start_marker):
+            continue
         start = existing.find(start_marker)
         end = existing.find(end_marker)
         if start != -1 and end != -1 and start < end:
@@ -124,6 +157,8 @@ def _upsert_onboarding_name_memory(existing: str, block: str) -> str:
             return "\n\n".join(parts).rstrip() + "\n"
 
     base = existing.rstrip()
+    if block.startswith(OPENWIKI_MEMORY_START):
+        return f"{base}\n\n{block}\n" if base else f"{block}\n"
     if not base:
         return f"## User Preferences\n\n{block}\n"
     if "## User Preferences" in base:
@@ -293,7 +328,7 @@ class ManagedMemoryGuardMiddleware(AgentMiddleware[Any, Any]):
                 path,
             )
             return _RestoreOutcome.FAILED
-        block_after = extract_onboarding_name_block(after)
+        block_after = _extract_matching_block(after, before_block)
         if block_after == before_block:
             return _RestoreOutcome.UNCHANGED
         if block_after is not None:
@@ -306,9 +341,9 @@ class ManagedMemoryGuardMiddleware(AgentMiddleware[Any, Any]):
                     path,
                 )
                 return _RestoreOutcome.FAILED
-            source = strip_onboarding_name_markers(maybe_source)
+            source = _strip_matching_markers(maybe_source, before_block)
         restored = _upsert_onboarding_name_memory(source, before_block)
-        if extract_onboarding_name_block(restored) != before_block:
+        if _extract_matching_block(restored, before_block) != before_block:
             logger.error(
                 "Restored content for %s did not reproduce the managed block; leaving the edited file untouched",
                 path,
@@ -353,13 +388,21 @@ class ManagedMemoryGuardMiddleware(AgentMiddleware[Any, Any]):
         request: ToolCallRequest,
         path: Path,
         before: str,
-        before_block: str,
+        before_blocks: str | list[str],
         result: ToolMessage | Command[Any],
     ) -> ToolMessage | Command[Any]:
-        outcome = self._restore(path, before, before_block)
-        if outcome is _RestoreOutcome.UNCHANGED:
+        blocks = [before_blocks] if isinstance(before_blocks, str) else list(before_blocks)
+        worst_outcome = _RestoreOutcome.UNCHANGED
+        current_before = before
+        for block in blocks:
+            outcome = self._restore(path, current_before, block)
+            if outcome is _RestoreOutcome.FAILED:
+                worst_outcome = _RestoreOutcome.FAILED
+            elif outcome is _RestoreOutcome.RESTORED and worst_outcome is _RestoreOutcome.UNCHANGED:
+                worst_outcome = _RestoreOutcome.RESTORED
+        if worst_outcome is _RestoreOutcome.UNCHANGED:
             return result
-        return self._error(request, path, restore_failed=outcome is _RestoreOutcome.FAILED)
+        return self._error(request, path, restore_failed=worst_outcome is _RestoreOutcome.FAILED)
 
     def wrap_tool_call(
         self,
@@ -376,11 +419,11 @@ class ManagedMemoryGuardMiddleware(AgentMiddleware[Any, Any]):
             if self._reject_delete(path, before):
                 return self._delete_error(request, path)
             return handler(request)
-        before_block = extract_onboarding_name_block(before) if before is not None else None
-        if before is None or before_block is None:
+        before_blocks = extract_managed_blocks(before) if before is not None else []
+        if before is None or not before_blocks:
             return handler(request)
         result = handler(request)
-        return self._result_after_restore(request, path, before, before_block, result)
+        return self._result_after_restore(request, path, before, before_blocks, result)
 
     async def awrap_tool_call(
         self,
@@ -397,8 +440,8 @@ class ManagedMemoryGuardMiddleware(AgentMiddleware[Any, Any]):
             if await asyncio.to_thread(self._reject_delete, path, before):
                 return self._delete_error(request, path)
             return await handler(request)
-        before_block = extract_onboarding_name_block(before) if before is not None else None
-        if before is None or before_block is None:
+        before_blocks = extract_managed_blocks(before) if before is not None else []
+        if before is None or not before_blocks:
             return await handler(request)
         result = await handler(request)
-        return await asyncio.to_thread(self._result_after_restore, request, path, before, before_block, result)
+        return await asyncio.to_thread(self._result_after_restore, request, path, before, before_blocks, result)

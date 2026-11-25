@@ -773,7 +773,11 @@ def test_provider_specific_kwargs_and_base_url_mapping(monkeypatch, tmp_path):
     """Verify Cohere, Perplexity, IBM watsonx, Bedrock, LiteLLM, Vertex AI, and Ollama kwargs."""
     from talkops.auth.storage import CompositeCredentialStorage
     from talkops.model.config import ModelConfig, normalize_ollama_endpoint
-    from talkops.model.factory import _get_provider_kwargs, clear_model_cache, create_model
+    from talkops.model.factory import (
+        _get_provider_kwargs,
+        clear_model_cache,
+        create_model,
+    )
 
     storage = CompositeCredentialStorage(
         auth_file_path=tmp_path / "auth.json",
@@ -851,7 +855,11 @@ def test_provider_specific_kwargs_and_base_url_mapping(monkeypatch, tmp_path):
 def test_cerebras_and_sambanova_openai_compatible_routing(monkeypatch, tmp_path):
     """Verify cerebras and sambanova resolve default base URLs and route through OpenAI-compatible init."""
     from talkops.auth.storage import CompositeCredentialStorage
-    from talkops.model.factory import _get_provider_kwargs, clear_model_cache, create_model
+    from talkops.model.factory import (
+        _get_provider_kwargs,
+        clear_model_cache,
+        create_model,
+    )
 
     storage = CompositeCredentialStorage(
         auth_file_path=tmp_path / "auth.json",
@@ -910,6 +918,7 @@ def test_vertex_claude_models_under_google_anthropic_vertex_and_package_names():
 def test_ollama_cross_provider_message_content_compatibility():
     """Verify ChatOllama and sanitize_messages_for_model handle cross-provider thinking/reasoning blocks."""
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
     from talkops.middleware.unified_system_message import sanitize_messages_for_model
     from talkops.model.factory import clear_model_cache, create_model
 
@@ -1010,9 +1019,98 @@ def test_gemini_4_argon_model_catalog_and_profiles():
         assert supported_efforts_for_model(spec) == ("low", "medium", "high")
 
 
+def test_gemini_4_carbon_and_hydrogen_catalog_profiles_and_xhigh_effort(monkeypatch):
+    """Verify Gemini 4 Carbon and Hydrogen registration, efforts, and xhigh ThinkingConfig support."""
+    import warnings
+
+    from talkops.model.config import (
+        AVAILABLE_MODELS,
+        RECOMMENDED_SPECS,
+        get_model_profile,
+    )
+    from talkops.model.factory import clear_model_cache, create_model
+    from talkops.model.reasoning import (
+        default_effort_for_model,
+        is_effort_supported_for_model,
+        supported_efforts_for_model,
+        with_effort_model_params,
+    )
+
+    genai_ids = [m[0] for m in AVAILABLE_MODELS["google_genai"]]
+    vertex_ids = [m[0] for m in AVAILABLE_MODELS["google_vertexai"]]
+    openrouter_ids = [m[0] for m in AVAILABLE_MODELS["openrouter"]]
+    litellm_ids = [m[0] for m in AVAILABLE_MODELS["litellm"]]
+
+    assert genai_ids[:3] == ["gemini-4-carbon", "gemini-4-argon", "gemini-4-hydrogen"]
+    assert vertex_ids[:3] == ["gemini-4-carbon", "gemini-4-argon", "gemini-4-hydrogen"]
+    assert "google/gemini-4-carbon" in openrouter_ids
+    assert "google/gemini-4-hydrogen" in openrouter_ids
+    assert "gemini/gemini-4-carbon" in litellm_ids
+    assert "gemini/gemini-4-hydrogen" in litellm_ids
+
+    for carbon_spec in (
+        "google_genai:gemini-4-carbon",
+        "google_vertexai:gemini-4-carbon",
+        "openrouter:google/gemini-4-carbon",
+        "litellm:gemini/gemini-4-carbon",
+    ):
+        assert carbon_spec in RECOMMENDED_SPECS
+        prof = get_model_profile(carbon_spec)
+        assert prof is not None
+        assert prof["profile"]["max_input_tokens"] == 1_048_576
+        assert prof["profile"]["max_output_tokens"] == 65_536
+        assert supported_efforts_for_model(carbon_spec) == ("low", "medium", "high")
+        assert default_effort_for_model(carbon_spec) == "medium"
+        assert is_effort_supported_for_model(carbon_spec, "xhigh") is False
+
+    for hydrogen_spec in (
+        "google_genai:gemini-4-hydrogen",
+        "google_vertexai:gemini-4-hydrogen",
+        "openrouter:google/gemini-4-hydrogen",
+        "litellm:gemini/gemini-4-hydrogen",
+    ):
+        assert hydrogen_spec in RECOMMENDED_SPECS
+        prof = get_model_profile(hydrogen_spec)
+        assert prof is not None
+        assert prof["profile"]["max_input_tokens"] == 1_048_576
+        assert prof["profile"]["max_output_tokens"] == 65_536
+        assert supported_efforts_for_model(hydrogen_spec) == ("low", "medium", "high", "xhigh")
+        assert default_effort_for_model(hydrogen_spec) == "high"
+        assert is_effort_supported_for_model(hydrogen_spec, "xhigh") is True
+
+    # Verify with_effort_model_params preserves xhigh on Hydrogen and rejects xhigh on Carbon
+    assert with_effort_model_params("google_genai:gemini-4-hydrogen", {}, "xhigh") == {
+        "reasoning_effort": "xhigh",
+        "include_thoughts": True,
+    }
+    assert with_effort_model_params("google_vertexai:gemini-4-hydrogen", {}, "xhigh") == {
+        "reasoning_effort": "xhigh",
+        "include_thoughts": True,
+    }
+    assert with_effort_model_params("google_genai:gemini-4-carbon", {}, "xhigh") == {}
+
+    # Verify ChatGoogleGenerativeAI instantiates cleanly with xhigh and serializes ThinkingLevel.XHIGH without warnings
+    monkeypatch.setenv("GOOGLE_API_KEY", "AIzaTestDummyKey")
+    monkeypatch.setenv("VERTEXAI_API_KEY", "AQ.TestDummyVertexKey")
+    clear_model_cache()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for spec in ("google_genai:gemini-4-hydrogen", "google_vertexai:gemini-4-hydrogen"):
+            res = create_model(spec, extra_kwargs={"reasoning_effort": "xhigh"})
+            assert getattr(res.model, "reasoning_effort", None) == "xhigh"
+            assert getattr(res.model, "thinking_level", None) == "xhigh"
+            gen_cfg = res.model._prepare_params(stop=None)
+            tc_dump = gen_cfg.thinking_config.model_dump(mode="json", exclude_none=True)
+            assert tc_dump == {"include_thoughts": True, "thinking_level": "XHIGH"}
+    thinking_warnings = [w for w in caught if "ThinkingLevel" in str(w.message)]
+    assert thinking_warnings == []
+    clear_model_cache()
+
+
 def test_vertex_and_ambient_bedrock_not_falsely_activated(monkeypatch):
     """Verify Vertex AI, Anthropic Vertex, and ambient AWS CLI credentials do not falsely activate providers."""
     import os
+
     from talkops.config.settings import get_settings
     from talkops.model.config import (
         ProviderAuthState,
@@ -1080,6 +1178,7 @@ def test_vertex_ai_api_key_does_not_activate_google_genai_or_pass_key_as_gcp_pro
 ) -> None:
     """Configuring Google Vertex AI with an AQ.* API key does not mark Google Gemini as configured or set project=AQ.*."""
     import os
+
     from talkops.auth.storage import CompositeCredentialStorage
     from talkops.config.settings import get_settings
     from talkops.model.config import (
@@ -1087,7 +1186,11 @@ def test_vertex_ai_api_key_does_not_activate_google_genai_or_pass_key_as_gcp_pro
         apply_stored_credentials,
         get_provider_auth_status,
     )
-    from talkops.model.factory import _get_provider_kwargs, clear_model_cache, create_model
+    from talkops.model.factory import (
+        _get_provider_kwargs,
+        clear_model_cache,
+        create_model,
+    )
 
     storage = CompositeCredentialStorage(
         auth_file_path=tmp_path / "auth.json",
@@ -1186,8 +1289,10 @@ async def test_vertex_express_patch_forwards_implicit_retry_and_extra_kwargs(
     import logging
     from types import SimpleNamespace
     from typing import Any
+
     from google.genai import _api_client as genai_api_client
     from google.genai import errors as genai_errors
+
     import talkops.model.factory as factory_mod
 
     monkeypatch.setattr(factory_mod, "_VERTEX_EXPRESS_CLIENT_PATCHED", False)
@@ -1282,6 +1387,120 @@ async def test_vertex_express_patch_forwards_implicit_retry_and_extra_kwargs(
     )
     assert flt.filter(probe_rec) is False
     assert flt.filter(normal_rec) is True
+
+
+def test_vertex_ai_langchain_chat_google_generative_ai_v1_headers_and_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify google_vertexai configures ChatGoogleGenerativeAI with api_version='v1', additional_headers, labels, max_retries=1, and httpx transport."""
+    from talkops.config.settings import get_settings
+    from talkops.model.factory import (
+        _get_provider_kwargs,
+        _provider_retry_disable_kwargs,
+        clear_model_cache,
+        create_model,
+    )
+
+    s = get_settings()
+    monkeypatch.setattr(s, "reasoning_effort", None, raising=False)
+    vertex_key = "AQ.test-dummy-vertex-express-key"
+    monkeypatch.setenv("VERTEXAI_API_KEY", vertex_key)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "otel-demo-499213")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.delenv("VERTEXAI_SHARED_REQUEST_TYPE", raising=False)
+    monkeypatch.delenv("VERTEXAI_SERVICE_TIER", raising=False)
+    clear_model_cache()
+
+    kwargs = _get_provider_kwargs("google_vertexai", model_name="gemini-4-argon")
+    assert kwargs["vertexai"] is True
+    assert kwargs["google_api_key"] == vertex_key
+    assert kwargs["project"] == "otel-demo-499213"
+    assert kwargs["location"] == "global"
+    assert kwargs["api_version"] == "v1"
+    assert "reasoning_effort" not in kwargs
+    headers = kwargs["additional_headers"]
+    assert headers["X-Goog-User-Project"] == "otel-demo-499213"
+    assert headers["X-Vertex-AI-LLM-Shared-Request-Type"] == "shared"
+    assert "antigravity/cli/1.5.6 (aidev_client;" in headers["user-agent"]
+    assert headers["X-Goog-Ext-525006001-bin"] == "CiJhbnRpZ3Jhdml0eS5jbGkuZW52X3Byb2QudGllcl9wYWlk"
+    labels = kwargs["labels"]
+    assert labels["client"] == "antigravity-cli"
+    assert labels["goog-originating-logical-product-id"] == "48c6cd67-05ce-4112-a170-ad8e0c7c136c"
+    assert labels["goog-originating-service-id"] == "a153-a454-6272"
+
+    # Provider retry disable kwargs match dcode (1 for google_genai/google_vertexai, 0 for others)
+    assert _provider_retry_disable_kwargs("google_vertexai", kwargs) == {"max_retries": 1}
+    assert _provider_retry_disable_kwargs("google_genai", kwargs) == {"max_retries": 1}
+    assert _provider_retry_disable_kwargs("openai", {}) == {"max_retries": 0}
+    assert _provider_retry_disable_kwargs("anthropic", {}) == {"max_retries": 0}
+    assert _provider_retry_disable_kwargs("ollama", {}) == {}
+
+    res = create_model("google_vertexai:gemini-4-argon")
+    assert res.provider == "google_vertexai"
+    assert getattr(res.model, "api_version", None) == "v1"
+    assert getattr(res.model, "labels", None) == labels
+    assert getattr(res.model, "reasoning_effort", None) is None
+    assert getattr(res.model, "max_retries", None) == 1
+    api_client = res.model.client._api_client
+    assert api_client.api_key == vertex_key
+    assert api_client.project == "otel-demo-499213"
+    assert api_client.location == "global"
+    assert api_client._use_aiohttp() is False
+
+    req = api_client._build_request(
+        "post",
+        "publishers/google/models/gemini-4-argon:streamGenerateContent",
+        {"contents": []},
+    )
+    assert "/v1/projects/otel-demo-499213/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent" in req.url
+    assert req.headers.get("X-Goog-User-Project") == "otel-demo-499213"
+    assert req.headers.get("X-Vertex-AI-LLM-Shared-Request-Type") == "shared"
+    assert "antigravity/cli/1.5.6 (aidev_client;" in req.headers.get("user-agent", "")
+    assert req.headers.get("X-Goog-Ext-525006001-bin") == "CiJhbnRpZ3Jhdml0eS5jbGkuZW52X3Byb2QudGllcl9wYWlk"
+
+    # When VERTEXAI_SERVICE_TIER="standard" is set, X-Vertex-AI-LLM-Shared-Request-Type is omitted
+    monkeypatch.setenv("VERTEXAI_SERVICE_TIER", "standard")
+    std_kwargs = _get_provider_kwargs("google_vertexai", model_name="gemini-4-argon")
+    assert "X-Vertex-AI-LLM-Shared-Request-Type" not in std_kwargs["additional_headers"]
+    clear_model_cache()
+
+
+def test_configurable_model_no_false_model_identity_warning_on_same_model(caplog: pytest.LogCaptureFixture) -> None:
+    """Verify ConfigurableModelMiddleware does not log a false regex warning when identity is unchanged."""
+    import logging
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from talkops.middleware.configurable_model import ConfigurableModelMiddleware
+    from talkops.prompts import get_base_system_prompt
+
+    prompt = get_base_system_prompt(
+        assistant_id="agent",
+        model_name="gemini-4-argon",
+        model_provider="google_vertexai",
+        model_context_limit=1000000,
+    )
+    req = MagicMock()
+    req.system_prompt = prompt
+    req.model = MagicMock()
+    req.model_settings = {}
+    req.messages = []
+    req.override = lambda **kw: SimpleNamespace(**kw)
+
+    same_model_result = SimpleNamespace(
+        model=MagicMock(),
+        model_name="gemini-4-argon",
+        provider="google_vertexai",
+        context_limit=1000000,
+        unsupported_modalities=frozenset(),
+    )
+
+    mw = ConfigurableModelMiddleware()
+    with caplog.at_level(logging.WARNING):
+        mw._build_overrides(req, same_model_result, {"reasoning_effort": "high"})
+
+    assert not any("regex did not match" in rec.message for rec in caplog.records)
+
 
 
 

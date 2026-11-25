@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import difflib
 from typing import TYPE_CHECKING, Any
 
 from talkops.file_ops import (

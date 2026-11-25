@@ -68,6 +68,7 @@ class InProcessServerHandle:
         self.checkpointer: Any = None
         self.store: Any = None
         self._exit_stack: AsyncExitStack | None = None
+        self._stop_task: asyncio.Task[None] | None = None
 
     def _apply_config_to_env(self) -> None:
         for key, value in self.config.to_env().items():
@@ -212,30 +213,72 @@ class InProcessServerHandle:
         """Synchronous compatibility wrapper around ``astart``."""
         return asyncio.run(self.astart(timeout=timeout))
 
-    async def astop(self) -> None:
-        """Close the in-process checkpointer context cleanly."""
-        stack = self._exit_stack
-        self._exit_stack = None
+    async def _aclose_resources(self, stack: AsyncExitStack | None) -> None:
+        try:
+            from talkops.mcp.session_manager import MCPSessionManager
+
+            if MCPSessionManager._instance is not None:
+                await MCPSessionManager._instance.close_all()
+        except Exception as exc:
+            logger.debug("Error closing MCPSessionManager sessions: %s", exc)
         if stack is not None:
             try:
                 await stack.aclose()
             except Exception as exc:
                 logger.debug("Error closing InProcessServerHandle stack: %s", exc)
+        try:
+            from talkops.storage.factory import aclose_operational_store
 
-    def stop(self) -> None:
-        """Stop the in-process handle and schedule async checkpointer teardown if needed."""
+            await aclose_operational_store()
+        except Exception as exc:
+            logger.debug("Error closing operational store: %s", exc)
+
+    async def astop(self) -> None:
+        """Close the in-process checkpointer, MCP sessions, and operational store contexts cleanly."""
         stack = self._exit_stack
         self._exit_stack = None
-        if stack is None:
+        stop_task = self._stop_task
+        self._stop_task = None
+        if stop_task is not None and not stop_task.done():
+            await asyncio.gather(stop_task, return_exceptions=True)
+        await self._aclose_resources(stack)
+
+    def stop(self) -> None:
+        """Stop the in-process handle and schedule or execute checkpointer/MCP/store teardown."""
+        stack = self._exit_stack
+        self._exit_stack = None
+        has_mcp_sessions = False
+        try:
+            from talkops.mcp.session_manager import MCPSessionManager
+
+            has_mcp_sessions = bool(
+                MCPSessionManager._instance is not None
+                and MCPSessionManager._instance._sessions
+            )
+        except Exception:
+            has_mcp_sessions = False
+
+        if stack is None and not has_mcp_sessions:
+            try:
+                from talkops.storage.factory import close_operational_store
+
+                close_operational_store()
+            except Exception:
+                pass
             return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(stack.aclose())
+            self._stop_task = loop.create_task(self._aclose_resources(stack))
         except RuntimeError:
             try:
-                asyncio.run(stack.aclose())
+                asyncio.run(self._aclose_resources(stack))
             except Exception:
-                pass
+                try:
+                    from talkops.storage.factory import close_operational_store
+
+                    close_operational_store()
+                except Exception:
+                    pass
 
     async def restart(self, timeout: float = 60.0) -> str:
         """Rebuild the in-process agent graph (used by `/reload` and `/restart`)."""
@@ -348,18 +391,26 @@ async def start_server_and_get_agent(
         try:
             from talkops.state.session import SessionManager
 
+            async def _deferred_inproc_maint(cp: Any) -> None:
+                await asyncio.sleep(15.0)
+                await SessionManager.maintain_database(checkpointer=cp)
+
             loop = asyncio.get_running_loop()
-            loop.create_task(SessionManager.maintain_database(checkpointer=handle.checkpointer))
+            loop.create_task(_deferred_inproc_maint(handle.checkpointer))
         except Exception:
             pass
         return handle.create_client(), handle
 
-    # Schedule background database maintenance on launch (DV-08)
+    # Schedule background database maintenance on launch after initial resume settles (DV-08)
     try:
         from talkops.state.session import SessionManager
 
+        async def _deferred_maint() -> None:
+            await asyncio.sleep(15.0)
+            await SessionManager.maintain_database()
+
         loop = asyncio.get_running_loop()
-        loop.create_task(SessionManager.maintain_database())
+        loop.create_task(_deferred_maint())
     except Exception:
         pass
 

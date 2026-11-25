@@ -22,7 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from talkops.commands.registry import CommandRegistry
 from talkops.middleware.compaction import (
@@ -208,7 +208,9 @@ def test_talkops_summarization_middleware_emits_compaction_events() -> None:
         **base_req_fields,
         override=lambda **kw: SimpleNamespace(**{**base_req_fields, **kw}),
     )
-    handler_fn: Any = lambda r: SimpleNamespace(result=[AIMessage(content="ok")])
+    def handler_fn(_r: Any) -> Any:
+        return SimpleNamespace(result=[AIMessage(content="ok")])
+
     res: Any = mw.wrap_model_call(req, handler_fn)
     assert [e["type"] for e in emitted_events] == ["compaction_start", "compaction_end"]
 

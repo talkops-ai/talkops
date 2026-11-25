@@ -272,9 +272,11 @@ def test_get_base_system_prompt_dual_engine_and_tool_discipline():
     assert "Cloud-Native & Container Orchestration" in prompt
     assert "CI/CD & GitOps Automation" in prompt
 
-    # Validate Cloud Foundation & Plugin Marketplace Ecosystem
-    assert "Native Cloud Foundation (AWS)" in prompt
+    # Validate Multi-Cloud Foundation & Plugin Marketplace Ecosystem
+    assert "Native Multi-Cloud Foundation (AWS, Azure & GCP)" in prompt
+    assert "private data centers" in prompt
     assert "Extensible Plugin Marketplace Ecosystem" in prompt
+    assert "built on Amazon Web Services (AWS)" not in prompt
 
     # Validate TalkOps Coding Guidelines & Documentation Integrity
     assert "No Snippet Tunnel Vision" in prompt
@@ -297,6 +299,8 @@ def test_get_base_system_prompt_dual_engine_and_tool_discipline():
 
 def test_adaptive_output_granularity_contract():
     """Verify adaptive output granularity contract."""
+    from talkops.prompts import get_webhook_sre_system_prompt
+
     prompt = get_base_system_prompt(
         assistant_id="talkops",
         interactive=True,
@@ -306,4 +310,23 @@ def test_adaptive_output_granularity_contract():
     assert "Conversational & Capability Inquiries" in prompt
     assert "DO NOT output an exhaustive laundry list" in prompt
     assert "Artifact vs Inline Output Separation" in prompt
+    assert "grep_search" not in prompt
+    assert "`grep` & `glob`" in prompt
+    assert "Only ask when genuinely blocked" in prompt
+
+    sre_prompt = get_webhook_sre_system_prompt(
+        assistant_id="talkops",
+        interactive=False,
+        model_name="claude-3-7-sonnet",
+    )
+    assert "Adaptive Output Granularity Contract" in sre_prompt
+    assert "Conversational, Greeting & Capability Inquiries" in sre_prompt
+    assert "DO NOT output an exhaustive capability essay" in sre_prompt
+    assert "query_service_blast_radius" in sre_prompt
+    assert "grep_search" not in sre_prompt
+    assert "`grep` & `glob`" in sre_prompt
+    assert "`If essential cloud/cluster permissions" not in sre_prompt
+    unreplaced_sre = re.findall(r"\{[a-z_]+\}", sre_prompt)
+    assert not unreplaced_sre, f"Found unreplaced placeholders in SRE prompt: {unreplaced_sre}"
+
 

@@ -28,7 +28,7 @@ from talkops.middleware.ask_user import (
     _parse_answers,
     _validate_questions,
 )
-from talkops.schema.interrupts import Choice, Question
+from talkops.schema.interrupts import Question
 
 
 def test_validate_questions_valid():

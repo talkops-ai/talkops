@@ -415,7 +415,6 @@ def test_jev_credential_manifest_and_aliases():
 
 def test_jev_classifier_settings_without_environ_mutation(monkeypatch):
     """Verify JevSecurityClassifier resolves settings without mutating os.environ."""
-    import talkops.config.settings
     from talkops.config.settings import Settings
     from talkops.security.jev_classifier import JevSecurityClassifier
 
@@ -526,7 +525,6 @@ async def test_middleware_smart_mode_with_jev():
     """Verify end-to-end AutoModeHITLMiddleware in SMART mode with mock Jev classifier."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from langchain.agents.middleware.types import AgentState
     from langchain_core.messages import AIMessage
 
     from talkops.agent.config import CLIContextSchema
@@ -673,7 +671,7 @@ async def test_auto_mode_aafter_model_require_human_delegates_to_manual():
     When a decision plan has 'require_human', aafter_model invokes
     super().after_model with ApprovalMode.MANUAL to trigger LangGraph interrupt.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     from langchain.agents.middleware.types import AgentState
     from langchain_core.messages import AIMessage

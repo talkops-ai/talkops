@@ -50,8 +50,16 @@ class MCPServerConfig(TypedDict, total=False):
     trusted: bool
 
 
+_SERVER_CONFIG_HINTS: tuple[str, ...] = ("command", "url", "serverUrl")
+
+
+def _is_server_entry_dict(value: Any) -> bool:
+    """Return True when ``value`` looks like an MCP server entry dict."""
+    return isinstance(value, dict) and any(k in value for k in _SERVER_CONFIG_HINTS)
+
+
 def _load_mcp_json(path: Path) -> dict[str, dict[str, Any]]:
-    """Safely load and parse an .mcp.json file into a dictionary of server configs."""
+    """Safely load and parse an MCP JSON file into a dictionary of server configs."""
     if not path.is_file():
         return {}
     try:
@@ -60,20 +68,31 @@ def _load_mcp_json(path: Path) -> dict[str, dict[str, Any]]:
         if not isinstance(data, dict):
             return {}
 
-        servers = data.get("mcpServers") or data.get("mcp_servers")
-        if servers is None and ("command" in data or "url" in data or "serverUrl" in data):
-            # Single server definition (fallback)
-            servers = {path.stem: data}
-        elif servers is None:
-            # Check if root dict is already mapping name -> config
-            if data and all(
-                isinstance(v, dict) and ("command" in v or "url" in v or "serverUrl" in v)
-                for v in data.values()
-            ):
-                servers = data
+        servers: Any = data.get("mcpServers")
+        if not isinstance(servers, dict):
+            servers = data.get("mcp_servers")
+
+        if not isinstance(servers, dict):
+            if _is_server_entry_dict(data):
+                # Single server definition (fallback)
+                stem = path.stem.lstrip(".") or "mcp"
+                servers = {stem: data}
+            elif data:
+                # Bare server map (matching dcode's _server_map while ignoring metadata like "$schema")
+                extracted = {
+                    k: v
+                    for k, v in data.items()
+                    if not str(k).startswith("$") and _is_server_entry_dict(v)
+                }
+                if extracted:
+                    servers = extracted
 
         if isinstance(servers, dict):
-            return servers
+            return {
+                str(k): v
+                for k, v in servers.items()
+                if isinstance(v, dict)
+            }
     except Exception as exc:
         logger.warning("Failed to parse MCP config at %s: %s", path, exc)
     return {}
@@ -145,8 +164,21 @@ class MCPDiscovery:
           4. Project configs (project root .mcp.json)
         """
         from talkops.config import paths
+        from talkops.config.settings import settings
+        from talkops.project_utils import ProjectContext
 
-        effective_project_root = project_root or Path.cwd()
+        if project_root is not None:
+            try:
+                ctx = ProjectContext.from_user_cwd(project_root)
+                effective_project_root = ctx.project_root or ctx.user_cwd
+            except OSError:
+                effective_project_root = project_root
+        else:
+            effective_project_root = (
+                settings.effective_project_root
+                or settings.effective_cwd
+                or Path.cwd()
+            )
 
         # Build candidate file list in lowest -> highest precedence order
         candidates: list[tuple[Path, str]] = []

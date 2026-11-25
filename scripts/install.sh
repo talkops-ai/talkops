@@ -15,10 +15,13 @@
 
 # Install TalkOps — AI DevOps & Cloud Operations Agent.
 #
-# Usage:
+# Usage (macOS, Linux, and Windows WSL2 — run inside your WSL Linux shell, not cmd.exe, and without sudo):
 #   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
 #   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- [options]
 #   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- VERSION
+#
+# Windows (native PowerShell, no WSL required):
+#   irm https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.ps1 | iex
 #
 # Install an exact version:
 #   curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | TALKOPS_VERSION="0.3.0" bash
@@ -126,10 +129,10 @@ resolve_latest_pypi_version() {
         py_cmd="python"
       fi
       if [ -n "$py_cmd" ]; then
-        latest="$(printf '%s' "$pypi_json" | "$py_cmd" -c "import sys,json; d=json.load(sys.stdin); rels=[k for k,v in d.get('releases',{}).items() if v]; print(d.get('info',{}).get('version') or (rels[-1] if rels else ''))" 2>/dev/null || true)"
+        latest="$(printf '%s' "$pypi_json" | "$py_cmd" -c "import sys,json; d=json.load(sys.stdin); rels=[k for k,v in d.get('releases',{}).items() if v]; print(d.get('info',{}).get('version') or (rels[-1] if rels else ''))" 2>/dev/null | tr -d '\r' || true)"
       fi
       if [ -z "$latest" ]; then
-        latest="$(printf '%s' "$pypi_json" | grep -o '"version":"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)"
+        latest="$(printf '%s' "$pypi_json" | grep -o '"version":"[^"]*"' | head -n 1 | cut -d'"' -f4 | tr -d '\r' || true)"
       fi
     fi
   fi
@@ -301,14 +304,14 @@ trap 'cleanup_on_exit; exit 130' INT TERM HUP
 # ── OS & Platform Detection ──────────────────────────────────
 
 OS="unknown"
+RAW_OS="unknown"
 ARCH="unknown"
 IS_WSL=0
 
 detect_platform() {
-  local raw_os
-  raw_os="$(uname -s 2>/dev/null || echo "unknown")"
+  RAW_OS="$(uname -s 2>/dev/null || echo "unknown")"
 
-  case "$raw_os" in
+  case "$RAW_OS" in
     Darwin*)
       OS="macos"
       ;;
@@ -371,9 +374,11 @@ acquire_install_lock
 # ── Platform Checks & Guidance ───────────────────────────────
 
 if [ "$OS" = "windows" ]; then
-  log_warn "Detected Windows environment (${raw_os:-bash})."
+  log_warn "Detected Windows environment (${RAW_OS:-bash})."
+  log_info "For native Windows without WSL, you can also run the PowerShell installer:"
+  log_info "  irm https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.ps1 | iex"
   log_info "For the best experience with Docker, Terraform, and Kubernetes CLIs,"
-  log_info "running TalkOps inside WSL (Windows Subsystem for Linux) is recommended."
+  log_info "running TalkOps inside WSL2 (Windows Subsystem for Linux) is recommended."
   log_info "Proceeding with Git Bash / MSYS compatible installation..."
 elif [ "$IS_WSL" = "1" ]; then
   log_debug "Running inside Windows Subsystem for Linux (WSL)."
@@ -460,6 +465,16 @@ prompt_yn() {
 
 UV_BIN="${UV_BIN:-}"
 
+normalize_path_for_shell() {
+  local raw_path="$1"
+  raw_path="$(printf '%s' "$raw_path" | tr -d '\r')"
+  if [ "$OS" = "windows" ] && [ -n "$raw_path" ] && command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$raw_path" 2>/dev/null || printf '%s' "$raw_path"
+  else
+    printf '%s' "$raw_path"
+  fi
+}
+
 resolve_uv_bin() {
   if [ -n "$UV_BIN" ] && [ -x "$UV_BIN" ]; then
     return 0
@@ -480,14 +495,21 @@ resolve_uv_bin() {
   # Add Windows-specific candidate paths
   if [ "$OS" = "windows" ]; then
     if [ -n "${USERPROFILE:-}" ]; then
+      local win_home
+      win_home="$(normalize_path_for_shell "${USERPROFILE}")"
       candidate_paths+=(
-        "${USERPROFILE}/.cargo/bin/uv.exe"
-        "${USERPROFILE}/.local/bin/uv.exe"
-        "${USERPROFILE}/AppData/Local/Programs/uv/uv.exe"
+        "${win_home}/.local/bin/uv.exe"
+        "${win_home}/.cargo/bin/uv.exe"
+        "${win_home}/AppData/Local/Programs/uv/uv.exe"
       )
     fi
     if [ -n "${LOCALAPPDATA:-}" ]; then
-      candidate_paths+=("${LOCALAPPDATA}/Programs/uv/uv.exe")
+      local win_local
+      win_local="$(normalize_path_for_shell "${LOCALAPPDATA}")"
+      candidate_paths+=(
+        "${win_local}/Programs/uv/uv.exe"
+        "${win_local}/uv/uv.exe"
+      )
     fi
   fi
 
@@ -536,7 +558,7 @@ resolve_tool_bin_dir() {
   else
     # Ask uv directly for the configured tool bin directory
     local uv_dir=""
-    uv_dir="$("$UV_BIN" tool dir --bin 2>/dev/null || true)"
+    uv_dir="$(normalize_path_for_shell "$("$UV_BIN" tool dir --bin 2>/dev/null || true)")"
     if [ -n "$uv_dir" ] && [ -d "$(dirname "$uv_dir")" ]; then
       TOOL_BIN_DIR="$uv_dir"
     elif [ -d "${HOME}/.local/bin" ]; then
@@ -927,7 +949,7 @@ done
 
 FINAL_VERSION=""
 if [ -n "$INSTALLED_PRIMARY" ]; then
-  FINAL_VERSION="$("$INSTALLED_PRIMARY" --version 2>/dev/null | awk '{print $NF}' || echo "0.3.0")"
+  FINAL_VERSION="$("$INSTALLED_PRIMARY" --version 2>/dev/null | tr -d '\r' | awk '{print $NF}' || echo "0.3.0")"
 fi
 
 # ── Welcome Banner & Quick Start ─────────────────────────────

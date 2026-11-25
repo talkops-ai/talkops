@@ -22,6 +22,7 @@ definitions, skills discovery, and workspace info.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import platform
 import shutil
@@ -96,16 +97,22 @@ class DoctorHandler(BaseCommandHandler):
 
     async def execute(self, ctx: CommandContext) -> CommandResult:
         """Execute the command handler with the provided command context."""
-        sections: list[DiagnosticSection] = []
-        sections.append(self._collect_diagnostics(ctx))
-        sections.append(self._collect_active_model(ctx))
-        sections.append(self._collect_configuration(ctx))
-        sections.append(self._collect_api_keys(ctx))
-        sections.append(await self._collect_mcp(ctx))
-        sections.append(self._collect_devops_tools())
-        sections.append(self._collect_agents(ctx))
-        sections.append(self._collect_skills(ctx))
-        sections.append(self._collect_workspace(ctx))
+        mcp_section = await self._collect_mcp(ctx)
+
+        def _collect_sync_sections() -> list[DiagnosticSection]:
+            return [
+                self._collect_diagnostics(ctx),
+                self._collect_active_model(ctx),
+                self._collect_configuration(ctx),
+                self._collect_api_keys(ctx),
+                mcp_section,
+                self._collect_devops_tools(),
+                self._collect_agents(ctx),
+                self._collect_skills(ctx),
+                self._collect_workspace(ctx),
+            ]
+
+        sections = await asyncio.to_thread(_collect_sync_sections)
 
         return CommandResult(
             success=True,

@@ -330,7 +330,7 @@ class CloudHandler(BaseCommandHandler):
             header = _PROVIDER_LABELS.get(prov, prov.upper())
             lines.append(f"\n**{header} Targets:**\n")
             if not targets:
-                lines.append(f"- *(none discovered)*")
+                lines.append("- *(none discovered)*")
                 continue
             for t in targets:
                 flags = []

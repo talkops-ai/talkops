@@ -21,7 +21,6 @@ from textual.events import Click, Key
 
 from talkops.ui.command_registry import get_all_entries
 from talkops.ui.widgets.autocomplete import (
-    CompletionResult,
     MultiCompletionManager,
     SlashCommandController,
 )

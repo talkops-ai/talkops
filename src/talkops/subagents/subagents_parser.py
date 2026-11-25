@@ -77,8 +77,12 @@ def parse_subagent_bundle(bundle_dir: Path, source: str = "built-in") -> list[Su
 
     skills_dir = bundle_dir / "skills"
     local_skill_names = _discover_local_skill_names(skills_dir)
-    mcp_file = bundle_dir / ".mcp.json"
-    has_mcp = mcp_file.exists() and mcp_file.is_file()
+    mcp_file = (
+        bundle_dir / ".mcp.json"
+        if (bundle_dir / ".mcp.json").is_file()
+        else bundle_dir / "mcp.json"
+    )
+    has_mcp = mcp_file.is_file()
 
     for file_path in agent_files:
         meta = _parse_subagent_file(file_path, fallback_name=bundle_dir.name)

@@ -45,7 +45,6 @@ from talkops.addons import (
     AddonCapabilities,
     AddonContext,
     AddonManager,
-    AddonSettings,
     AgentRunGateway,
     BaseServerAddon,
     HookEvent,
@@ -89,9 +88,17 @@ async def test_default_profile_enables_builtin_oss_addons_and_preserves_routes()
     active_names = [a.name for a in active]
 
     assert mgr.profile == "default"
-    assert active_names == ["core-auth", "client-gateway", "webhooks"]
-    # Ensure no hardcoded enterprise addons are bundled inside core
-    assert set(mgr.discovered_addons.keys()) == {"core-auth", "client-gateway", "webhooks"}
+    assert active_names == ["core-auth", "client-gateway", "webhooks", "channels"]
+    # Ensure only OSS built-in addons are bundled inside core (no hardcoded enterprise addons)
+    assert set(mgr.discovered_addons.keys()) == {
+        "core-auth",
+        "client-gateway",
+        "webhooks",
+        "channels",
+        "context-graph",
+        "intelligence",
+    }
+    assert all(a.tier == "oss" for a in mgr.discovered_addons.values())
 
     app = mgr.create_asgi_app()
     async with httpx.AsyncClient(
@@ -105,22 +112,28 @@ async def test_default_profile_enables_builtin_oss_addons_and_preserves_routes()
         assert info["status"] == "ok"
         assert info["service"] == "talkops-central-server"
         assert info["profile"] == "default"
-        assert info["active_addons"] == ["core-auth", "client-gateway", "webhooks"]
+        assert info["active_addons"] == ["core-auth", "client-gateway", "webhooks", "channels"]
 
         # 2. Addons discovery endpoint lists enabled OSS addons
         addons_resp = await client.get("/api/v1/addons")
         assert addons_resp.status_code == 200
         addons_data = addons_resp.json()
         assert addons_data["profile"] == "default"
-        assert addons_data["active_addons"] == ["core-auth", "client-gateway", "webhooks"]
+        assert addons_data["active_addons"] == ["core-auth", "client-gateway", "webhooks", "channels"]
         by_name = {a["name"]: a for a in addons_data["addons"]}
         assert by_name["webhooks"]["status"] == "ok"
         assert by_name["webhooks"]["tier"] == "oss"
+        assert by_name["channels"]["status"] == "ok"
+        assert by_name["channels"]["tier"] == "oss"
 
-        # 3. Built-in webhook routes are mounted and healthy
+        # 3. Built-in webhook and channel routes are mounted and healthy
         wh_resp = await client.get("/webhooks/health")
         assert wh_resp.status_code == 200
         assert wh_resp.json() == {"status": "ok"}
+
+        ch_resp = await client.get("/channels/status")
+        assert ch_resp.status_code == 200
+        assert ch_resp.json()["addon"] == "channels"
 
 
 # ── 2. External Repository Addon Discovery (`entry_points`) ──────────────────
@@ -459,12 +472,13 @@ def test_four_tier_configuration_precedence_and_profiles(
     mgr = AddonManager(project_root=tmp_path)
     discovered = mgr.discover_addons()
 
-    # 1. Profile 'api-only' enables client-gateway & core-auth, disables webhooks
+    # 1. Profile 'api-only' enables client-gateway & core-auth, disables webhooks & channels
     prof, cfgs = resolve_addon_configs(discovered, profile="api-only", project_root=tmp_path, env={})
     assert prof == "api-only"
     assert cfgs["client-gateway"]["enabled"] is True
     assert cfgs["core-auth"]["enabled"] is True
     assert cfgs["webhooks"]["enabled"] is False
+    assert cfgs["channels"]["enabled"] is False
 
     # 2. Custom profile registration (for external enterprise packages)
     register_server_profile("webhook-only", ("core-auth", "webhooks"))
@@ -714,7 +728,7 @@ def test_cli_serve_addons_json_and_addons_config_flag(
     out1 = json.loads(capsys.readouterr().out)
     assert out1["command"] == "serve addons"
     assert out1["data"]["profile"] == "default"
-    assert out1["data"]["active_addons"] == ["core-auth", "client-gateway", "webhooks"]
+    assert out1["data"]["active_addons"] == ["core-auth", "client-gateway", "webhooks", "channels"]
 
     # 2. Create an external addon and an explicit `--addons-config` file
     ext_dir = tmp_path / "external_addon_repo"

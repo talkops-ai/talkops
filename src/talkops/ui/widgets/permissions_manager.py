@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual import events
 from textual.binding import Binding, BindingType
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container
 from textual.content import Content
 from textual.widgets import Button, Input, OptionList, Static
 from textual.widgets.option_list import Option
@@ -44,14 +44,13 @@ from talkops.ui.permission_store import (
 )
 from talkops.ui.widgets.modal_base import (
     OpsModalScreen,
-    PillTab,
     PillTabs,
     format_modal_option_row,
 )
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from textual.app import ComposeResult
+    pass
 
 logger = get_logger(__name__)
 
@@ -386,7 +385,6 @@ class PermissionsManagerScreen(OpsModalScreen[None]):
 
     def _render_rule_list(self, option_list: OptionList, category: str, width: int = 82) -> None:
         """Render allow/ask/deny rule list with add option."""
-        cat_display = category.title()
         desc = {
             "allow": "TalkOps won't ask before using allowed tools.",
             "ask": "TalkOps will prompt for confirmation every time.",

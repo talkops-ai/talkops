@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from talkops.commands._base import CommandContext
@@ -27,10 +25,8 @@ from talkops.commands.core.doctor import (
     DoctorHandler,
 )
 from talkops.commands.core.help_cmd import HelpHandler
-from talkops.commands.core.mcp import McpHandler
 from talkops.commands.power.tasks import SessionTaskStore, TasksHandler
 from talkops.commands.power.version import VersionHandler
-from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
 from talkops.ui.widgets.messages import (
     CommandOutputMessage,
     SystemMessage,

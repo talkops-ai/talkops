@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -36,7 +35,6 @@ from talkops.backend.registry import (
 from talkops.backend.sandbox_config import SandboxConfig
 from talkops.backend.sandbox_factory import (
     WORKSPACE_IGNORE_DIRS,
-    get_project_root,
     get_sandbox_backend,
     get_sandbox_working_dir,
 )
@@ -90,7 +88,7 @@ class TestBackendRegistry:
 
     def test_decorator_registers(self) -> None:
         """Verify decorator registers."""
-        registry = BackendRegistry()
+        _ = BackendRegistry()
 
         @register_backend("test_custom_provider")
         class CustomProvider:
@@ -195,6 +193,36 @@ class TestLocalShellBackend:
         assert "SECRET_PASSWORD" not in env
         assert "DATABASE_URL" not in env
         assert "GITHUB_TOKEN" not in env
+
+    def test_windows_system_env_preserved_and_secrets_filtered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify native Windows system env vars are kept while secrets remain filtered."""
+        monkeypatch.setattr("talkops.backend.local.os.name", "nt")
+        monkeypatch.delenv("PAGER", raising=False)
+        monkeypatch.setenv("PATH", r"C:\Windows\system32;C:\Windows")
+        monkeypatch.setenv("SystemRoot", r"C:\Windows")
+        monkeypatch.setenv("ComSpec", r"C:\Windows\system32\cmd.exe")
+        monkeypatch.setenv("USERPROFILE", r"C:\Users\venka")
+        monkeypatch.setenv("APPDATA", r"C:\Users\venka\AppData\Roaming")
+        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\venka\AppData\Local")
+        monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        monkeypatch.setenv("TEMP", r"C:\Users\venka\AppData\Local\Temp")
+        monkeypatch.setenv("SECRET_PASSWORD", "hunter2")
+
+        env = _build_shell_env()
+        assert env["SystemRoot"] == r"C:\Windows"
+        assert env["ComSpec"] == r"C:\Windows\system32\cmd.exe"
+        assert env["USERPROFILE"] == r"C:\Users\venka"
+        assert env["APPDATA"] == r"C:\Users\venka\AppData\Roaming"
+        assert env["LOCALAPPDATA"] == r"C:\Users\venka\AppData\Local"
+        assert env["PATHEXT"] == ".COM;.EXE;.BAT;.CMD"
+        assert env["TEMP"] == r"C:\Users\venka\AppData\Local\Temp"
+        assert env["PAGER"] == ""
+        assert "SECRET_PASSWORD" not in env
+        path_key = next(k for k in env if k.upper() == "PATH")
+        assert r"C:\Windows\system32" in env[path_key]
+        assert "/opt/homebrew/bin" not in env[path_key]
 
     def test_local_shell_backend_sync_cloud_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Verify _sync_cloud_env syncs active profile and region, clearing static keys for named profiles."""

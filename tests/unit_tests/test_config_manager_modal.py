@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button, Input, OptionList
+from textual.widgets import Input, OptionList
 
 from talkops.ui.widgets.config_manager import ConfigManagerScreen, _InlineEditScreen
 

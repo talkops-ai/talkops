@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 class EffortHandler(BaseCommandHandler):
     """Handler for /effort command to control model reasoning effort level."""
 
-    SUPPORTED = ("low", "medium", "high", "max")
+    SUPPORTED = ("low", "medium", "high", "xhigh", "max")
 
     @property
     def name(self) -> str:

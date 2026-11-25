@@ -82,3 +82,16 @@ In addition to `~/.talkops/config.toml`, TalkOps automatically loads environment
 
 > [!TIP]
 > If you work on repos that have their own application `.env` files and you don't want TalkOps to read them automatically, run `/config set startup.read_project_dotenv false` or set `READ_PROJECT_DOTENV=false`.
+
+---
+
+## Which Configuration File Goes Where?
+
+TalkOps splits personal CLI/TUI preferences from project/server deployment files so local interactive edits never clobber shared repository or production server settings:
+
+| File | Scope | Edited By | What Belongs Here |
+| :--- | :--- | :--- | :--- |
+| **`~/.talkops/config.toml`** | User-global | TUI/CLI (`/config`, `/model`, `/cloud`, `/pool`) or manual edit | Personal CLI/TUI preferences (models, cloud profile, approval mode, sandboxes, UI theme). See **[config.toml Reference](./config.toml.md)**. |
+| **`.talkops/addons.json`** *(or `~/.talkops/addons.json`)* | Multi-layer (user → project → `--addons-config`) | Humans / GitOps / Kubernetes ConfigMaps | Server Mode (`talkops serve`) addon settings (`channels`, `webhooks`, `core-auth`, `client-gateway`, custom profiles, dedicated ports, and `${ENV_VAR}` secret references). Optional if configured purely via `.talkops/.env`. See **[Server Addons & `addons.json`](./server-addons.md#4-addonsjson-reference--step-by-step-configuration-guide)**. |
+| **`.talkops/.env`** / **`~/.talkops/.env`** | Project / User-global | Humans / `/auth` *(never commit to Git)* | API keys, bot tokens, signing secrets, and `TALKOPS_ADDON_*` / `TALKOPS_CHANNELS_*` overrides. |
+| **`.mcp.json`** / **`~/.talkops/.mcp.json`** | Project / User-global | Humans / Git | Model Context Protocol (MCP) tool server definitions. |

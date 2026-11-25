@@ -150,6 +150,7 @@ class SlashCommandController:
         self._view = view
         self._suggestions: list[tuple[str, str]] = []
         self._suggestion_names: list[str] = []
+        self._suggestion_aliases: list[str | None] = []
         self._selected_index = 0
 
     def update_commands(self, commands: list[CommandEntry]) -> None:
@@ -171,11 +172,12 @@ class SlashCommandController:
         if self._suggestions:
             self._suggestions.clear()
             self._suggestion_names.clear()
+            self._suggestion_aliases.clear()
             self._selected_index = 0
             self._view.clear_completion_suggestions()
 
     def name_prefix_matches(self, text: str, cursor_index: int) -> list[CommandEntry]:
-        """Return commands whose names start with the current slash query."""
+        """Return commands whose names or aliases start with the current slash query."""
         if cursor_index < 0 or cursor_index > len(text):
             return []
         if not self.can_handle(text, cursor_index):
@@ -189,10 +191,21 @@ class SlashCommandController:
             entry
             for entry in self._commands
             if entry.name.lstrip("/").lower().startswith(search)
+            or any(
+                alias.lstrip("/").lower().startswith(search)
+                for alias in getattr(entry, "aliases", ())
+            )
         ]
 
     @staticmethod
-    def _score_command(search: str, cmd: str, desc: str, keywords: str = "") -> float:
+    def _score_command(
+        search: str,
+        cmd: str,
+        desc: str,
+        keywords: str = "",
+        *,
+        is_alias: bool = False,
+    ) -> float:
         """Score a command against a search string. Higher = better match."""
         if not search:
             return 0.0
@@ -200,7 +213,11 @@ class SlashCommandController:
         lower_desc = desc.lower()
         kw_tokens = keywords.lower().split() if keywords else []
         is_skill_entry = "skill" in kw_tokens
-        is_alias = lower_desc.startswith("alias for ") or lower_desc.startswith("alias ")
+        is_alias = (
+            is_alias
+            or lower_desc.startswith("alias for ")
+            or lower_desc.startswith("alias ")
+        )
 
         # Support legacy /skill:<query> search against skill entries
         if search.startswith("skill:") and is_skill_entry:
@@ -222,9 +239,9 @@ class SlashCommandController:
             name.startswith(f"{search}:")
             or (":" in name and name.split(":", 1)[0] == search)
             or (":" in name and is_skill_entry and name.split(":", 1)[0].startswith(search) and len(search) >= 2)
-            or (search in ("ag", "age", "agen") and name.startswith("agent:"))
+            or (not is_alias and search in ("ag", "age", "agen") and name.startswith("agent:"))
         ):
-            return 230.0
+            return 230.0 if not is_alias else 175.0
 
         # 3. Canonical commands matching prefix (or skill short-name prefix after ':')
         if name.startswith(search):
@@ -249,10 +266,43 @@ class SlashCommandController:
                 return 110.0
             return 90.0
 
+        if is_alias and (len(name) < 3 or len(search) < 3):
+            return 0.0
+
         name_ratio = SequenceMatcher(None, search, name).ratio()
-        desc_ratio = SequenceMatcher(None, search, lower_desc).ratio()
+        desc_ratio = SequenceMatcher(None, search, lower_desc).ratio() if lower_desc else 0.0
         best = max(name_ratio * 60, desc_ratio * 30)
         return best if best >= _MIN_SLASH_FUZZY_SCORE else 0.0
+
+    @classmethod
+    def _match_entry(cls, search: str, entry: CommandEntry) -> tuple[float, str | None]:
+        """Score a CommandEntry and return `(score, matched_alias)`.
+
+        `matched_alias` is populated only when an alias on `entry.aliases`
+        outscores the canonical command itself, so the UI renders
+        `command (alias)` instead of listing duplicate alias entries.
+        """
+        canonical_score = cls._score_command(
+            search, entry.name, entry.description, entry.hidden_keywords
+        )
+        display_name = getattr(entry, "display_name", "")
+        if display_name and display_name != entry.name:
+            canonical_score = max(
+                canonical_score,
+                cls._score_command(
+                    search, display_name, entry.description, entry.hidden_keywords
+                ),
+            )
+
+        best_score = canonical_score
+        matched_alias: str | None = None
+        for alias in getattr(entry, "aliases", ()):
+            alias_score = cls._score_command(search, alias, "", "", is_alias=True)
+            if alias_score > best_score:
+                best_score = alias_score
+                matched_alias = alias
+
+        return best_score, matched_alias
 
     def on_text_changed(self, text: str, cursor_index: int) -> None:
         """Update suggestions when text changes."""
@@ -299,17 +349,19 @@ class SlashCommandController:
                         )
                     ]
                 if matching_entries:
+                    top_matches = matching_entries[:MAX_SUGGESTIONS]
                     self._suggestions = [
                         (
                             entry.display_name if getattr(entry, "display_name", "") else entry.name,
                             entry.description,
                         )
-                        for entry in matching_entries[:MAX_SUGGESTIONS]
+                        for entry in top_matches
                     ]
                     self._suggestion_names = [
                         entry.display_name if getattr(entry, "display_name", "") else entry.name
-                        for entry in matching_entries[:MAX_SUGGESTIONS]
+                        for entry in top_matches
                     ]
+                    self._suggestion_aliases = [None] * len(top_matches)
                     self._selected_index = 0
                     self._view.render_completion_suggestions(
                         self._suggestions, self._selected_index
@@ -319,33 +371,40 @@ class SlashCommandController:
             return
 
         if not search:
-            selected = list(self._commands)[:MAX_SUGGESTIONS]
-        else:
-            scored = [
-                (score, entry)
-                for entry in self._commands
-                if (
-                    score := self._score_command(
-                        search, entry.name, entry.description, entry.hidden_keywords
-                    )
-                )
-                > 0
+            selected: list[tuple[CommandEntry, str | None]] = [
+                (entry, None) for entry in list(self._commands)[:MAX_SUGGESTIONS]
             ]
+        else:
+            scored: list[tuple[float, CommandEntry, str | None]] = []
+            for entry in self._commands:
+                score, matched_alias = self._match_entry(search, entry)
+                if score > 0:
+                    scored.append((score, entry, matched_alias))
             scored.sort(key=lambda x: -x[0])
-            selected = [entry for _, entry in scored[:MAX_SUGGESTIONS]]
+            selected = [
+                (entry, matched_alias)
+                for _, entry, matched_alias in scored[:MAX_SUGGESTIONS]
+            ]
 
         if selected:
-            self._suggestions = [
-                (
-                    entry.display_name if getattr(entry, "display_name", "") else entry.name,
-                    entry.description,
+            self._suggestions = []
+            self._suggestion_names = []
+            self._suggestion_aliases = []
+            for entry, matched_alias in selected:
+                canonical_cmd = (
+                    entry.display_name
+                    if getattr(entry, "display_name", "")
+                    else entry.name
                 )
-                for entry in selected
-            ]
-            self._suggestion_names = [
-                entry.display_name if getattr(entry, "display_name", "") else entry.name
-                for entry in selected
-            ]
+                display_label = (
+                    f"{canonical_cmd} ({matched_alias.lstrip('/')})"
+                    if matched_alias
+                    else canonical_cmd
+                )
+                self._suggestions.append((display_label, entry.description))
+                self._suggestion_names.append(canonical_cmd)
+                self._suggestion_aliases.append(matched_alias)
+
             self._selected_index = 0
             self._view.render_completion_suggestions(
                 self._suggestions, self._selected_index
@@ -361,12 +420,20 @@ class SlashCommandController:
             return CompletionResult.IGNORED
 
         match event.key:
-            case "tab" | "space":
+            case "tab":
                 if self._apply_selected_completion(cursor_index):
                     return CompletionResult.HANDLED
                 return CompletionResult.IGNORED
+            case "space":
+                if self._apply_selected_completion(
+                    cursor_index, preserve_exact_alias=True, text=text
+                ):
+                    return CompletionResult.HANDLED
+                return CompletionResult.IGNORED
             case "enter":
-                if self._apply_selected_completion(cursor_index):
+                if self._apply_selected_completion(
+                    cursor_index, preserve_exact_alias=True, text=text
+                ):
                     return CompletionResult.SUBMIT
                 return CompletionResult.HANDLED
             case "down":
@@ -391,12 +458,28 @@ class SlashCommandController:
             self._suggestions, self._selected_index
         )
 
-    def _apply_selected_completion(self, cursor_index: int) -> bool:
+    def _apply_selected_completion(
+        self,
+        cursor_index: int,
+        *,
+        preserve_exact_alias: bool = False,
+        text: str = "",
+    ) -> bool:
         """Apply the currently selected completion."""
         if not self._suggestions:
             return False
 
         command = self._suggestion_names[self._selected_index]
+        matched_alias = (
+            self._suggestion_aliases[self._selected_index]
+            if self._selected_index < len(self._suggestion_aliases)
+            else None
+        )
+        if preserve_exact_alias and matched_alias and text:
+            typed_cmd = text[:cursor_index].strip().lower()
+            if typed_cmd == matched_alias.lower():
+                command = matched_alias
+
         self._view.replace_completion_range(0, cursor_index, command)
         self.reset()
         return True
@@ -819,21 +902,27 @@ class FuzzyFileController:
         self._cache_generation = 0
 
     def _get_files(self, target_dir: Path | None = None) -> list[str]:
-        """Get live workspace file and directory candidates."""
-        base_files = _get_project_files(self._project_root)
-        scoped = _scope_files_to_cwd(base_files, self._project_root, self._cwd)
+        """Get workspace file and directory candidates, reusing cached roots when warm."""
+        if self._file_cache is not None and (target_dir is None or target_dir == self._cwd):
+            return self._file_cache
 
-        seen = set(scoped)
-        results = list(scoped)
-        # Always perform a live scandir walk on cwd (and target_dir if specified)
-        # so any newly created file or directory appears immediately.
-        _append_walked_entries(
-            self._cwd,
-            self._cwd,
-            seen,
-            results,
-            max_entries=_MAX_FALLBACK_FILES,
-        )
+        if self._file_cache is not None:
+            results = list(self._file_cache)
+            seen = set(results)
+        else:
+            base_files = _get_project_files(self._project_root)
+            scoped = _scope_files_to_cwd(base_files, self._project_root, self._cwd)
+            seen = set(scoped)
+            results = list(scoped)
+            _append_walked_entries(
+                self._cwd,
+                self._cwd,
+                seen,
+                results,
+                max_entries=_MAX_FALLBACK_FILES,
+            )
+            self._file_cache = list(results)
+
         if target_dir is not None and target_dir != self._cwd:
             _append_walked_entries(
                 self._cwd,
@@ -842,7 +931,6 @@ class FuzzyFileController:
                 results,
                 max_entries=_MAX_FALLBACK_FILES,
             )
-        self._file_cache = results
         return results
 
     def refresh_cache(self) -> None:

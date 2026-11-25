@@ -24,7 +24,6 @@ from typing import (
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     ContextT,
-    PrivateStateAttr,
     TracePolicy,
     omit_payload,
 )

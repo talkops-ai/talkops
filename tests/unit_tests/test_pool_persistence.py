@@ -23,7 +23,6 @@ import pytest
 from talkops.commands._base import CommandContext
 from talkops.commands.core.pool import PoolHandler
 from talkops.config.toml_config import (
-    clear_agent_pool,
     load_agent_pool,
     read_config_toml,
     save_agent_pool,
@@ -149,7 +148,7 @@ def test_discover_tiers_multi_provider_pool():
 async def test_pool_cli_handler_lifecycle():
     """Test /pool set, status, and clear CLI execution lifecycle."""
     handler = PoolHandler()
-    mgr = get_model_pool_manager()
+    get_model_pool_manager()
 
     # 1. Set custom pool
     ctx_set = CommandContext(

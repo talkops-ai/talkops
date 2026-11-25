@@ -92,7 +92,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run unit tests
-        run: uv run pytest tests/ -m unit -v --tb=short
+        run: uv run pytest tests/unit_tests/ --ignore=tests/evals -m unit -v --tb=short
 
   # ── Step 3: Build & Package Verification ────────────────────────────────────
   build:

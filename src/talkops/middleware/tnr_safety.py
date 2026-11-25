@@ -29,7 +29,6 @@ import asyncio
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import threading
 import time
@@ -173,20 +172,27 @@ def _extract_tool_call(request: ToolCallRequest) -> tuple[str, dict[str, Any], s
     return name, args, tc_id
 
 
-def _is_tnr_enabled(runtime: Any, default: bool = False) -> bool:
+def _is_tnr_enabled(runtime: Any, default: bool = False, state: Any = None) -> bool:
     if default:
         return True
     if os.environ.get("TALKOPS_SERVER_TNR", "").lower() == "true":
         return True
-    ctx = getattr(runtime, "context", None)
-    if isinstance(ctx, Mapping) and bool(ctx.get("tnr")):
+    env_prof = os.environ.get("TALKOPS_EXECUTION_PROFILE", "").strip().lower()
+    if env_prof in {"autonomous-tnr", "autonomous_tnr", "tnr"}:
         return True
-    if ctx is not None and callable(getattr(ctx, "get", None)) and bool(ctx.get("tnr")):
+    if isinstance(state, Mapping):
+        st_prof = str(state.get("execution_profile") or "").strip().lower()
+        if st_prof in {"autonomous-tnr", "autonomous_tnr", "tnr"}:
+            return True
+    ctx = getattr(runtime, "context", None)
+    if isinstance(ctx, Mapping) and ctx.get("tnr") is True:
+        return True
+    if ctx is not None and not isinstance(ctx, Mapping) and getattr(ctx, "tnr", None) is True:
         return True
     cfg = getattr(runtime, "config", None)
     if isinstance(cfg, Mapping):
         configurable = cfg.get("configurable")
-        if isinstance(configurable, Mapping) and bool(configurable.get("tnr")):
+        if isinstance(configurable, Mapping) and configurable.get("tnr") is True:
             return True
     return False
 
@@ -342,6 +348,7 @@ class TransactionalNonRegressionMiddleware(AgentMiddleware[Any, Any, Any]):
         enabled_by_default: bool = False,
         severity_evaluator: Callable[[ToolCallRequest, ToolMessage | Command[Any]], float] | None = None,
         initial_severity: float = 0.5,
+        durable_workflow_engine: Any | None = None,
     ) -> None:
         """Initialize TransactionalNonRegressionMiddleware."""
         super().__init__()
@@ -350,6 +357,8 @@ class TransactionalNonRegressionMiddleware(AgentMiddleware[Any, Any, Any]):
         self.severity_evaluator = severity_evaluator
         self.initial_severity = initial_severity
         self.lock_manager = ALockManager()
+        self.durable_workflow_engine = durable_workflow_engine
+        self.committed_snapshots: list[UndoSnapshot] = []
 
     def _prepare_snapshot(self, tool_name: str, args: Mapping[str, Any]) -> UndoSnapshot:
         lower_name = tool_name.lower()
@@ -488,7 +497,7 @@ class TransactionalNonRegressionMiddleware(AgentMiddleware[Any, Any, Any]):
     ) -> ToolMessage | Command[Any]:
         """Intercept and wrap synchronous tool execution."""
         runtime = getattr(request, "runtime", None)
-        if not _is_tnr_enabled(runtime, self.enabled_by_default):
+        if not _is_tnr_enabled(runtime, self.enabled_by_default, state=getattr(request, "state", None)):
             return handler(request)
 
         tool_name, args, _ = _extract_tool_call(request)
@@ -524,6 +533,25 @@ class TransactionalNonRegressionMiddleware(AgentMiddleware[Any, Any, Any]):
                 )
                 return self._append_rollback_notice(result, undo_msg)
 
+            self.committed_snapshots.append(snapshot)
+            if self.durable_workflow_engine is not None and snapshot.inverse_shell_cmd:
+                state_map = request.state if isinstance(request.state, Mapping) else {}
+                wh_meta = state_map.get("_webhook_metadata") if isinstance(state_map.get("_webhook_metadata"), Mapping) else {}
+                tid = str(wh_meta.get("thread_id") or state_map.get("thread_id") or "tnr-thread")
+                svc = str(wh_meta.get("service_name") or snapshot.resource_key)
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(
+                        self.durable_workflow_engine.schedule_post_remediation(
+                            thread_id=tid,
+                            service_name=svc,
+                            inverse_shell_cmd=snapshot.inverse_shell_cmd,
+                            cwd=str(snapshot.cwd or self.working_dir),
+                        )
+                    )
+                except Exception:
+                    pass
+
             _emit_tnr_event(
                 runtime,
                 {
@@ -553,7 +581,7 @@ class TransactionalNonRegressionMiddleware(AgentMiddleware[Any, Any, Any]):
     ) -> ToolMessage | Command[Any]:
         """Intercept and wrap asynchronous tool execution."""
         runtime = getattr(request, "runtime", None)
-        if not _is_tnr_enabled(runtime, self.enabled_by_default):
+        if not _is_tnr_enabled(runtime, self.enabled_by_default, state=getattr(request, "state", None)):
             return await handler(request)
 
         tool_name, args, _ = _extract_tool_call(request)
@@ -588,6 +616,22 @@ class TransactionalNonRegressionMiddleware(AgentMiddleware[Any, Any, Any]):
                     },
                 )
                 return self._append_rollback_notice(result, undo_msg)
+
+            self.committed_snapshots.append(snapshot)
+            if self.durable_workflow_engine is not None and snapshot.inverse_shell_cmd:
+                state_map = request.state if isinstance(request.state, Mapping) else {}
+                wh_meta = state_map.get("_webhook_metadata") if isinstance(state_map.get("_webhook_metadata"), Mapping) else {}
+                tid = str(wh_meta.get("thread_id") or state_map.get("thread_id") or "tnr-thread")
+                svc = str(wh_meta.get("service_name") or snapshot.resource_key)
+                try:
+                    await self.durable_workflow_engine.schedule_post_remediation(
+                        thread_id=tid,
+                        service_name=svc,
+                        inverse_shell_cmd=snapshot.inverse_shell_cmd,
+                        cwd=str(snapshot.cwd or self.working_dir),
+                    )
+                except Exception as exc:
+                    logger.debug("Could not schedule durable verification for %s: %s", snapshot.resource_key, exc)
 
             _emit_tnr_event(
                 runtime,

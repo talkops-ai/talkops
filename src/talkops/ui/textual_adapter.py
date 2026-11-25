@@ -361,6 +361,51 @@ def _extract_text(
     return text
 
 
+def _format_tool_message_content(msg_obj: Any) -> str:
+    """Format a `ToolMessage` content (string or multimodal `content_blocks`) for TUI display without dumping raw base64."""
+    from talkops.media_utils import format_media_size
+
+    raw_content = getattr(msg_obj, "content", "")
+    if isinstance(raw_content, str):
+        return raw_content
+    add_kwargs = getattr(msg_obj, "additional_kwargs", None) or {}
+    file_path = add_kwargs.get("read_file_path") if isinstance(add_kwargs, dict) else None
+
+    blocks = getattr(msg_obj, "content_blocks", None)
+    if not isinstance(blocks, list):
+        blocks = raw_content if isinstance(raw_content, list) else []
+
+    if blocks:
+        parts: list[str] = []
+        for block in blocks:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                btype = block.get("type")
+                if btype == "text" and isinstance(block.get("text"), str):
+                    parts.append(block["text"])
+                elif btype in {"image", "image_url", "video", "audio", "file"}:
+                    mime = str(block.get("mime_type") or btype)
+                    b64 = block.get("base64")
+                    if not isinstance(b64, str) and btype == "image_url":
+                        url = (block.get("image_url") or {}).get("url", "")
+                        if isinstance(url, str) and ";base64," in url:
+                            b64 = url.split(";base64,", 1)[1]
+                    size_bytes = (len(b64.rstrip("=")) * 3) // 4 if isinstance(b64, str) and b64 else 0
+                    extras = block.get("extras")
+                    filename = (
+                        (extras.get("filename") if isinstance(extras, dict) else None)
+                        or (Path(file_path).name if isinstance(file_path, str) and file_path else None)
+                    )
+                    details = [d for d in (filename, format_media_size(size_bytes) if size_bytes else None) if d]
+                    suffix_str = f" ({', '.join(details)})" if details else ""
+                    parts.append(f"📎 Loaded {mime}{suffix_str}")
+        if parts:
+            return "\n".join(parts)
+
+    return str(raw_content) if raw_content is not None else ""
+
+
 
 
 
@@ -595,12 +640,13 @@ class TextualAdapter:
             tuple[input_payload_dict, turn_id]
         """
         from talkops.media_utils import (
+            AudioData,
+            FileData,
             ImageData,
             VideoData,
             create_multimodal_content,
             get_media_from_path,
             is_media_path,
-            strip_media_placeholders,
         )
         from talkops.middleware.auto_mode import (
             USER_PROMPT_METADATA_KEY,
@@ -632,6 +678,8 @@ class TextualAdapter:
         )
         images: list[ImageData] = list(tracker.get_images()) if tracker is not None else []
         videos: list[VideoData] = list(tracker.get_videos()) if tracker is not None else []
+        audios: list[AudioData] = list(tracker.get_audios()) if tracker is not None else []
+        files: list[FileData] = list(tracker.get_files()) if tracker is not None else []
         if tracker is not None:
             tracker.clear()
 
@@ -647,6 +695,12 @@ class TextualAdapter:
                         continue
                     if isinstance(media, VideoData):
                         videos.append(media)
+                        continue
+                    if isinstance(media, AudioData):
+                        audios.append(media)
+                        continue
+                    if isinstance(media, FileData):
+                        files.append(media)
                         continue
                 text_files.append(file_path)
 
@@ -676,19 +730,23 @@ class TextualAdapter:
             ),
         }
 
-        if images or videos:
+        if images or videos or audios or files:
             message_content: Any = create_multimodal_content(
                 final_content,
                 images,
                 videos=videos,
+                audios=audios,
+                files=files,
+            )
+            human_msg = HumanMessage(
+                content_blocks=message_content,
+                additional_kwargs=combined_additional_kwargs,
             )
         else:
-            message_content = final_content
-
-        human_msg = HumanMessage(
-            content=message_content,
-            additional_kwargs=combined_additional_kwargs,
-        )
+            human_msg = HumanMessage(
+                content=final_content,
+                additional_kwargs=combined_additional_kwargs,
+            )
         input_msg: dict[str, Any] = {
             "messages": [human_msg],
             "goal_criteria_request": None,
@@ -750,7 +808,7 @@ class TextualAdapter:
             except Exception:
                 logger.warning("Failed to persist approval mode to store", exc_info=True)
 
-        auto_approve_active = False
+        auto_approve_active = selected_mode == ApprovalMode.YOLO
 
         eff = None
         if self._app is not None:
@@ -782,6 +840,7 @@ class TextualAdapter:
             enriched_context["turn_id"] = turn_id
         enriched_context["approval_mode"] = selected_mode.value
         enriched_context["smart"] = (selected_mode == ApprovalMode.SMART)
+        enriched_context["yolo"] = (selected_mode == ApprovalMode.YOLO)
         enriched_context["auto_approve"] = auto_approve_active
         if live_key is not None:
             enriched_context["approval_mode_key"] = live_key
@@ -1240,7 +1299,7 @@ class TextualAdapter:
                 if (raw_name and raw_name != "None")
                 else self._active_tools_map.get(call_id, "tool")
             )
-            content = str(getattr(msg_obj, "content", ""))
+            content = _format_tool_message_content(msg_obj)
             sub_id = ns_key[0].split("tools:", 1)[-1] if (ns_key and "tools:" in ns_key[0]) else (ns_key[0] if ns_key else None)
             logger.info("Tool completed: %s (call_id=%s)", tool_name, call_id)
             if self._messages is not None:

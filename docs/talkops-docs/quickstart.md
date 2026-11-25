@@ -12,23 +12,33 @@ Get **TalkOps** installed, authenticated, verified, and running autonomous DevOp
 
 ## 1. Install TalkOps
 
-**Prerequisites:** macOS, Linux, or Windows WSL2. The standalone installer automatically provisions **Python 3.12+**, **`uv`**, and **`ripgrep`** if they are not already on your machine.
+**Prerequisites:** macOS, Linux, or Windows (native PowerShell or WSL2). The standalone installers automatically provision **Python 3.12+**, **`uv`**, and **`ripgrep`** if they are not already on your machine. No `sudo` or Administrator privileges are required.
 
-Run the installer script:
+**macOS, Linux, or Windows WSL2** *(open your WSL2 Linux terminal first — do not run `curl ... | bash` inside Windows `cmd.exe`)*:
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
 ```
+
+**Windows (PowerShell — no WSL required):**
+
+```powershell
+irm https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.ps1 | iex
+```
+
+> [!NOTE]
+> **Windows Troubleshooting (`Wsl/Service/E_FAIL` or `Bash/Service/E_FAIL`):**
+> Running `curl ... | bash` or `curl ... | wsl.exe` from Windows Command Prompt (`cmd.exe`) invokes Windows' WSL launcher (`bash.exe` / `wsl.exe`) and will fail if WSL2 virtualization is disabled or misconfigured. Use the **PowerShell installer** above for native Windows without WSL, or run `install.sh` **inside** an active WSL2 Linux shell (without `sudo`).
 
 <details>
 <summary><b>Alternative installation methods (<code>uv</code>, <code>pipx</code>, <code>pip</code>, pinned version, or local checkout)</b></summary>
 
 ```bash
 # Using uv (recommended if you already manage Python 3.12+ with uv)
-uv tool install talkops-ai
+uv tool install --python 3.12 talkops-ai
 
 # Include optional remote sandbox SDKs (Modal, Daytona, Runloop)
-uv tool install "talkops-ai[sandboxes]"
+uv tool install --python 3.12 "talkops-ai[sandboxes]"
 
 # Using pipx
 pipx install talkops-ai
@@ -36,8 +46,13 @@ pipx install talkops-ai
 # Using pip inside a Python 3.12+ virtual environment
 pip install -U talkops-ai
 
-# Upgrade an existing installation
+# Upgrade an existing installation (macOS / Linux / WSL2)
 curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash -s -- --upgrade
+```
+
+```powershell
+# Upgrade an existing installation (Windows PowerShell)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.ps1))) -Upgrade
 ```
 
 </details>

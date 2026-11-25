@@ -32,8 +32,6 @@ import pytest
 
 from talkops.plugins.project_plugins import (
     ProjectPluginResult,
-    _collect_skill_names,
-    _has_agents,
     load_project_plugins,
 )
 

@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
 import pytest
 from rich.markup import render
@@ -26,7 +25,6 @@ from textual.app import App, ComposeResult
 from talkops.approval_mode import ApprovalMode
 from talkops.ui.app import TalkOpsApp
 from talkops.ui.widgets.approval import (
-    ApprovalDecided,
     ApprovalMenu,
     ApprovalModalScreen,
     assess_tool_risk,

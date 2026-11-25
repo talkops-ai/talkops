@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import textual._context
 from rich.console import Console
-from textual.widgets import Input, Static
+from textual.widgets import Input
 
 from talkops.commands._base import CommandContext
 from talkops.commands.core.cloud import CloudHandler
@@ -358,7 +358,6 @@ def test_profile_switch_region_sequence(monkeypatch, tmp_path: Path):
     from talkops.config.cloud_profiles import (
         get_active_aws_profile,
         get_active_aws_region,
-        get_aws_profile_info,
         set_active_aws_profile,
     )
     from talkops.config.toml_config import load_aws_profile, load_aws_region
@@ -544,7 +543,6 @@ def test_cloud_profile_discovery_caching(tmp_path: Path, monkeypatch):
     from talkops.config.cloud_profiles import (
         get_aws_profile_info,
         invalidate_aws_profile_cache,
-        list_aws_profiles,
     )
 
     fake_aws_dir = tmp_path / ".aws"

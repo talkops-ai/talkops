@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from langchain_core.tools import tool
-from langgraph.config import get_config
 
 from talkops.utils.logger import get_logger
 

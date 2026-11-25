@@ -31,6 +31,7 @@ from typing import Any, overload
 
 from talkops._version import __version__
 from talkops.approval_mode import ApprovalMode
+from talkops.cli.help_formatter import TalkOpsArgumentParser
 from talkops.output import OutputFormat, add_json_output_arg
 from talkops.utils.logger import get_logger
 
@@ -214,6 +215,8 @@ def _resolve_rubric_text(rubric: str | None) -> str | None:
 def _apply_stdin_pipe(args: argparse.Namespace) -> None:
     """Read piped stdin and merge it into the parsed CLI arguments."""
     explicit_stdin = getattr(args, "stdin", False)
+    if getattr(args, "subcommand", None) is not None and not explicit_stdin:
+        return
     if sys.stdin is None:
         if explicit_stdin:
             print("Error: --stdin was passed but stdin is not available.", file=sys.stderr)
@@ -282,23 +285,19 @@ def _apply_stdin_pipe(args: argparse.Namespace) -> None:
 
 
 def _resolve_approval_mode(args: argparse.Namespace) -> ApprovalMode:
-    """Resolve flags into typed ApprovalMode.
-
-    Enforces that `ApprovalMode.YOLO` is only permitted in headless CLI flows (`args.prompt`),
-    while interactive TUI flows are restricted to `manual`, `smart`, and `auto`.
-    """
+    """Resolve flags into typed ApprovalMode."""
     from talkops.approval_mode import coerce_approval_mode
 
     is_headless = bool(getattr(args, "prompt", None))
     if getattr(args, "yolo", False):
-        return ApprovalMode.YOLO if is_headless else ApprovalMode.MANUAL
+        return ApprovalMode.YOLO
     if getattr(args, "smart", False):
         return ApprovalMode.SMART
     if getattr(args, "auto_approve", False):
         return ApprovalMode.AUTO
     raw = getattr(args, "approval_mode", None)
     if raw:
-        return coerce_approval_mode(raw, allow_yolo=is_headless)
+        return coerce_approval_mode(raw, allow_yolo=True)
 
     # Non-interactive / headless execution (-p / --prompt) defaults to AUTO for autonomous execution,
     # while interactive TUI defaults to MANUAL for human-in-the-loop safety.
@@ -462,10 +461,11 @@ def _ensure_cli_authenticated(
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the comprehensive TalkOps command-line argument parser."""
-    parser = argparse.ArgumentParser(
+    parser = TalkOpsArgumentParser(
         prog="talkops",
         description="TalkOps — Autonomous Cloud Operations & DevOps Coding Agent.",
     )
+    parser._optionals.title = "general options"
     parser.add_argument(
         "-v",
         "--version",
@@ -473,8 +473,12 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
 
-    # Prompt & Headless flags
-    parser.add_argument(
+    # Subcommands (rendered first right under description)
+    subparsers = parser.add_subparsers(dest="subcommand", title="commands")
+
+    # 1. Prompt & Session Options
+    session_group = parser.add_argument_group("prompt & session options")
+    session_group.add_argument(
         "-p",
         "--prompt",
         "-n",
@@ -482,193 +486,105 @@ def build_parser() -> argparse.ArgumentParser:
         dest="prompt",
         type=str,
         default=None,
+        metavar="PROMPT",
         help="Run non-interactively (headless) with the given prompt.",
     )
-
-    # Interactive Initial Prompts & Seeding
-    parser.add_argument(
+    session_group.add_argument(
         "-m",
         "--message",
         "--initial-prompt",
         dest="initial_prompt",
         type=str,
         default=None,
+        metavar="TEXT",
         help="Initial prompt to auto-submit when interactive session starts.",
     )
-    parser.add_argument(
+    session_group.add_argument(
         "-s",
         "--skill",
         dest="initial_skill",
         type=str,
         default=None,
+        metavar="NAME",
         help="Invoke a skill when interactive or headless session starts.",
     )
-    parser.add_argument(
+    session_group.add_argument(
         "-a",
         "--agent",
         dest="agent",
         type=str,
         default=None,
+        metavar="AGENT",
         help="Start session with or run prompt using a named specialist agent.",
     )
-    parser.add_argument(
+    session_group.add_argument(
+        "--goal",
+        type=str,
+        default=None,
+        metavar="GOAL",
+        help="Initial goal objective to establish (for interactive TUI mode).",
+    )
+    session_group.add_argument(
         "--startup-cmd",
         dest="startup_cmd",
         type=str,
         default=None,
+        metavar="CMD",
         help="Shell command executed at startup before the first prompt.",
     )
-
-    # Output formatting
-    parser.add_argument(
-        "-q",
-        "--quiet",
-        action="store_true",
-        default=False,
-        help="Clean output for piping stdout — only agent's final text goes to stdout. Requires headless mode.",
-    )
-    parser.add_argument(
-        "--no-stream",
-        dest="no_stream",
-        action="store_true",
-        default=False,
-        help="Buffer response and write to stdout at once instead of streaming chunks. Requires headless mode.",
-    )
-    add_json_output_arg(parser, default="text")
-
-    # CI/CD Execution Limits
-    parser.add_argument(
-        "--max-turns",
-        dest="max_turns",
-        type=positive_int,
-        default=None,
-        help="Maximum agentic turns before stopping (>= 1). Requires headless mode.",
-    )
-    parser.add_argument(
-        "--timeout",
-        dest="timeout",
-        type=positive_int,
-        default=None,
-        help="Hard wall-clock timeout in seconds (>= 1). Exits 124 on expiry. Requires headless mode.",
-    )
-    parser.add_argument(
-        "--recursion-limit",
-        dest="recursion_limit",
-        type=positive_int,
-        default=None,
-        help="Override main agent's LangGraph recursion_limit (graph step budget).",
-    )
-    parser.add_argument(
+    session_group.add_argument(
         "--stdin",
         action="store_true",
         default=False,
         help="Read input from stdin explicitly.",
     )
-
-    # Cloud & Environment Overrides
-    parser.add_argument(
-        "--read-only",
-        "--dry-run",
-        dest="read_only",
-        action="store_true",
-        default=False,
-        help="Enforce read-only cloud operations safety mode (blocks all mutating AWS/K8s/Terraform calls).",
-    )
-    parser.add_argument(
-        "--aws-profile",
-        dest="aws_profile",
-        type=str,
-        default=None,
-        help="AWS profile override for this session (e.g. staging, prod).",
-    )
-    parser.add_argument(
-        "--aws-region",
-        dest="aws_region",
-        type=str,
-        default=None,
-        help="AWS region override for this session (e.g. us-east-1, eu-west-1).",
-    )
-    parser.add_argument(
-        "-S",
-        "--shell-allow-list",
-        dest="shell_allow_list",
-        type=shell_allow_list_arg,
-        default=None,
-        help="Comma-separated list of allowed shell commands ('recommended', 'all', or comma-separated names).",
-    )
-
-    # Remote Sandboxes
-    parser.add_argument(
-        "--sandbox",
-        dest="sandbox",
-        nargs="?",
-        const=_SANDBOX_DEFAULT_SENTINEL,
-        default="none",
-        metavar="TYPE",
-        help=(
-            "Remote sandbox for code execution (default: none - local only). "
-            "Built-ins: agentcore, daytona, langsmith, modal, runloop, vercel. "
-            "Third-party and config-declared providers are also accepted. "
-            "Pass --sandbox with no value to use [sandboxes].default from config.toml."
-        ),
-    )
-    parser.add_argument(
-        "--sandbox-id",
-        dest="sandbox_id",
-        type=str,
-        default=None,
-        metavar="ID",
-        help="Existing sandbox ID to attach to (skips creation and cleanup).",
-    )
-    parser.add_argument(
-        "--sandbox-snapshot-name",
-        dest="sandbox_snapshot_name",
-        type=str,
-        default=None,
-        metavar="NAME",
-        help="Snapshot (langsmith, daytona) or blueprint (runloop) name to use or create.",
-    )
-    parser.add_argument(
-        "--sandbox-setup",
-        dest="sandbox_setup",
+    session_group.add_argument(
+        "--cwd",
+        "--workspace",
+        dest="cwd",
         type=str,
         default=None,
         metavar="PATH",
-        help="Path to setup script to run inside the sandbox after creation.",
+        help="Working directory path for this execution.",
     )
 
-    # Model & Config
-    parser.add_argument(
+    # 2. Model & Approval Options
+    model_group = parser.add_argument_group("model & approval options")
+    model_group.add_argument(
         "-M",
         "--model",
         dest="model",
         type=str,
         default=None,
+        metavar="MODEL",
         help="Model specification to use (e.g. anthropic:claude-3-5-sonnet, openai:gpt-4o, bedrock:anthropic.claude-3-5-sonnet).",
     )
-    parser.add_argument(
+    model_group.add_argument(
         "--model-params",
         dest="model_params",
         type=str,
         default=None,
+        metavar="JSON",
         help="Extra kwargs to pass to model as JSON string (e.g. '{\"temperature\": 0.0}').",
     )
-    parser.add_argument(
+    model_group.add_argument(
         "--profile-override",
         dest="profile_override",
         type=str,
         default=None,
+        metavar="JSON",
         help="Override model profile fields as JSON string.",
     )
-    parser.add_argument(
+    model_group.add_argument(
         "--default-model",
         dest="default_model",
         nargs="?",
         const="__SHOW__",
         default=None,
+        metavar="MODEL",
         help="Set or show the default model for future launches.",
     )
-    parser.add_argument(
+    model_group.add_argument(
         "--clear-default-model",
         dest="clear_default_model",
         action="store_true",
@@ -676,8 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Clear configured default model.",
     )
 
-    # Approvals
-    approval_group = parser.add_mutually_exclusive_group()
+    approval_group = model_group.add_mutually_exclusive_group()
     approval_group.add_argument(
         "--approval-mode",
         dest="approval_mode",
@@ -709,22 +624,102 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable unrestricted YOLO mode without human prompts or classifier gating (requires -p/--prompt or `talkops serve`).",
     )
 
-    # MCP
-    parser.add_argument(
+    # 3. Cloud, Sandbox & Safety Options
+    safety_group = parser.add_argument_group("cloud, sandbox & safety options")
+    safety_group.add_argument(
+        "--read-only",
+        "--dry-run",
+        dest="read_only",
+        action="store_true",
+        default=False,
+        help="Enforce read-only cloud operations safety mode (blocks all mutating AWS/K8s/Terraform calls).",
+    )
+    safety_group.add_argument(
+        "--tnr",
+        dest="tnr",
+        action="store_true",
+        default=False,
+        help="Enable Transactional Non-Regression (TNR) safety lock and mandatory undo rollback.",
+    )
+    safety_group.add_argument(
+        "--aws-profile",
+        dest="aws_profile",
+        type=str,
+        default=None,
+        metavar="PROFILE",
+        help="AWS profile override for this session (e.g. staging, prod).",
+    )
+    safety_group.add_argument(
+        "--aws-region",
+        dest="aws_region",
+        type=str,
+        default=None,
+        metavar="REGION",
+        help="AWS region override for this session (e.g. us-east-1, eu-west-1).",
+    )
+    safety_group.add_argument(
+        "-S",
+        "--shell-allow-list",
+        dest="shell_allow_list",
+        type=shell_allow_list_arg,
+        default=None,
+        metavar="CMDS",
+        help="Comma-separated list of allowed shell commands ('recommended', 'all', or comma-separated names).",
+    )
+    safety_group.add_argument(
+        "--sandbox",
+        dest="sandbox",
+        nargs="?",
+        const=_SANDBOX_DEFAULT_SENTINEL,
+        default="none",
+        metavar="TYPE",
+        help=(
+            "Remote sandbox for code execution (default: none - local only). "
+            "Built-ins: agentcore, daytona, langsmith, modal, runloop, vercel. "
+            "Third-party and config-declared providers are also accepted. "
+            "Pass --sandbox with no value to use [sandboxes].default from config.toml."
+        ),
+    )
+    safety_group.add_argument(
+        "--sandbox-id",
+        dest="sandbox_id",
+        type=str,
+        default=None,
+        metavar="ID",
+        help="Existing sandbox ID to attach to (skips creation and cleanup).",
+    )
+    safety_group.add_argument(
+        "--sandbox-snapshot-name",
+        dest="sandbox_snapshot_name",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="Snapshot (langsmith, daytona) or blueprint (runloop) name to use or create.",
+    )
+    safety_group.add_argument(
+        "--sandbox-setup",
+        dest="sandbox_setup",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to setup script to run inside the sandbox after creation.",
+    )
+    safety_group.add_argument(
         "--mcp-config",
         dest="mcp_config",
         type=str,
         default=None,
+        metavar="PATH",
         help="Path to MCP servers JSON configuration file.",
     )
-    parser.add_argument(
+    safety_group.add_argument(
         "--no-mcp",
         dest="no_mcp",
         action="store_true",
         default=False,
         help="Disable all MCP tool loading.",
     )
-    parser.add_argument(
+    safety_group.add_argument(
         "--trust-project-mcp",
         "--trust-workspace-mcp",
         dest="trust_project_mcp",
@@ -732,92 +727,122 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Skip interactive confirmation prompts for project-level MCP servers.",
     )
-
-    # Session & State
-    parser.add_argument(
-        "-r",
-        "--resume",
-        "--resume-thread",
-        dest="resume_thread",
-        type=str,
-        default=None,
-        help="Resume an existing session thread ID.",
-    )
-    parser.add_argument(
-        "--server-url",
-        dest="server_url",
-        type=str,
-        default=None,
-        help="Connect to a remote TalkOps central server URL instead of spawning a local server (or set TALKOPS_SERVER_URL).",
-    )
-    parser.add_argument(
-        "--api-key",
-        dest="api_key",
-        type=str,
-        default=None,
-        help="Bearer token or API key for authenticating with a remote TalkOps server (or set TALKOPS_SERVER_API_KEY).",
-    )
-    parser.add_argument(
-        "--user-id",
-        dest="user_id",
-        type=str,
-        default=None,
-        help="Explicit user identity for multi-user activity tracking (or set TALKOPS_USER_ID).",
-    )
-    parser.add_argument(
-        "--cwd",
-        "--workspace",
-        dest="cwd",
-        type=str,
-        default=None,
-        help="Working directory path for this execution.",
-    )
-    parser.add_argument(
-        "--goal",
-        type=str,
-        default=None,
-        help="Initial goal objective to establish (for interactive TUI mode).",
-    )
-    parser.add_argument(
-        "--rubric",
-        type=str,
-        default=None,
-        help="Acceptance criteria to grade against (literal text or @path); used with headless mode.",
-    )
-    parser.add_argument(
-        "--rubric-model",
-        type=str,
-        default=None,
-        help="Model specification for the rubric grader agent.",
-    )
-    parser.add_argument(
-        "--rubric-max-iterations",
-        type=positive_int,
-        default=None,
-        help="Maximum evaluation iterations for the rubric grader.",
-    )
-    parser.add_argument(
-        "--trajectory-file",
-        dest="trajectory_file",
-        type=str,
-        default=None,
-        help="Write step-wise JSONL execution trajectory and benchmark telemetry to file.",
-    )
-    parser.add_argument(
+    safety_group.add_argument(
         "--no-subagents",
         dest="no_subagents",
         action="store_true",
         default=False,
         help="Disable subagent delegation (Single-Agent vs. Multi-Agent ablation mode).",
     )
-    parser.add_argument(
-        "--tnr",
-        dest="tnr",
+
+    # 4. Remote Server & Thread Options
+    remote_group = parser.add_argument_group("remote server & thread options")
+    remote_group.add_argument(
+        "-r",
+        "--resume",
+        "--resume-thread",
+        dest="resume_thread",
+        type=str,
+        default=None,
+        metavar="THREAD_ID",
+        help="Resume an existing session thread ID.",
+    )
+    remote_group.add_argument(
+        "--server-url",
+        dest="server_url",
+        type=str,
+        default=None,
+        metavar="URL",
+        help="Connect to a remote TalkOps central server URL instead of spawning a local server (or set TALKOPS_SERVER_URL).",
+    )
+    remote_group.add_argument(
+        "--api-key",
+        dest="api_key",
+        type=str,
+        default=None,
+        metavar="KEY",
+        help="Bearer token or API key for authenticating with a remote TalkOps server (or set TALKOPS_SERVER_API_KEY).",
+    )
+    remote_group.add_argument(
+        "--user-id",
+        dest="user_id",
+        type=str,
+        default=None,
+        metavar="ID",
+        help="Explicit user identity for multi-user activity tracking (or set TALKOPS_USER_ID).",
+    )
+
+    # 5. Output, Evaluation & Logging Options
+    output_group = parser.add_argument_group("output, evaluation & logging options")
+    output_group.add_argument(
+        "-q",
+        "--quiet",
         action="store_true",
         default=False,
-        help="Enable Transactional Non-Regression (TNR) safety lock and mandatory undo rollback.",
+        help="Clean output for piping stdout — only agent's final text goes to stdout. Requires headless mode.",
     )
-    parser.add_argument(
+    output_group.add_argument(
+        "--no-stream",
+        dest="no_stream",
+        action="store_true",
+        default=False,
+        help="Buffer response and write to stdout at once instead of streaming chunks. Requires headless mode.",
+    )
+    add_json_output_arg(output_group, default="text")
+    output_group.add_argument(
+        "--max-turns",
+        dest="max_turns",
+        type=positive_int,
+        default=None,
+        metavar="N",
+        help="Maximum agentic turns before stopping (>= 1). Requires headless mode.",
+    )
+    output_group.add_argument(
+        "--timeout",
+        dest="timeout",
+        type=positive_int,
+        default=None,
+        metavar="SECONDS",
+        help="Hard wall-clock timeout in seconds (>= 1). Exits 124 on expiry. Requires headless mode.",
+    )
+    output_group.add_argument(
+        "--recursion-limit",
+        dest="recursion_limit",
+        type=positive_int,
+        default=None,
+        metavar="N",
+        help="Override main agent's LangGraph recursion_limit (graph step budget).",
+    )
+    output_group.add_argument(
+        "--rubric",
+        type=str,
+        default=None,
+        metavar="RUBRIC",
+        help="Acceptance criteria to grade against (literal text or @path); used with headless mode.",
+    )
+    output_group.add_argument(
+        "--rubric-model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help="Model specification for the rubric grader agent.",
+    )
+    output_group.add_argument(
+        "--rubric-max-iterations",
+        type=positive_int,
+        default=None,
+        metavar="N",
+        help="Maximum evaluation iterations for the rubric grader.",
+    )
+    output_group.add_argument(
+        "--trajectory-file",
+        dest="trajectory_file",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Write step-wise JSONL execution trajectory and benchmark telemetry to file.",
+    )
+    output_group.add_argument(
         "-V",
         "--verbose",
         dest="verbose",
@@ -825,28 +850,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable verbose logging.",
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--log-level",
         choices=["debug", "info", "warning", "error", "critical"],
         type=str.lower,
         default=None,
         help="Set logging level (default: info, or debug with -V/--verbose).",
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--log-dir",
         type=str,
         default=None,
+        metavar="DIR",
         help="Directory for log files (default: /tmp/talkops_logs).",
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--log-file",
         type=str,
         default=None,
+        metavar="FILE",
         help="Log file path or filename (default: talkops.log in log directory).",
     )
 
-    # Subcommands
-    subparsers = parser.add_subparsers(dest="subcommand", help="Operational subcommands")
+    # Keep general options (-h/--help, -v/--version) at the end after commands & domain groups
+    if parser._optionals in parser._action_groups:
+        parser._action_groups.remove(parser._optionals)
+        parser._action_groups.append(parser._optionals)
+
     doctor_parser = subparsers.add_parser("doctor", help="Run system & cloud environment health checks.")
     add_json_output_arg(doctor_parser)
     doctor_parser.add_argument(
@@ -865,8 +895,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     from talkops.cli.commands.auth import setup_auth_parser
+    from talkops.cli.commands.openwiki import setup_openwiki_parser
 
     setup_auth_parser(subparsers, add_output_args=add_json_output_arg)
+    setup_openwiki_parser(subparsers)
 
     def _add_remote_server_args(target_parser: argparse.ArgumentParser) -> None:
         target_parser.add_argument(
@@ -922,6 +954,10 @@ def build_parser() -> argparse.ArgumentParser:
     from talkops.cli.commands.agents import setup_agents_parser
 
     setup_agents_parser(subparsers, add_output_args=add_json_output_arg)
+
+    from talkops.cli.commands.mcp_relay import setup_mcp_relay_parser
+
+    setup_mcp_relay_parser(subparsers)
 
     help_parser = subparsers.add_parser("help", help="Show help information.")
     help_parser.add_argument(
@@ -996,15 +1032,6 @@ def _validate_args(args: argparse.Namespace) -> int | None:
 
     if getattr(args, "no_mcp", False) and getattr(args, "mcp_config", None):
         print("Error: --no-mcp and --mcp-config are mutually exclusive.", file=sys.stderr)
-        return 2
-
-    raw_mode = str(getattr(args, "approval_mode", "") or "").strip().lower()
-    if (getattr(args, "yolo", False) or raw_mode == "yolo") and not getattr(args, "prompt", None):
-        print(
-            "Error: 'yolo' approval mode is only supported in CLI headless mode (-p/--prompt) "
-            "and webhook server mode (`talkops serve`). Interactive sessions support: manual, smart, auto.",
-            file=sys.stderr,
-        )
         return 2
 
     return None
@@ -1102,6 +1129,9 @@ def main(argv: list[str] | None = None) -> int:
         "skills",
         "agent",
         "agents",
+        "mcp-relay",
+        "openwiki",
+        "wiki",
         "help",
     }
 
@@ -1246,6 +1276,10 @@ def main(argv: list[str] | None = None) -> int:
         from talkops.cli.commands.auth import dispatch_auth_subcommand
 
         return dispatch_auth_subcommand(args, output_format=output_format)
+    elif args.subcommand in ("openwiki", "wiki"):
+        from talkops.cli.commands.openwiki import run_openwiki_command
+
+        return run_openwiki_command(args)
     elif args.subcommand == "threads":
         srv_url = getattr(args, "server_url", None)
         srv_key = getattr(args, "api_key", None)
@@ -1320,6 +1354,10 @@ def main(argv: list[str] | None = None) -> int:
         from talkops.cli.commands.agents import run_agents_command
 
         return run_agents_command(args, output_format=output_format)
+    elif args.subcommand == "mcp-relay":
+        from talkops.cli.commands.mcp_relay import execute_mcp_relay
+
+        return execute_mcp_relay(args)
 
     # 4. Handle default model configuration
     if getattr(args, "clear_default_model", False):

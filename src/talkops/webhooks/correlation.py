@@ -1,0 +1,252 @@
+# Copyright talkops.ai
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Alert Storm Correlator, Sidecar Inbox Routing & ThreadDrainMutex for TalkOps v2.
+
+Implements the Hybrid Sidecar + ``@before_model`` Drain concurrency protocol:
+- When Alert 1 starts an active RCA run on ``thread_id`` for ``checkout``, its
+  service and 1..2-hop topological neighbors (e.g. ``payment``, ``orders-db``)
+  are bound to ``thread_id`` for ``correlation_window_sec`` (default 900s).
+- When cascading Alert 2 arrives mid-flight (e.g. ``t=18s`` RDS Pool Full),
+  ``AlertStormCorrelator`` routes it into ``OperationalStore.enqueue_correlated_alert``
+  (Sidecar Inbox) instead of calling ``aupdate_state`` mid-tool-step or spawning
+  a duplicate parallel investigation.
+- ``ThreadDrainMutex`` coordinates ``AlertStormDrainMiddleware`` (draining at
+  ``before_model`` boundaries) with run finalization so late alerts arriving
+  after the final model turn automatically trigger a Continuation Run.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+import uuid
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
+from typing import Any, Literal
+
+from talkops.context_graph.graph import ContextGraph
+from talkops.storage.protocol import CorrelatedAlertItem, OperationalStore
+
+
+@dataclass(slots=True)
+class ActiveStormSession:
+    """Tracks an in-flight incident RCA thread and its correlated service set."""
+
+    thread_id: str
+    primary_service: str
+    environment: str
+    correlated_services: set[str] = field(default_factory=set)
+    started_at: float = field(default_factory=time.time)
+    expires_at: float = field(default_factory=lambda: time.time() + 900.0)
+    in_flight: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class StormRouteDecision:
+    """Outcome of routing an inbound alert through ``AlertStormCorrelator``."""
+
+    action: Literal["start_primary_run", "queued_sidecar_inbox"]
+    thread_id: str
+    matched_service: str = ""
+
+
+class ThreadDrainMutex:
+    """Per-thread async lock preventing race conditions between ``abefore_model`` drains and run completion."""
+
+    def __init__(self) -> None:
+        """Initialize ThreadDrainMutex."""
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def for_thread(self, thread_id: str) -> asyncio.Lock:
+        """Execute `for_thread`."""
+        lock = self._locks.get(thread_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[thread_id] = lock
+        return lock
+
+
+_GLOBAL_DRAIN_MUTEX = ThreadDrainMutex()
+
+
+def get_thread_drain_mutex() -> ThreadDrainMutex:
+    """Return the process-wide ``ThreadDrainMutex`` registry."""
+    return _GLOBAL_DRAIN_MUTEX
+
+
+class AlertStormCorrelator:
+    """Correlates cascading multi-service alert storms into a single active RCA thread."""
+
+    def __init__(
+        self,
+        store: OperationalStore,
+        *,
+        context_graph: ContextGraph | None = None,
+        correlation_window_sec: float = 900.0,
+        drain_mutex: ThreadDrainMutex | None = None,
+    ) -> None:
+        """Initialize AlertStormCorrelator."""
+        self.store = store
+        self.context_graph = context_graph or ContextGraph(store)
+        self.correlation_window_sec = correlation_window_sec
+        self.drain_mutex = drain_mutex or get_thread_drain_mutex()
+        self._sessions_by_thread: dict[str, ActiveStormSession] = {}
+        self._service_to_thread: dict[tuple[str, str], str] = {}
+        self._corr_lock = asyncio.Lock()
+
+    async def route_incoming_alert(
+        self,
+        *,
+        candidate_thread_id: str,
+        provider: str,
+        dedup_key: str,
+        service_name: str,
+        environment: str = "production",
+        normalized_event: Mapping[str, Any],
+        tenant_id: str = "default",
+        now_ts: float | None = None,
+    ) -> StormRouteDecision:
+        """Route an inbound alert either to a new primary run or into an active thread's Sidecar Inbox."""
+        effective_now = now_ts if now_ts is not None else time.time()
+        clean_service = (service_name or "").strip().lower()
+        clean_env = (environment or "production").strip().lower()
+
+        # Discover 1..2 hop topological neighbors so upstream/downstream alerts correlate automatically
+        neighbor_services: set[str] = {clean_service} if clean_service else set()
+        if clean_service:
+            try:
+                report = await self.context_graph.compute_blast_radius(
+                    clean_service,
+                    max_depth=2,
+                    now_ts=effective_now,
+                    tenant_id=tenant_id,
+                )
+                for n in report.neighbors:
+                    if n.service_name:
+                        neighbor_services.add(n.service_name.strip().lower())
+            except Exception:
+                pass
+
+        async with self._corr_lock:
+            self._evict_expired_unlocked(effective_now)
+
+            matched_tid: str | None = None
+            matched_svc = ""
+            for svc in neighbor_services:
+                existing_tid = self._service_to_thread.get((clean_env, svc))
+                if existing_tid:
+                    sess = self._sessions_by_thread.get(existing_tid)
+                    if sess is not None and sess.in_flight and sess.expires_at > effective_now:
+                        matched_tid = existing_tid
+                        matched_svc = svc
+                        break
+
+            # Also check if the exact same candidate_thread_id is already in-flight
+            if matched_tid is None:
+                same_sess = self._sessions_by_thread.get(candidate_thread_id)
+                if same_sess is not None and same_sess.in_flight and same_sess.expires_at > effective_now:
+                    matched_tid = candidate_thread_id
+                    matched_svc = clean_service
+
+            if matched_tid is not None:
+                async with self.drain_mutex.for_thread(matched_tid):
+                    # Re-verify session is still in-flight under the per-thread drain mutex
+                    sess = self._sessions_by_thread.get(matched_tid)
+                    if sess is not None and sess.in_flight:
+                        item = CorrelatedAlertItem(
+                            alert_row_id=f"alrt-{uuid.uuid4().hex[:12]}",
+                            thread_id=matched_tid,
+                            provider=provider,
+                            dedup_key=dedup_key,
+                            service_name=clean_service,
+                            environment=clean_env,
+                            tenant_id=tenant_id,
+                            normalized_event=dict(normalized_event),
+                            arrived_at=effective_now,
+                        )
+                        await self.store.enqueue_correlated_alert(item)
+                        for svc in neighbor_services:
+                            sess.correlated_services.add(svc)
+                            self._service_to_thread[(clean_env, svc)] = matched_tid
+                        return StormRouteDecision(
+                            action="queued_sidecar_inbox",
+                            thread_id=matched_tid,
+                            matched_service=matched_svc,
+                        )
+
+            # Register new primary storm investigation session
+            new_sess = ActiveStormSession(
+                thread_id=candidate_thread_id,
+                primary_service=clean_service,
+                environment=clean_env,
+                correlated_services=set(neighbor_services),
+                started_at=effective_now,
+                expires_at=effective_now + self.correlation_window_sec,
+                in_flight=True,
+            )
+            self._sessions_by_thread[candidate_thread_id] = new_sess
+            for svc in neighbor_services:
+                self._service_to_thread[(clean_env, svc)] = candidate_thread_id
+            return StormRouteDecision(
+                action="start_primary_run",
+                thread_id=candidate_thread_id,
+                matched_service=clean_service,
+            )
+
+    async def finalize_run_or_continue(
+        self,
+        thread_id: str,
+        *,
+        continuation_runner: Callable[[list[CorrelatedAlertItem]], Awaitable[Any]] | None = None,
+    ) -> list[CorrelatedAlertItem]:
+        """Atomically mark ``thread_id`` idle OR drain late-arriving sidecar alerts into a Continuation Run."""
+        leftovers: list[CorrelatedAlertItem] = []
+        async with self.drain_mutex.for_thread(thread_id):
+            unconsumed = await self.store.peek_unconsumed_alert_count(thread_id)
+            if unconsumed > 0:
+                leftovers = await self.store.drain_correlated_alerts(thread_id)
+            if not leftovers:
+                sess = self._sessions_by_thread.get(thread_id)
+                if sess is not None:
+                    sess.in_flight = False
+
+        if leftovers and continuation_runner is not None:
+            try:
+                await continuation_runner(leftovers)
+            finally:
+                async with self.drain_mutex.for_thread(thread_id):
+                    sess = self._sessions_by_thread.get(thread_id)
+                    if sess is not None and await self.store.peek_unconsumed_alert_count(thread_id) == 0:
+                        sess.in_flight = False
+        elif leftovers:
+            # Mark idle if caller handles leftovers directly
+            async with self.drain_mutex.for_thread(thread_id):
+                sess = self._sessions_by_thread.get(thread_id)
+                if sess is not None:
+                    sess.in_flight = False
+
+        return leftovers
+
+    def _evict_expired_unlocked(self, now_ts: float) -> None:
+        expired_tids = [
+            tid for tid, s in self._sessions_by_thread.items() if s.expires_at <= now_ts or not s.in_flight
+        ]
+        for tid in expired_tids:
+            sess = self._sessions_by_thread.pop(tid, None)
+            if sess is not None:
+                for svc in sess.correlated_services:
+                    key = (sess.environment, svc)
+                    if self._service_to_thread.get(key) == tid:
+                        self._service_to_thread.pop(key, None)

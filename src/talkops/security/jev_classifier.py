@@ -21,11 +21,8 @@ TypeSafe AI Jev and LangChain-native decision primitives (Noul and Score).
 from __future__ import annotations
 
 import asyncio
-import os
-import re
 import time
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import ToolCall
@@ -131,7 +128,7 @@ class JevSecurityClassifier:
             return "subagent_dispatch"
 
         if (
-            normalized == "call_mcp_tool"
+            normalized in {"call_mcp_tool", "list_resources", "read_resource"}
             or normalized.startswith("mcp__")
             or ":" in normalized
             or (
@@ -224,7 +221,15 @@ class JevSecurityClassifier:
         """Extract MCP server ownership, description, and spec annotations."""
         server_name = ""
         clean_action = tool_name
-        if tool_name == "call_mcp_tool" and isinstance(tool_args, Mapping):
+        if tool_name in {"list_resources", "read_resource"} and isinstance(tool_args, Mapping):
+            server_name = str(
+                tool_args.get("server_name")
+                or tool_args.get("ServerName")
+                or tool_args.get("server")
+                or ""
+            ).strip()
+            clean_action = tool_name
+        elif tool_name == "call_mcp_tool" and isinstance(tool_args, Mapping):
             server_name = str(
                 tool_args.get("server_name")
                 or tool_args.get("ServerName")

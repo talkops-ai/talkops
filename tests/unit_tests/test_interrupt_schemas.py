@@ -14,49 +14,29 @@
 
 """Comprehensive unit tests for TalkOps's terminal-native interrupt schemas."""
 
-import json
-from uuid import uuid4
 
-import pytest
-from pydantic import ValidationError
 
 from talkops.schema.interrupts import (
     # Ask user protocol
-    ASK_USER_ANSWERED_SUMMARY,
     ASK_USER_CANCELLED_ANSWER,
-    ASK_USER_CANCELLED_SUMMARY,
-    ASK_USER_ERROR_ANSWER_PREFIX,
-    ASK_USER_FAILED_SUMMARY,
-    ASK_USER_NO_ANSWER,
-    ASK_USER_NOTHING_SELECTED,
     CHOICE_QUESTION_TYPES,
     # Hooks interrupt
-    HOOK_INVOCATION_INTERRUPT_TYPE,
-    # Tool approval / HITL
     ActionRequest,
     ApproveDecision,
-    AskUserAnswered,
-    AskUserCancelled,
-    AskUserRequest,
     AskUserResumePayload,
     AutoApproveAllDecision,
-    Choice,
     EditDecision,
     # Goal / rubric review
-    GoalReviewRequest,
     GoalReviewResumePayload,
     HitlDecision,
     HITLRequest,
     HitlResumePayload,
-    HookInvocationInterrupt,
     Question,
-    QuestionType,
     RejectDecision,
     ReviewConfig,
     SmartApproveAllDecision,
     SwitchManualDecision,
     ask_user_answer_is_empty,
-    build_hook_interrupt_payload,
     decode_multi_select_answer,
     encode_multi_select_answer,
     format_ask_user_error_answer,

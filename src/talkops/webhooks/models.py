@@ -179,11 +179,12 @@ class NormalizedWebhookEvent:
             lines.append(custom_instructions.strip())
         else:
             lines.append(
-                "1. Investigate the root cause of this alert/event using your available cloud, Kubernetes, "
-                "observability, and repository tools.\n"
-                "2. Correlate recent deployments, configuration changes, logs, or metric anomalies related "
+                "1. Investigate the root cause of this alert/event — if installed plugin/specialist subagents "
+                "cover this alert's domain, dispatch them first via `js_eval` (`await task({ description, subagentType })`) "
+                "alongside your SRE topology, memory, and repository tools before falling back to raw CLI probes.\n"
+                "2. Correlate recent deployments, configuration changes, logs, traces, or metric anomalies related "
                 "to the affected service/resource.\n"
-                "3. Provide a concise Root Cause Analysis (RCA), blast radius assessment, and recommended "
+                "3. Provide a complete Root Cause Analysis (RCA), blast radius assessment, and actionable "
                 "remediation steps."
             )
         return "\n".join(lines)

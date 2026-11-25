@@ -21,6 +21,7 @@ post-processing cutset, and display-label fallback hierarchy for TalkOps threads
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
@@ -209,6 +210,36 @@ def resolve_conversation_title_model(
     effective_provider = provider
     if not effective_provider and base_spec and ":" in base_spec and base_spec not in ("dynamic", "auto", "default"):
         effective_provider = base_spec.split(":", 1)[0]
+
+    if effective_provider and effective_provider not in ("dynamic", "auto", "default", "multi"):
+        with contextlib.suppress(Exception):
+            custom_tiers = pool.discover_tiers(provider=effective_provider, base_spec=base_spec)
+            t0_spec = custom_tiers.get(0, ("", ""))[0]
+            t0_prov = t0_spec.split(":", 1)[0] if ":" in t0_spec else ""
+            if t0_prov and t0_prov != effective_provider:
+                provider_tiers = pool.discover_tiers(
+                    provider=effective_provider,
+                    base_spec=base_spec,
+                    ignore_custom_pool=True,
+                )
+                for tier in (0, 1):
+                    cand_spec = provider_tiers.get(tier, ("", ""))[0]
+                    if cand_spec:
+                        try:
+                            res_cand = create_model(cand_spec, extra_kwargs={"reasoning_effort": "off"})
+                            return res_cand.model, (
+                                f"{res_cand.provider}:{res_cand.model_name}"
+                                if res_cand.provider
+                                else res_cand.model_name
+                            )
+                        except Exception as exc:
+                            logger.debug(
+                                "Provider-native title model resolution for %s (tier %d) failed: %s",
+                                cand_spec,
+                                tier,
+                                exc,
+                            )
+
     for tier in (0, 1):
         try:
             model_inst, selected_spec, _, _ = pool.get_model_for_tier(

@@ -35,14 +35,10 @@ from talkops.middleware.compaction import (
     CompactRequestType,
     TalkOpsSummarizationMiddleware,
     _create_cli_compaction_middleware,
-    agenerate_llm_continuation_summary,
     build_context_summary_envelope,
     capture_user_requests,
-    collect_artifact_snapshots,
-    collect_subagent_and_task_snapshots,
     compute_trajectory_file_interactions,
     ensure_not_starting_with_tool_call,
-    generate_fallback_summary,
     generate_llm_continuation_summary,
     get_checkpoint_config_for_model_info,
     get_default_checkpoint_config_for_model,
@@ -50,7 +46,6 @@ from talkops.middleware.compaction import (
     middle_truncate_bytes,
     parse_compact_request,
     remove_unpaired_tool_calls_and_results,
-    step_to_summary_json,
     sync_messages_to_transcript,
     truncate_and_offload_tool_output,
     validate_checkpoint_config_for_model_info,
@@ -600,6 +595,294 @@ def test_microcompact_includes_call_mcp_tool_and_ls_and_clears_artifact() -> Non
     for recent_tm in tool_msgs[5:]:
         assert recent_tm.content == heavy_output
         assert recent_tm.artifact is not None
+
+
+def test_cli_compaction_middleware_exposes_no_tools_for_main_and_subagents() -> None:
+    """Verify Antigravity harness-driven architecture exposes zero compaction tools on main or subagents."""
+    fake_model = FakeListChatModel(responses=["ok"])
+    main_mw = _create_cli_compaction_middleware(fake_model, _DummyBackend())
+    sub_mw = _create_cli_compaction_middleware(
+        fake_model,
+        _DummyBackend(),
+        subagent_name="aws-finops-agent",
+    )
+    assert main_mw.tools == []
+    assert sub_mw.tools == []
+    assert sub_mw._subagent_name == "aws-finops-agent"
+
+
+def test_talkops_summarization_uses_checkpoint_config_token_limit_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify _create_talkops_summarization_middleware uses CheckpointConfig.max_token_limit by default."""
+    from talkops.middleware.compaction import _create_talkops_summarization_middleware
+
+    monkeypatch.delenv("TALKOPS_AUTO_COMPACT", raising=False)
+    fake_model = FakeListChatModel(responses=["ok"])
+    fake_model.profile = {"max_input_tokens": 200_000, "max_output_tokens": 8_192}  # type: ignore[assignment]
+
+    mw = _create_talkops_summarization_middleware(fake_model, _DummyBackend())
+    # 200,000 - max(8192, 40000) = 160,000 tokens
+    assert mw._checkpoint_config.max_token_limit == 160_000
+    assert mw._lc_helper._trigger_clauses == [{"tokens": 160_000}]
+
+    monkeypatch.setenv("TALKOPS_AUTO_COMPACT", "50%")
+    mw_override = _create_talkops_summarization_middleware(fake_model, _DummyBackend())
+    assert mw_override._checkpoint_config.max_token_limit == 100_000
+    assert mw_override._lc_helper._trigger_clauses == [{"tokens": 100_000}]
+
+
+def test_manual_compaction_requested_triggers_harness_compaction_until_checkpointed() -> None:
+    """Verify manual_compaction_requested mirrors Antigravity prehooks.manualCompactionRequested."""
+    from talkops.middleware.compaction import manual_compaction_requested
+
+    msgs_with_compact = [
+        HumanMessage(id="m1", content="Investigate the VPC peering issue"),
+        AIMessage(id="m2", content="Checked route tables."),
+        HumanMessage(id="m3", content="/compact focus on VPC route tables"),
+    ]
+    requested, instructions = manual_compaction_requested(msgs_with_compact)
+    assert requested is True
+    assert instructions == "focus on VPC route tables"
+
+    fake_model = FakeListChatModel(responses=["<summary>Compacted VPC findings</summary>"])
+    fake_model.profile = {"max_input_tokens": 200_000, "max_output_tokens": 8_192}  # type: ignore[assignment]
+    mw = _create_cli_compaction_middleware(fake_model, _DummyBackend())
+    assert mw._summarization._should_summarize(msgs_with_compact, total_tokens=500) is True
+    assert mw._summarization._pending_custom_instructions == "focus on VPC route tables"
+
+    # Once a <CONTEXT_SUMMARY> message follows the /compact message, manual_compaction_requested returns False
+    msgs_after_checkpoint = [
+        *msgs_with_compact,
+        HumanMessage(
+            id="m4",
+            content="<CONTEXT_SUMMARY>\nSummarized\n</CONTEXT_SUMMARY>",
+            additional_kwargs={"lc_source": "summarization"},
+        ),
+        HumanMessage(id="m5", content="Continue checking security groups"),
+    ]
+    requested_after, instructions_after = manual_compaction_requested(msgs_after_checkpoint)
+    assert requested_after is False
+    assert instructions_after == ""
+
+
+def test_subagent_transcript_isolation_prevents_parent_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify subagent compaction middleware isolates its transcript from the parent thread."""
+    from types import SimpleNamespace
+
+    from talkops.middleware.compaction import get_transcript_path
+
+    monkeypatch.setattr(paths, "DATA_DIR", tmp_path)
+    fake_model = FakeListChatModel(responses=["ok"])
+    main_mw = _create_cli_compaction_middleware(fake_model, _DummyBackend())
+    sub_mw = _create_cli_compaction_middleware(
+        fake_model,
+        _DummyBackend(),
+        subagent_name="research",
+    )
+
+    runtime = SimpleNamespace(context={"thread_id": "parent-thread-100"})
+    parent_msgs = [
+        HumanMessage(id="p1", content="Parent step 1"),
+        AIMessage(id="p2", content="Parent step 2"),
+        HumanMessage(id="p3", content="Parent step 3"),
+        AIMessage(id="p4", content="Parent step 4"),
+    ]
+    parent_fields = {
+        "state": {"messages": parent_msgs},
+        "runtime": runtime,
+        "messages": parent_msgs,
+        "system_message": None,
+        "model": fake_model,
+        "model_settings": {},
+        "tools": [],
+    }
+    parent_req: Any = SimpleNamespace(
+        **parent_fields,
+        override=lambda **kw: SimpleNamespace(**{**parent_fields, **kw}),
+    )
+    main_mw.wrap_model_call(parent_req, lambda r: SimpleNamespace(result=[AIMessage(content="ok")]))
+
+    # Subagent starts with only 1 message (fewer than parent's 4 messages)
+    sub_msgs = [HumanMessage(id="subrun999999", content="Subagent task prompt")]
+    sub_fields = {
+        "state": {"messages": sub_msgs},
+        "runtime": runtime,
+        "messages": sub_msgs,
+        "system_message": None,
+        "model": fake_model,
+        "model_settings": {},
+        "tools": [],
+    }
+    sub_req: Any = SimpleNamespace(
+        **sub_fields,
+        override=lambda **kw: SimpleNamespace(**{**sub_fields, **kw}),
+    )
+    sub_mw.wrap_model_call(sub_req, lambda r: SimpleNamespace(result=[AIMessage(content="sub ok")]))
+
+    parent_transcript = get_transcript_path("parent-thread-100", tmp_path)
+    sub_transcript = get_transcript_path("parent-thread-100.subagent.research.subrun999999", tmp_path)
+    assert parent_transcript.exists()
+    assert sub_transcript.exists()
+    assert len(parent_transcript.read_text(encoding="utf-8").splitlines()) == 4
+    assert len(sub_transcript.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_flatten_nested_extended_model_response_merges_commands() -> None:
+    """Verify nested ExtendedModelResponse from ConfigurableModelMiddleware + SummarizationMiddleware merges cleanly."""
+    from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
+    from langgraph.types import Command
+
+    from talkops.middleware.compaction import _flatten_extended_model_response
+
+    inner_model_resp = ModelResponse(result=[AIMessage(content="routed response")])
+    inner_ext = ExtendedModelResponse(
+        model_response=inner_model_resp,
+        command=Command(update={"_model_spec": "anthropic:claude-sonnet-4-6"}),
+    )
+    outer_ext = ExtendedModelResponse(
+        model_response=inner_ext,  # type: ignore[arg-type]
+        command=Command(
+            update={
+                "_summarization_event": {"cutoff_index": 3},
+                "_summarization_session_id": "session_abc",
+            }
+        ),
+    )
+
+    flattened = _flatten_extended_model_response(outer_ext)
+    assert isinstance(flattened, ExtendedModelResponse)
+    assert flattened.model_response is inner_model_resp
+    assert flattened.command is not None
+    assert flattened.command.update == {
+        "_model_spec": "anthropic:claude-sonnet-4-6",
+        "_summarization_event": {"cutoff_index": 3},
+        "_summarization_session_id": "session_abc",
+    }
+
+
+@pytest.mark.asyncio
+async def test_compact_handler_uses_checkpoint_state_and_does_not_reload_ui_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify /compact in TUI uses checkpoint messages, resolves app._client, and never calls _load_thread_history."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(paths, "DATA_DIR", tmp_path)
+
+    checkpoint_messages = [
+        HumanMessage(id="m1", content="Run full skill evaluation suite"),
+        AIMessage(
+            id="m2",
+            content="",
+            tool_calls=[
+                {"id": "tc1", "name": "read_file", "args": {"file_path": "/repo/eval1.py"}},
+                {"id": "tc2", "name": "read_file", "args": {"file_path": "/repo/eval2.py"}},
+            ],
+        ),
+        ToolMessage(id="m3", tool_call_id="tc1", name="read_file", content="X" * 4000),
+        ToolMessage(id="m4", tool_call_id="tc2", name="read_file", content="Y" * 4000),
+        AIMessage(
+            id="m5",
+            content="Now running batch 2",
+            tool_calls=[
+                {"id": "tc3", "name": "execute", "args": {"command": "pytest -q"}},
+                {"id": "tc4", "name": "read_file", "args": {"file_path": "/repo/plan.md"}},
+            ],
+        ),
+        ToolMessage(id="m6", tool_call_id="tc3", name="execute", content="8 passed"),
+        ToolMessage(id="m7", tool_call_id="tc4", name="read_file", content="Plan details"),
+    ]
+    # Simulate incomplete UI widget scrape where grouped ToolCallMessages were omitted
+    incomplete_ui_messages = [
+        HumanMessage(content="Run full skill evaluation suite"),
+        AIMessage(content="Now running batch 2"),
+    ]
+
+    spinner_calls: list[str | None] = []
+
+    async def fake_set_spinner(text: str | None) -> None:
+        spinner_calls.append(text)
+
+    async def fake_get_thread_state_values(thread_id: str | None = None) -> dict[str, Any]:
+        return {"messages": checkpoint_messages}
+
+    mock_client = MagicMock()
+    mock_client.aensure_thread = AsyncMock()
+    mock_client.aupdate_state = AsyncMock()
+
+    mock_status_bar = MagicMock()
+    fake_app = SimpleNamespace(
+        _agent_running=False,
+        _agent_thread_id="tui-compact-thread-4375",
+        _client=mock_client,
+        _active_model=FakeListChatModel(
+            responses=[
+                "<summary>\n"
+                "## 1. Task Overview\n- Run skill evals.\n"
+                "## 2. Progress\n- Batch 1 done.\n"
+                "## 3. Key Findings\n- All green.\n"
+                "## 4. Active Context\n- Running batch 2.\n"
+                "## 5. Next Steps\n- Finish batch 2.\n"
+                "## 6. Commitments & Constraints\n- Keep logs.\n"
+                "</summary>"
+            ]
+        ),
+        _context_tokens=180_130,
+        _cumulative_session_tokens=6_800_000,
+        _status_bar=mock_status_bar,
+        _set_spinner=fake_set_spinner,
+        _get_thread_state_values=fake_get_thread_state_values,
+        get_thread_messages=lambda: incomplete_ui_messages,
+        _load_thread_history=AsyncMock(),
+    )
+
+    handler = CompactHandler()
+    ctx = CommandContext(
+        app=fake_app,
+        agent=None,  # Simulates TUI where self._agent is None and self._client is used
+        raw_command="/compact",
+        args="",
+        thread_id="tui-compact-thread-4375",
+    )
+
+    result = await handler.execute(ctx)
+    assert result.success is True
+    assert "(7 messages)" in (result.message or "")
+    assert result.data["before_tokens"] > result.data["after_tokens"]
+
+    # Must NEVER call _load_thread_history (which duplicated widgets and froze the TUI)
+    fake_app._load_thread_history.assert_not_called()
+
+    # Spinner shown and cleared; _agent_running restored to False
+    assert spinner_calls == ["Compacting conversation...", None]
+    assert fake_app._agent_running is False
+
+    # Status bar and _context_tokens updated to post-compaction tokens
+    assert fake_app._context_tokens == result.data["after_tokens"]
+    mock_status_bar.set_tokens.assert_called_once_with(
+        6_800_000,
+        context_tokens=result.data["after_tokens"],
+    )
+
+    # Checkpoint state updated via app._client.aupdate_state with _summarization_event
+    mock_client.aupdate_state.assert_awaited_once()
+    cfg_arg, update_arg = mock_client.aupdate_state.call_args.args
+    assert cfg_arg == {"configurable": {"thread_id": "tui-compact-thread-4375"}}
+    assert update_arg["_context_tokens"] == result.data["after_tokens"]
+    event = update_arg["_summarization_event"]
+    assert isinstance(event, dict)
+    # Tail had 2 ToolMessages (m6, m7) belonging to AIMessage m5 (index 4), so cutoff steps back to 4
+    assert event["cutoff_index"] == 4
+    summary_msg = event["summary_message"]
+    assert isinstance(summary_msg, HumanMessage)
+    assert summary_msg.additional_kwargs.get("lc_source") == "summarization"
+
+
 
 
 

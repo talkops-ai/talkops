@@ -20,14 +20,13 @@ Provides an interactive modal screen to browse, search, resume, create, and dele
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, ClassVar
 
 from rich.cells import cell_len
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Button, Input, Label, OptionList, Static
@@ -35,7 +34,6 @@ from textual.widgets.option_list import Option
 
 from talkops.config.settings import get_glyphs
 from talkops.ui.widgets.modal_base import OpsModalScreen
-from talkops.ui.widgets.modal_base import escape_markup as escape
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -353,10 +351,23 @@ class ThreadSelectorScreen(OpsModalScreen[str | None]):
             self._refresh_options()
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        """Handle option list option highlighted events."""
-        if self._highlighted_index != event.option_index:
-            self._highlighted_index = event.option_index
-            self._refresh_options(preserve_highlight=True)
+        """Handle option list option highlighted events without rebuilding all options."""
+        prev_idx = self._highlighted_index
+        new_idx = event.option_index
+        if prev_idx == new_idx:
+            return
+        self._highlighted_index = new_idx
+        try:
+            opt_list = self.query_one("#thread-options", CustomOptionList)
+            if hasattr(opt_list, "replace_option_prompt_at_index"):
+                rebuilt = self._build_options()
+                for idx in (prev_idx, new_idx):
+                    if 0 <= idx < len(rebuilt) and idx < opt_list.option_count:
+                        opt_list.replace_option_prompt_at_index(idx, rebuilt[idx].prompt)
+                return
+        except Exception:
+            pass
+        self._refresh_options(preserve_highlight=True)
 
     def _refresh_options(self, preserve_highlight: bool = False) -> None:
         try:

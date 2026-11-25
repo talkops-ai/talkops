@@ -67,8 +67,12 @@ class WebhookAddonSettings(AddonSettings):
     enabled: bool = True
     max_concurrent_runs: int | None = Field(default=None, ge=1)
     dedup_ttl_seconds: float | None = Field(default=None, gt=0)
+    correlation_window_sec: float | None = Field(default=None, gt=0)
     default_secret: str | None = None
+    secret: str | None = None
+    default_callback_url: str | None = None
     auto_confirm_sns: bool | None = None
+    ignore_resolved: bool | None = None
     outbound_channels: list[dict[str, Any]] | str | None = None
 
 
@@ -133,6 +137,7 @@ class WebhookAddon(BaseServerAddon):
         routes=True,
         background_workers=True,
         event_sinks=True,
+        gateway_runner=True,
     )
     settings_schema = WebhookAddonSettings
     enabled_by_default = True
@@ -157,19 +162,42 @@ class WebhookAddon(BaseServerAddon):
         # Apply optional settings overrides if configured in `addons.webhooks`
         cfg = self._config
         if isinstance(cfg, WebhookAddonSettings):
-            if cfg.default_secret:
-                dispatcher.config.default_secret = cfg.default_secret
+            effective_secret = cfg.default_secret or cfg.secret
+            if effective_secret:
+                dispatcher.config.default_secret = effective_secret
+            if cfg.default_callback_url:
+                dispatcher.config.default_callback_url = cfg.default_callback_url
+            elif isinstance(cfg.config.get("default_callback_url"), str):
+                dispatcher.config.default_callback_url = str(cfg.config["default_callback_url"])
             if cfg.dedup_ttl_seconds is not None:
                 dispatcher.config.dedup_ttl_seconds = cfg.dedup_ttl_seconds
             if cfg.max_concurrent_runs is not None:
                 dispatcher.config.max_concurrent_runs = cfg.max_concurrent_runs
             if cfg.auto_confirm_sns is not None:
                 dispatcher.config.auto_confirm_sns = cfg.auto_confirm_sns
+            if cfg.ignore_resolved is not None:
+                dispatcher.config.ignore_resolved = cfg.ignore_resolved
             raw_outbound = cfg.outbound_channels or cfg.config.get("outbound_channels")
             if raw_outbound:
                 from talkops.webhooks.models import parse_outbound_channel_routes
 
                 dispatcher.config.outbound_channels = parse_outbound_channel_routes(raw_outbound)
+
+        # Bind AlertStormCorrelator so multi-service alert storms correlate into one thread via Sidecar Inbox
+        if getattr(dispatcher, "_storm_correlator", None) is None:
+            from talkops.storage.factory import get_operational_store
+            from talkops.webhooks.correlation import AlertStormCorrelator
+
+            op_store = get_operational_store(project_root=ctx.project_root)
+            await op_store.setup()
+            corr_window = (
+                float(cfg.correlation_window_sec)
+                if isinstance(cfg, WebhookAddonSettings) and cfg.correlation_window_sec is not None
+                else 900.0
+            )
+            dispatcher.bind_storm_correlator(
+                AlertStormCorrelator(op_store, correlation_window_sec=corr_window)
+            )
 
         # If AgentRunGateway has a bound in-memory graph and dispatcher uses the default executor,
         # upgrade to zero-loopback in-memory execution automatically.

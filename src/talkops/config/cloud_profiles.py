@@ -27,7 +27,7 @@ import re
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 from talkops.config.cloud_discovery import (
     AmbientCloudDetector,
@@ -44,8 +44,6 @@ from talkops.config.toml_config import (
     load_aws_profile,
     load_aws_region,
     load_cloud_execution_mode,
-    load_recent_aws_profiles,
-    load_recent_cloud_targets,
     save_active_cloud_context,
     save_aws_profile,
     save_aws_region,

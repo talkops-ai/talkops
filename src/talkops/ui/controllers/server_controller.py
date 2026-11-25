@@ -24,8 +24,7 @@ from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from textual.css.query import NoMatches
-
+from talkops.approval_mode import ApprovalMode
 from talkops.mcp.mcp_info import MCPServerInfo
 from talkops.ui.widgets.messages import (
     CommandOutputMessage,
@@ -43,6 +42,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _McpRefreshStatus = Literal["fresh", "disabled", "unavailable"]
+_RESPAWN_MCP_PRELOAD_TIMEOUT = 15.0
 
 
 @dataclass(frozen=True)
@@ -295,6 +295,9 @@ class ServerLifecycleController:
         if app._chat_input is not None:
             app._chat_input.focus()
 
+        if getattr(app, "_check_workspace_trust", False) and getattr(app, "_approval_mode", None) is ApprovalMode.YOLO:
+            app._notify_yolo_mode_enabled_once()
+
         app.run_worker(app._discover_startup_skills(), group="skill-discovery")
 
         if app._server_startup_deferred:
@@ -460,6 +463,33 @@ class ServerLifecycleController:
             app._mcp_preload_running = False
             app._sync_banner_mcp()
 
+    async def _continue_shielded_mcp_preload(
+        self,
+        preload_task: asyncio.Task[list[MCPServerInfo]],
+    ) -> None:
+        """Await an already-running shielded MCP preload task and refresh UI state."""
+        app = self._app
+        app._mcp_preload_running = True
+        try:
+            infos = await preload_task
+            if infos is not None:
+                app._mcp_server_info = infos
+                app._sync_banner_mcp()
+                try:
+                    from talkops.ui.widgets.mcp_viewer import MCPViewerScreen
+
+                    if isinstance(app.screen, MCPViewerScreen):
+                        await app.screen.refresh_server_info(infos)
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Shielded MCP preload continuation failed: %s", exc)
+        finally:
+            app._mcp_preload_running = False
+            app._sync_banner_mcp()
+
     async def on_server_ready(self, event: Any) -> None:
         """Handle successful background server startup."""
         app = self._app
@@ -491,6 +521,7 @@ class ServerLifecycleController:
         try:
             banner = app.query_one(WelcomeBanner)
             banner.set_connected()
+            banner.refresh_capabilities()
         except Exception:
             pass
         app._sync_banner_mcp()
@@ -574,7 +605,16 @@ class ServerLifecycleController:
                 await app._mount_message(
                     SystemMessage(f"Resumed thread: `{app._resume_thread}`")
                 )
-                await app._load_thread_history(app._resume_thread)
+                state_values: dict[str, Any] | None = None
+                if hasattr(app, "_get_thread_state_values"):
+                    try:
+                        state_values = await app._get_thread_state_values(app._resume_thread)
+                    except Exception:
+                        state_values = None
+                try:
+                    await app._load_thread_history(app._resume_thread, state_values=state_values)
+                except TypeError:
+                    await app._load_thread_history(app._resume_thread)
             elif not app._agent_thread_id:
                 app._agent_thread_id = str(uuid.uuid4())
         elif not app._agent_thread_id:
@@ -851,8 +891,22 @@ class ServerLifecycleController:
         app = self._app
         try:
             if hasattr(app._settings, "reload_from_environment"):
+                reload_start = (
+                    Path(app._cwd)
+                    if getattr(app, "_workspace_trusted", True) and getattr(app, "_cwd", None)
+                    else None
+                )
+
+                def _reload_env_for_restart() -> Any:
+                    if reload_start is not None:
+                        try:
+                            return app._settings.reload_from_environment(reload_start)
+                        except TypeError:
+                            return app._settings.reload_from_environment()
+                    return app._settings.reload_from_environment()
+
                 reload_task = asyncio.create_task(
-                    asyncio.to_thread(app._settings.reload_from_environment)
+                    asyncio.to_thread(_reload_env_for_restart)
                 )
                 try:
                     await asyncio.shield(reload_task)
@@ -862,6 +916,10 @@ class ServerLifecycleController:
             from talkops.model.config import clear_caches
 
             clear_caches()
+            if hasattr(app, "_command_router") and app._command_router:
+                if hasattr(app._command_router, "reload_builtin_commands"):
+                    app._command_router.reload_builtin_commands()
+                app._command_router.reload_custom_commands()
             app._sync_status_cloud()
             app._sync_status_model()
             return True
@@ -947,6 +1005,76 @@ class ServerLifecycleController:
             app._reconnecting = True
             app._sync_status_connection()
 
+            from talkops.mcp.preload import (
+                evict_failed_mcp_server_infos,
+                get_cached_mcp_server_infos,
+                preload_mcp_server_info,
+            )
+            from talkops.mcp.session_manager import MCPSessionManager
+            from talkops.ui.remote_client import RemoteAgent
+
+            # Tear down any live MCP client sessions first so child stdio/HTTP
+            # processes respawn with freshly reloaded `.env` / `os.environ` values,
+            # and evict negative-cached probe errors so fixed credentials succeed.
+            if MCPSessionManager._instance is not None:
+                try:
+                    await MCPSessionManager._instance.close_all()
+                except Exception:
+                    logger.debug("Error closing active MCP sessions before respawn", exc_info=True)
+            evict_failed_mcp_server_infos()
+
+            mcp_info = None
+            mcp_error = None
+            mcp_status: _McpRefreshStatus = "unavailable"
+            preload_kwargs = dict(getattr(app, "_mcp_preload_kwargs", {}) or {})
+            preload_task: asyncio.Task[list[MCPServerInfo]] | None = None
+            preload_timed_out = False
+
+            # Preload and prune MCP server metadata BEFORE restarting the server
+            # so create_talkops_agent_async compiles coordinator and dynamic plugin
+            # subagents with freshly probed tools, resources, and schema files.
+            if preload_kwargs.get("no_mcp"):
+                mcp_status = "disabled"
+            else:
+                preload_task = asyncio.create_task(
+                    preload_mcp_server_info(**preload_kwargs),
+                    name="respawn-mcp-preload",
+                )
+                preload_task.add_done_callback(
+                    lambda t: t.exception() if not t.cancelled() else None
+                )
+                try:
+                    mcp_info = await asyncio.wait_for(
+                        asyncio.shield(preload_task),
+                        timeout=_RESPAWN_MCP_PRELOAD_TIMEOUT,
+                    )
+                    mcp_status = "fresh" if mcp_info is not None else "unavailable"
+                except TimeoutError:
+                    preload_timed_out = True
+                    logger.debug(
+                        "MCP preload during respawn exceeded %.1fs; continuing shielded in background",
+                        _RESPAWN_MCP_PRELOAD_TIMEOUT,
+                    )
+                    cached = [
+                        s for s in get_cached_mcp_server_infos()
+                        if not str(getattr(s, "name", s)).startswith("subagent__")
+                    ]
+                    mcp_info = cached if cached else app._mcp_server_info
+                    mcp_status = "fresh" if mcp_info is not None else "unavailable"
+                except Exception as exc:
+                    logger.exception(mcp_failure_log)
+                    mcp_error = f"{type(exc).__name__}: {exc}"
+                    app.notify(f"{mcp_failure_toast} ({mcp_error})", severity="warning")
+
+            if app._exit:
+                if preload_task is not None and not preload_task.done():
+                    preload_task.cancel()
+                try:
+                    server_proc.stop()
+                except Exception:
+                    pass
+                return _ServerRespawnResult(restarted=False)
+
             if hasattr(server_proc, "restart"):
                 await server_proc.restart(timeout=restart_timeout)
             else:
@@ -954,17 +1082,13 @@ class ServerLifecycleController:
                 await asyncio.to_thread(server_proc.start)
 
             if app._exit:
+                if preload_task is not None and not preload_task.done():
+                    preload_task.cancel()
                 try:
                     server_proc.stop()
                 except Exception:
                     pass
                 return _ServerRespawnResult(restarted=False)
-
-            from talkops.mcp.preload import (
-                get_cached_mcp_server_infos,
-                preload_mcp_server_info,
-            )
-            from talkops.ui.remote_client import RemoteAgent
 
             if getattr(server_proc, "is_in_process", False) is True:
                 app._client = server_proc.create_client()
@@ -973,38 +1097,13 @@ class ServerLifecycleController:
             if app._adapter:
                 app._adapter.set_client(app._client)
 
-            mcp_info = None
-            mcp_error = None
-            mcp_status: _McpRefreshStatus = "unavailable"
-            preload_kwargs = dict(getattr(app, "_mcp_preload_kwargs", {}) or {})
-
-            if preload_kwargs.get("no_mcp"):
-                mcp_status = "disabled"
-            else:
-                try:
-                    mcp_info = await asyncio.wait_for(
-                        preload_mcp_server_info(**preload_kwargs),
-                        timeout=3.0,
+            if preload_timed_out and preload_task is not None and not preload_task.done():
+                if getattr(app, "is_running", False):
+                    app.run_worker(
+                        self._continue_shielded_mcp_preload(preload_task),
+                        group="mcp-preload",
+                        exclusive=True,
                     )
-                    mcp_status = "fresh" if mcp_info is not None else "unavailable"
-                except TimeoutError:
-                    logger.debug("MCP preload during respawn exceeded 3.0s; continuing in background")
-                    cached = [
-                        s for s in get_cached_mcp_server_infos()
-                        if not str(getattr(s, "name", s)).startswith("subagent__")
-                    ]
-                    mcp_info = cached if cached else app._mcp_server_info
-                    mcp_status = "fresh" if mcp_info is not None else "unavailable"
-                    if getattr(app, "is_running", False):
-                        app.run_worker(
-                            app._preload_mcp_metadata_background(),
-                            group="mcp-preload",
-                            exclusive=True,
-                        )
-                except Exception as exc:
-                    logger.exception(mcp_failure_log)
-                    mcp_error = f"{type(exc).__name__}: {exc}"
-                    app.notify(f"{mcp_failure_toast} ({mcp_error})", severity="warning")
 
             ready_mcp_info = mcp_info if mcp_status != "unavailable" else app._mcp_server_info
 
@@ -1138,10 +1237,30 @@ class ServerLifecycleController:
                 str(s.get("name", "")) for s in (app._discovered_skills or []) if s.get("name")
             }
             old_mcp_server_info = app._mcp_server_info
+            from talkops.mcp.preload import get_cached_mcp_server_infos
+
+            old_subagent_mcp = [
+                s for s in get_cached_mcp_server_infos()
+                if str(getattr(s, "name", "")).startswith("subagent__")
+            ]
 
             # 1. Reload configuration & .env
             try:
-                changes = await asyncio.to_thread(app._settings.reload_from_environment)
+                reload_start = (
+                    Path(app._cwd)
+                    if getattr(app, "_workspace_trusted", True) and getattr(app, "_cwd", None)
+                    else None
+                )
+
+                def _reload_env_for_reload() -> list[str]:
+                    if reload_start is not None:
+                        try:
+                            return app._settings.reload_from_environment(reload_start)
+                        except TypeError:
+                            return app._settings.reload_from_environment()
+                    return app._settings.reload_from_environment()
+
+                changes = await asyncio.to_thread(_reload_env_for_reload)
                 from talkops.model.config import clear_caches
                 clear_caches()
                 from talkops.model.pool import clear_pool_caches
@@ -1248,11 +1367,15 @@ class ServerLifecycleController:
 
                 clear_custom_command_cache()
                 if hasattr(app, "_command_router") and app._command_router:
+                    if hasattr(app._command_router, "reload_builtin_commands"):
+                        app._command_router.reload_builtin_commands()
                     app._command_router.reload_custom_commands()
             except Exception:
                 logger.debug("Custom command reload skipped", exc_info=True)
 
-            app._discovered_skills = await asyncio.to_thread(app.get_discovered_skills)
+            app._discovered_skills = await asyncio.to_thread(
+                lambda: app.get_discovered_skills(refresh=True)
+            )
             new_skill_names = {
                 str(s.get("name", "")) for s in (app._discovered_skills or []) if s.get("name")
             }
@@ -1263,6 +1386,29 @@ class ServerLifecycleController:
             except Exception:
                 pass
 
+            plugin_agents: list[Any] = []
+            try:
+                plugin_agents = await asyncio.to_thread(app.get_discovered_plugin_agents)
+                app._discovered_plugin_agents = plugin_agents
+            except Exception:
+                logger.debug("Plugin agent refresh during reload skipped", exc_info=True)
+
+            detached_agent_name: str | None = None
+            try:
+                from talkops.commands.power.agents import (
+                    get_agent_session_state,
+                    resolve_plugin_agent,
+                    sync_agent_session_status_label,
+                )
+
+                ag_state = get_agent_session_state(app)
+                if ag_state.agent_id and resolve_plugin_agent(ag_state.agent_id, plugin_agents or []) is None:
+                    detached_agent_name = ag_state.short_name or ag_state.agent_id
+                    ag_state.clear()
+                    sync_agent_session_status_label(app, ag_state)
+            except Exception:
+                logger.debug("Agent session state validation during reload skipped", exc_info=True)
+
             if hasattr(app, "_chat_input") and app._chat_input:
                 from talkops.ui.command_registry import (
                     build_agent_commands,
@@ -1272,8 +1418,6 @@ class ServerLifecycleController:
                 )
 
                 skill_commands = build_skill_commands(app._discovered_skills)
-                plugin_agents = app.get_discovered_plugin_agents()
-                app._discovered_plugin_agents = plugin_agents
                 skill_commands.extend(build_agent_commands(plugin_agents or []))
                 skill_commands.extend(build_custom_commands())
                 app._chat_input.update_slash_commands(get_all_entries(skill_commands))
@@ -1317,9 +1461,31 @@ class ServerLifecycleController:
                 if removed_skills:
                     report_lines.append("  - **Removed:** " + ", ".join(f"`{s}`" for s in removed_skills))
 
+            if detached_agent_name:
+                report_lines.append(
+                    f"• **Agent session detached:** `{detached_agent_name}` (plugin removed or disabled)"
+                )
+
             # 5. Discover plugins
+            ws_root: Path | None = None
+            if getattr(app, "_workspace_trusted", True) and hasattr(app, "_effective_workspace_root"):
+                try:
+                    cand_root = app._effective_workspace_root()
+                    if isinstance(cand_root, Path):
+                        ws_root = cand_root
+                except Exception:
+                    ws_root = None
+
+            def _discover_plugins_for_reload() -> Any:
+                if ws_root is not None:
+                    try:
+                        return discover_plugins(project_root=ws_root)
+                    except TypeError:
+                        return discover_plugins()
+                return discover_plugins()
+
             try:
-                plugin_result = await asyncio.to_thread(discover_plugins)
+                plugin_result = await asyncio.to_thread(_discover_plugins_for_reload)
                 plugins = plugin_result.plugins
             except Exception:
                 logger.exception("Failed to discover plugins during /reload")
@@ -1327,7 +1493,14 @@ class ServerLifecycleController:
                 report_lines.append("• ⚠ **Couldn't read plugin state; run /reload to be safe.**")
 
             plugin_count = len(plugins)
-            mcp_configs = plugin_mcp_configs(plugins)
+            try:
+                mcp_configs = plugin_mcp_configs(
+                    plugins,
+                    project_dir=ws_root,
+                    include_subagents=True,
+                )
+            except TypeError:
+                mcp_configs = plugin_mcp_configs(plugins)
             mcp_count = sum(
                 len(servers)
                 for config in mcp_configs
@@ -1372,10 +1545,31 @@ class ServerLifecycleController:
                             "  _MCP is disabled for this session (--no-mcp); no servers were loaded._"
                         )
                     else:
+                        new_subagent_mcp = [
+                            s for s in get_cached_mcp_server_infos()
+                            if str(getattr(s, "name", "")).startswith("subagent__")
+                        ]
+                        old_sub_sig = {
+                            s.name: (s.status, s.transport, len(s.tools))
+                            for s in old_subagent_mcp
+                        }
+                        new_sub_sig = {
+                            s.name: (s.status, s.transport, len(s.tools))
+                            for s in new_subagent_mcp
+                        }
+                        if old_sub_sig != new_sub_sig and restart_result.mcp_server_info is not None:
+                            prev_for_diff = [*(old_mcp_server_info or []), *old_subagent_mcp]
+                            curr_for_diff: list[MCPServerInfo] | None = [
+                                *restart_result.mcp_server_info,
+                                *new_subagent_mcp,
+                            ]
+                        else:
+                            prev_for_diff = old_mcp_server_info
+                            curr_for_diff = restart_result.mcp_server_info
                         report_lines.append(
                             _format_mcp_server_changes(
-                                old_mcp_server_info,
-                                restart_result.mcp_server_info,
+                                prev_for_diff,
+                                curr_for_diff,
                                 restart_result.mcp_error,
                             )
                         )

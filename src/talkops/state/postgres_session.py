@@ -256,32 +256,55 @@ class TalkOpsPostgresCheckpointer(AsyncPostgresSaver):
         target_thread_id: str,
         *,
         user_id: str | None = None,
+        latest_only: bool = False,
     ) -> None:
-        """Copy all checkpoints, blobs, writes, and summary metadata from `source_thread_id` to `target_thread_id`."""
+        """Copy checkpoints, blobs, writes, and summary metadata from `source_thread_id` to `target_thread_id`."""
         await self.setup()
         async with self._cursor() as cur:
             # 1. Copy checkpoints
-            await cur.execute(
-                """
-                SELECT checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata
-                FROM checkpoints
-                WHERE thread_id = %s
-                """,
-                (source_thread_id,),
-            )
+            if latest_only:
+                await cur.execute(
+                    """
+                    SELECT checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata
+                    FROM checkpoints
+                    WHERE thread_id = %s AND checkpoint_ns = ''
+                    ORDER BY checkpoint_id DESC
+                    LIMIT 1
+                    """,
+                    (source_thread_id,),
+                )
+            else:
+                await cur.execute(
+                    """
+                    SELECT checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata
+                    FROM checkpoints
+                    WHERE thread_id = %s
+                    """,
+                    (source_thread_id,),
+                )
             cp_rows = await cur.fetchall()
+            copied_cp_ids: list[str] = []
+            referenced_blobs: list[tuple[str, str]] = []
             for row in cp_rows:
+                copied_cp_ids.append(str(row["checkpoint_id"]))
+                cp_val = row["checkpoint"]
+                if latest_only and isinstance(cp_val, dict):
+                    ch_versions = cp_val.get("channel_versions")
+                    if isinstance(ch_versions, dict):
+                        for ch_name, ch_ver in ch_versions.items():
+                            referenced_blobs.append((str(ch_name), str(ch_ver)))
                 meta = dict(row["metadata"]) if isinstance(row["metadata"], dict) else {}
                 if "thread_id" in meta:
                     meta["thread_id"] = target_thread_id
                 if user_id and user_id != "default":
                     meta["owner"] = user_id
                 cp_json = (
-                    json.dumps(row["checkpoint"])
-                    if isinstance(row["checkpoint"], dict)
-                    else str(row["checkpoint"])
+                    json.dumps(cp_val)
+                    if isinstance(cp_val, dict)
+                    else str(cp_val)
                 )
                 meta_json = json.dumps(meta)
+                eff_parent = None if latest_only else row["parent_checkpoint_id"]
                 await cur.execute(
                     """
                     INSERT INTO checkpoints
@@ -297,7 +320,7 @@ class TalkOpsPostgresCheckpointer(AsyncPostgresSaver):
                         target_thread_id,
                         row["checkpoint_ns"],
                         row["checkpoint_id"],
-                        row["parent_checkpoint_id"],
+                        eff_parent,
                         row["type"],
                         cp_json,
                         meta_json,
@@ -305,35 +328,67 @@ class TalkOpsPostgresCheckpointer(AsyncPostgresSaver):
                 )
 
             # 2. Copy checkpoint_blobs
-            await cur.execute(
-                """
-                INSERT INTO checkpoint_blobs (thread_id, checkpoint_ns, channel, version, type, blob)
-                SELECT %s, checkpoint_ns, channel, version, type, blob
-                FROM checkpoint_blobs
-                WHERE thread_id = %s
-                ON CONFLICT (thread_id, checkpoint_ns, channel, version) DO UPDATE SET
-                    type = EXCLUDED.type,
-                    blob = EXCLUDED.blob
-                """,
-                (target_thread_id, source_thread_id),
-            )
+            if latest_only and referenced_blobs:
+                for ch_name, ch_ver in referenced_blobs:
+                    await cur.execute(
+                        """
+                        INSERT INTO checkpoint_blobs (thread_id, checkpoint_ns, channel, version, type, blob)
+                        SELECT %s, checkpoint_ns, channel, version, type, blob
+                        FROM checkpoint_blobs
+                        WHERE thread_id = %s AND checkpoint_ns = '' AND channel = %s AND version = %s
+                        ON CONFLICT (thread_id, checkpoint_ns, channel, version) DO UPDATE SET
+                            type = EXCLUDED.type,
+                            blob = EXCLUDED.blob
+                        """,
+                        (target_thread_id, source_thread_id, ch_name, ch_ver),
+                    )
+            elif not latest_only or cp_rows:
+                await cur.execute(
+                    """
+                    INSERT INTO checkpoint_blobs (thread_id, checkpoint_ns, channel, version, type, blob)
+                    SELECT %s, checkpoint_ns, channel, version, type, blob
+                    FROM checkpoint_blobs
+                    WHERE thread_id = %s
+                    ON CONFLICT (thread_id, checkpoint_ns, channel, version) DO UPDATE SET
+                        type = EXCLUDED.type,
+                        blob = EXCLUDED.blob
+                    """,
+                    (target_thread_id, source_thread_id),
+                )
 
             # 3. Copy checkpoint_writes
-            await cur.execute(
-                """
-                INSERT INTO checkpoint_writes
-                    (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob, task_path)
-                SELECT %s, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob, task_path
-                FROM checkpoint_writes
-                WHERE thread_id = %s
-                ON CONFLICT (thread_id, checkpoint_ns, checkpoint_id, task_id, idx) DO UPDATE SET
-                    channel = EXCLUDED.channel,
-                    type = EXCLUDED.type,
-                    blob = EXCLUDED.blob,
-                    task_path = EXCLUDED.task_path
-                """,
-                (target_thread_id, source_thread_id),
-            )
+            if latest_only and copied_cp_ids:
+                await cur.execute(
+                    """
+                    INSERT INTO checkpoint_writes
+                        (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob, task_path)
+                    SELECT %s, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob, task_path
+                    FROM checkpoint_writes
+                    WHERE thread_id = %s AND checkpoint_ns = '' AND checkpoint_id = %s
+                    ON CONFLICT (thread_id, checkpoint_ns, checkpoint_id, task_id, idx) DO UPDATE SET
+                        channel = EXCLUDED.channel,
+                        type = EXCLUDED.type,
+                        blob = EXCLUDED.blob,
+                        task_path = EXCLUDED.task_path
+                    """,
+                    (target_thread_id, source_thread_id, copied_cp_ids[0]),
+                )
+            elif not latest_only:
+                await cur.execute(
+                    """
+                    INSERT INTO checkpoint_writes
+                        (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob, task_path)
+                    SELECT %s, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob, task_path
+                    FROM checkpoint_writes
+                    WHERE thread_id = %s
+                    ON CONFLICT (thread_id, checkpoint_ns, checkpoint_id, task_id, idx) DO UPDATE SET
+                        channel = EXCLUDED.channel,
+                        type = EXCLUDED.type,
+                        blob = EXCLUDED.blob,
+                        task_path = EXCLUDED.task_path
+                    """,
+                    (target_thread_id, source_thread_id),
+                )
 
             # 4. Copy thread_summaries
             await cur.execute(

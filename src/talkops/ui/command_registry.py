@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 if TYPE_CHECKING:
@@ -53,11 +52,13 @@ from talkops.commands.core.pool import PoolHandler
 from talkops.commands.core.resume import ResumeHandler
 from talkops.commands.core.skills import SkillsHandler
 from talkops.commands.power.agents import AgentInvokeHandler, AgentsHandler
+from talkops.commands.power.browser import BrowserHandler
 from talkops.commands.power.btw import BtwHandler
 from talkops.commands.power.copy import CopyHandler
 from talkops.commands.power.goal import GoalHandler
 from talkops.commands.power.loop import LoopHandler
 from talkops.commands.power.memory import MemoryHandler, RememberHandler
+from talkops.commands.power.openwiki import OpenWikiHandler
 from talkops.commands.power.review import ReviewHandler
 from talkops.commands.power.rubric import RubricHandler
 from talkops.commands.power.runtime import (
@@ -79,6 +80,7 @@ from talkops.commands.power.ui_toggles import (
     SmartApprovalHandler,
     ThemeHandler,
     TimestampsHandler,
+    YoloApprovalHandler,
 )
 from talkops.commands.power.version import VersionHandler
 
@@ -91,6 +93,7 @@ class CommandEntry(NamedTuple):
     hidden_keywords: str = ""
     argument_hint: str = ""
     display_name: str = ""
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -113,6 +116,7 @@ class CommandDescriptor:
             description=self.description,
             hidden_keywords=self.hidden_keywords,
             argument_hint=self.argument_hint,
+            aliases=self.aliases,
         )
 
 
@@ -158,6 +162,16 @@ COMMAND_DESCRIPTORS: tuple[CommandDescriptor, ...] = (
         ui_mode="inline",
         argument_hint="[on|off|status]",
         hidden_keywords="auto-update autoupdate check startup",
+    ),
+    CommandDescriptor(
+        name="/browser",
+        handler_type=BrowserHandler,
+        aliases=("/web",),
+        description="Invoke a browser agent for web tasks",
+        bypass_tier=BypassTier.QUEUED,
+        ui_mode="message",
+        argument_hint="[<task> | status | mode <mode> | disconnect]",
+        hidden_keywords="browser web chrome stagehand playwright scrape test ui url",
     ),
     CommandDescriptor(
         name="/btw",
@@ -387,6 +401,16 @@ COMMAND_DESCRIPTORS: tuple[CommandDescriptor, ...] = (
         hidden_keywords="alerts warnings toasts",
     ),
     CommandDescriptor(
+        name="/openwiki",
+        handler_type=OpenWikiHandler,
+        description="Compile, update, or query the OpenWiki codebase knowledge base",
+        bypass_tier=BypassTier.QUEUED,
+        ui_mode="message",
+        hidden_keywords="openwiki wiki knowledge base architecture docs claims init update ask",
+        argument_hint="[init|update|ask <query>|brief <text>|visualize|link|workspace|status]",
+        aliases=("/wiki", "/skill:openwiki"),
+    ),
+    CommandDescriptor(
         name="/permissions",
         handler_type=PermissionsHandler,
         description="View and manage agent permission scopes",
@@ -563,6 +587,14 @@ COMMAND_DESCRIPTORS: tuple[CommandDescriptor, ...] = (
         ui_mode="message",
         hidden_keywords="ver build info",
     ),
+    CommandDescriptor(
+        name="/yolo",
+        handler_type=YoloApprovalHandler,
+        description="Switch to YOLO approval mode (no review)",
+        bypass_tier=BypassTier.SIDE_EFFECT_FREE,
+        ui_mode="inline",
+        hidden_keywords="approval mode unrestricted auto-approve dangerous shift+tab yolo",
+    ),
 )
 
 
@@ -582,6 +614,7 @@ def autocomplete_entries(
             description=command.description,
             hidden_keywords=command.hidden_keywords,
             argument_hint=command.argument_hint,
+            aliases=command.aliases,
         )
         for command in commands
         if not command.name.endswith(":")
@@ -631,7 +664,7 @@ def get_command(name_or_alias: str) -> CommandDescriptor | None:
     return None
 
 
-_STATIC_SKILL_ALIASES: frozenset[str] = frozenset({"remember", "skill-creator"})
+_STATIC_SKILL_ALIASES: frozenset[str] = frozenset({"openwiki", "remember", "skill-creator"})
 """Built-in skill names that have a dedicated top-level slash command."""
 
 
@@ -730,7 +763,6 @@ def build_agent_commands(agents: list[Any]) -> list[CommandEntry]:
         short_name = name.rsplit(":", 1)[-1]
         if "@" in short_name:
             short_name = short_name.split("@", 1)[0]
-        is_namespaced = ":" in name or "@" in name
         entries.append(
             CommandEntry(
                 name=f"/agent:{name}",
@@ -767,12 +799,14 @@ def build_custom_commands(
             arg_hint = str(item.get("argument_hint") or "")
             user_invocable = bool(item.get("user_invocable", True))
             source = str(item.get("source") or "custom")
+            raw_aliases = item.get("aliases") or ()
         else:
             raw_name = str(getattr(item, "name", "") or "").strip().lstrip("/")
             desc = str(getattr(item, "description", "") or raw_name)
             arg_hint = str(getattr(item, "argument_hint", "") or "")
             user_invocable = bool(getattr(item, "user_invocable", True))
             source = str(getattr(item, "source", "custom") or "custom")
+            raw_aliases = getattr(item, "aliases", ()) or ()
 
         if not raw_name or not user_invocable:
             continue
@@ -780,6 +814,14 @@ def build_custom_commands(
         slash_name = f"/{raw_name}"
         if slash_name.lower() in static_names:
             continue
+
+        clean_aliases = tuple(
+            f"/{a_clean}"
+            for a in raw_aliases
+            if (a_clean := str(a).strip().lstrip("/"))
+            and f"/{a_clean}".lower() != slash_name.lower()
+            and f"/{a_clean}".lower() not in static_names
+        )
 
         scope_tag = "project" if source == "projectSettings" else ("plugin" if source == "plugin" else "user")
         entries.append(
@@ -789,6 +831,7 @@ def build_custom_commands(
                 hidden_keywords=f"custom command {raw_name.replace(':', ' ')}",
                 argument_hint=arg_hint,
                 display_name=slash_name,
+                aliases=clean_aliases,
             )
         )
     return entries
@@ -797,21 +840,16 @@ def build_custom_commands(
 def get_all_entries(
     extra_commands: Sequence[CommandDescriptor | CommandEntry] | None = None,
 ) -> list[CommandEntry]:
-    """Return CommandEntry list for all registered commands and optional skills, including aliases."""
-    entries: list[CommandEntry] = []
-    for cmd in COMMAND_DESCRIPTORS:
-        if cmd.name.endswith(":"):
-            continue
-        entries.append(cmd.to_entry())
-        for alias in cmd.aliases:
-            entries.append(
-                CommandEntry(
-                    name=alias,
-                    description=f"Alias for {cmd.name} — {cmd.description}",
-                    hidden_keywords=cmd.hidden_keywords,
-                    argument_hint=cmd.argument_hint,
-                )
-            )
+    """Return canonical CommandEntry list for all registered commands and optional skills.
+
+    Aliases are carried on each canonical `CommandEntry.aliases` rather than
+    emitted as separate rows, preventing duplicate alias clutter in autocomplete.
+    """
+    entries: list[CommandEntry] = [
+        cmd.to_entry()
+        for cmd in COMMAND_DESCRIPTORS
+        if not cmd.name.endswith(":")
+    ]
 
     if extra_commands:
         for item in extra_commands:
@@ -819,15 +857,6 @@ def get_all_entries(
                 entries.append(item)
             elif hasattr(item, "to_entry"):
                 entries.append(item.to_entry())
-                for alias in getattr(item, "aliases", ()):
-                    entries.append(
-                        CommandEntry(
-                            name=alias,
-                            description=f"Alias for {item.name} — {item.description}",
-                            hidden_keywords=getattr(item, "hidden_keywords", ""),
-                            argument_hint=getattr(item, "argument_hint", ""),
-                        )
-                    )
 
     return entries
 

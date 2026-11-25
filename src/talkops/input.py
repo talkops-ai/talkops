@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from urllib.parse import unquote, urlparse
 
-from talkops.media_utils import ImageData, VideoData
+from talkops.media_utils import AudioData, FileData, ImageData, MediaItem, VideoData
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -38,6 +38,8 @@ WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"^[a-zA-Z]:[\\/]")
 
 IMAGE_PLACEHOLDER_PATTERN = re.compile(r"\[image \d+\]")
 VIDEO_PLACEHOLDER_PATTERN = re.compile(r"\[video \d+\]")
+AUDIO_PLACEHOLDER_PATTERN = re.compile(r"\[audio \d+\]")
+FILE_PLACEHOLDER_PATTERN = re.compile(r"\[file \d+\]")
 
 MIN_DROPPED_COMPACT_PATH_COUNT = 2
 UNICODE_SPACES: tuple[str, ...] = ("\u00a0", "\u202f")
@@ -56,12 +58,12 @@ class ParsedPastedPathPayload:
 class _TrackedMediaEntry:
     """Tracked media attachment and its live text span when known."""
 
-    media: ImageData | VideoData
+    media: MediaItem
     span: tuple[int, int] | None = None
     inline: bool = True
 
 
-MediaSnapshot = tuple[tuple[ImageData | VideoData, tuple[int, int] | None], ...]
+MediaSnapshot = tuple[tuple[MediaItem, tuple[int, int] | None], ...]
 
 
 def _resolve_with_unicode_space_variants(path: Path) -> Path | None:
@@ -165,6 +167,12 @@ def _looks_like_path_candidate_text(raw: str) -> bool:
         token = token.strip()
     if not token:
         return False
+    if token.startswith("/"):
+        # Single-segment slash tokens without another `/` or file extension (e.g. `/compact`, `/ com`)
+        # are slash commands, not dropped absolute filesystem paths.
+        rest = token[1:]
+        if "/" not in rest and "." not in rest:
+            return False
     return bool(
         token.startswith(("file://", "/", "~/", "./", "../"))
         or WINDOWS_DRIVE_PATH_PATTERN.match(token)
@@ -443,7 +451,7 @@ def parse_file_mentions(text: str, *, warn: bool = True) -> tuple[str, list[Path
 
 
 class MediaTracker:
-    """Track pasted images and videos in the current conversation."""
+    """Track pasted or attached images, videos, audios, and files in the current conversation."""
 
     def __init__(self) -> None:
         """Initialize MediaTracker."""
@@ -451,6 +459,8 @@ class MediaTracker:
         self._listeners: list[Callable[[], None]] = []
         self.next_image_id = 1
         self.next_video_id = 1
+        self.next_audio_id = 1
+        self.next_file_id = 1
 
     def add_listener(self, callback: Callable[[], None]) -> None:
         """Register a listener notified whenever tracked media changes."""
@@ -481,13 +491,13 @@ class MediaTracker:
 
     @images.setter
     def images(self, value: list[ImageData]) -> None:
-        """Replace tracked images while preserving tracked videos."""
-        video_entries = [
-            entry for entry in self._entries if isinstance(entry.media, VideoData)
+        """Replace tracked images while preserving other tracked media."""
+        other_entries = [
+            entry for entry in self._entries if not isinstance(entry.media, ImageData)
         ]
         self._entries = [
             *(_TrackedMediaEntry(media=image) for image in value),
-            *video_entries,
+            *other_entries,
         ]
         self._sync_next_ids()
         self._notify()
@@ -503,26 +513,70 @@ class MediaTracker:
 
     @videos.setter
     def videos(self, value: list[VideoData]) -> None:
-        """Replace tracked videos while preserving tracked images."""
-        image_entries = [
-            entry for entry in self._entries if isinstance(entry.media, ImageData)
+        """Replace tracked videos while preserving other tracked media."""
+        other_entries = [
+            entry for entry in self._entries if not isinstance(entry.media, VideoData)
         ]
         self._entries = [
-            *image_entries,
+            *other_entries,
             *(_TrackedMediaEntry(media=video) for video in value),
         ]
         self._sync_next_ids()
         self._notify()
 
-    def all_media(self) -> list[ImageData | VideoData]:
-        """Return all tracked images and videos in attachment order."""
+    @property
+    def audios(self) -> list[AudioData]:
+        """List of currently tracked audio attachments."""
+        return [
+            entry.media
+            for entry in self._entries
+            if isinstance(entry.media, AudioData)
+        ]
+
+    @audios.setter
+    def audios(self, value: list[AudioData]) -> None:
+        """Replace tracked audios while preserving other tracked media."""
+        other_entries = [
+            entry for entry in self._entries if not isinstance(entry.media, AudioData)
+        ]
+        self._entries = [
+            *other_entries,
+            *(_TrackedMediaEntry(media=audio) for audio in value),
+        ]
+        self._sync_next_ids()
+        self._notify()
+
+    @property
+    def files(self) -> list[FileData]:
+        """List of currently tracked file/document attachments."""
+        return [
+            entry.media
+            for entry in self._entries
+            if isinstance(entry.media, FileData)
+        ]
+
+    @files.setter
+    def files(self, value: list[FileData]) -> None:
+        """Replace tracked files while preserving other tracked media."""
+        other_entries = [
+            entry for entry in self._entries if not isinstance(entry.media, FileData)
+        ]
+        self._entries = [
+            *other_entries,
+            *(_TrackedMediaEntry(media=f) for f in value),
+        ]
+        self._sync_next_ids()
+        self._notify()
+
+    def all_media(self) -> list[MediaItem]:
+        """Return all tracked images, videos, audios, and files in attachment order."""
         return [entry.media for entry in self._entries]
 
     def count(self) -> int:
         """Return total number of tracked media attachments."""
         return len(self._entries)
 
-    def pop_last(self) -> ImageData | VideoData | None:
+    def pop_last(self) -> MediaItem | None:
         """Remove and return the most recently attached media item."""
         if not self._entries:
             return None
@@ -531,7 +585,7 @@ class MediaTracker:
         self._notify()
         return removed.media
 
-    def remove_at(self, index: int) -> ImageData | VideoData | None:
+    def remove_at(self, index: int) -> MediaItem | None:
         """Remove and return the media item at *index*."""
         if index < 0 or index >= len(self._entries):
             return None
@@ -542,20 +596,28 @@ class MediaTracker:
 
     def add_media(
         self,
-        media: ImageData | VideoData,
+        media: MediaItem,
         kind: str | None = None,
         *,
         existing_text: str = "",
         span: tuple[int, int] | None = None,
         inline: bool = True,
     ) -> str:
-        """Add an image or video and return its placeholder text."""
+        """Add an image, video, audio, or file and return its placeholder text."""
         if kind == "image" or (kind is None and isinstance(media, ImageData)):
             return self.add_image(
                 cast("ImageData", media), existing_text=existing_text, span=span, inline=inline
             )
-        return self.add_video(
-            cast("VideoData", media), existing_text=existing_text, span=span, inline=inline
+        if kind == "video" or (kind is None and isinstance(media, VideoData)):
+            return self.add_video(
+                cast("VideoData", media), existing_text=existing_text, span=span, inline=inline
+            )
+        if kind == "audio" or (kind is None and isinstance(media, AudioData)):
+            return self.add_audio(
+                cast("AudioData", media), existing_text=existing_text, span=span, inline=inline
+            )
+        return self.add_file(
+            cast("FileData", media), existing_text=existing_text, span=span, inline=inline
         )
 
     def add_image(
@@ -606,6 +668,54 @@ class MediaTracker:
         self._notify()
         return placeholder
 
+    def add_audio(
+        self,
+        audio_data: AudioData,
+        *,
+        existing_text: str = "",
+        span: tuple[int, int] | None = None,
+        inline: bool = True,
+    ) -> str:
+        """Add an audio clip and return its placeholder text (e.g. `[audio 1]`)."""
+        while existing_text and f"[audio {self.next_audio_id}]" in existing_text:
+            self.next_audio_id += 1
+        placeholder = f"[audio {self.next_audio_id}]"
+        audio_data.placeholder = placeholder
+        self._entries.append(
+            _TrackedMediaEntry(
+                media=audio_data,
+                span=self._normalize_span(span, placeholder),
+                inline=inline,
+            )
+        )
+        self.next_audio_id += 1
+        self._notify()
+        return placeholder
+
+    def add_file(
+        self,
+        file_data: FileData,
+        *,
+        existing_text: str = "",
+        span: tuple[int, int] | None = None,
+        inline: bool = True,
+    ) -> str:
+        """Add a document/file and return its placeholder text (e.g. `[file 1]`)."""
+        while existing_text and f"[file {self.next_file_id}]" in existing_text:
+            self.next_file_id += 1
+        placeholder = f"[file {self.next_file_id}]"
+        file_data.placeholder = placeholder
+        self._entries.append(
+            _TrackedMediaEntry(
+                media=file_data,
+                span=self._normalize_span(span, placeholder),
+                inline=inline,
+            )
+        )
+        self.next_file_id += 1
+        self._notify()
+        return placeholder
+
     def get_images(self) -> list[ImageData]:
         """Get all tracked images."""
         return list(self.images)
@@ -614,12 +724,22 @@ class MediaTracker:
         """Get all tracked videos."""
         return list(self.videos)
 
+    def get_audios(self) -> list[AudioData]:
+        """Get all tracked audio clips."""
+        return list(self.audios)
+
+    def get_files(self) -> list[FileData]:
+        """Get all tracked document/file attachments."""
+        return list(self.files)
+
     def clear(self) -> None:
-        """Clear all tracked images and videos and reset ID counters."""
+        """Clear all tracked media attachments and reset ID counters."""
         had_entries = bool(self._entries)
         self._entries.clear()
         self.next_image_id = 1
         self.next_video_id = 1
+        self.next_audio_id = 1
+        self.next_file_id = 1
         if had_entries:
             self._notify()
 
@@ -749,7 +869,12 @@ class MediaTracker:
     ) -> dict[str, list[tuple[int, int]]]:
         """Collect all placeholder spans present in `text`, grouped by token."""
         spans: dict[str, list[tuple[int, int]]] = {}
-        for pattern in (IMAGE_PLACEHOLDER_PATTERN, VIDEO_PLACEHOLDER_PATTERN):
+        for pattern in (
+            IMAGE_PLACEHOLDER_PATTERN,
+            VIDEO_PLACEHOLDER_PATTERN,
+            AUDIO_PLACEHOLDER_PATTERN,
+            FILE_PLACEHOLDER_PATTERN,
+        ):
             for match in pattern.finditer(text):
                 spans.setdefault(match.group(0), []).append(match.span())
         return spans
@@ -862,16 +987,36 @@ class MediaTracker:
             ),
             default=0,
         )
+        max_audio_id = max(
+            (
+                int(audio.placeholder.removeprefix("[audio ").removesuffix("]"))
+                for audio in self.audios
+                if AUDIO_PLACEHOLDER_PATTERN.fullmatch(audio.placeholder)
+            ),
+            default=0,
+        )
+        max_file_id = max(
+            (
+                int(file_item.placeholder.removeprefix("[file ").removesuffix("]"))
+                for file_item in self.files
+                if FILE_PLACEHOLDER_PATTERN.fullmatch(file_item.placeholder)
+            ),
+            default=0,
+        )
         self.next_image_id = max_image_id + 1
         self.next_video_id = max_video_id + 1
+        self.next_audio_id = max_audio_id + 1
+        self.next_file_id = max_file_id + 1
 
 
 # Backwards compatibility alias
 ImageTracker = MediaTracker
 
 __all__ = [
+    "AUDIO_PLACEHOLDER_PATTERN",
     "EMAIL_PREFIX_PATTERN",
     "FILE_MENTION_PATTERN",
+    "FILE_PLACEHOLDER_PATTERN",
     "IMAGE_PLACEHOLDER_PATTERN",
     "ImageTracker",
     "MediaSnapshot",

@@ -199,14 +199,13 @@ You have access to a skills library that provides verified cloud operations play
 
 {skills_list}
 
-**Cost-Hierarchy of Levers & Progressive Disclosure:**
+**How to Use Skills (Progressive Disclosure & Cost-Hierarchy of Levers):**
 
-Follow a strict **Cost-Hierarchy of Levers** — prefer the cheapest, most deterministic lever that resolves the task:
+Skills follow a **progressive disclosure** pattern — you see their name and description above, but only read full instructions when needed:
 
-1. **Skill Playbooks First (Progressive Disclosure)**: Check if the operator's task matches a skill above. Read its `SKILL.md` with `read_file(..., limit=1000)` before guessing CLI flags, IAM condition keys, or writing ad-hoc scripts. Reading a skill also unlocks any skill-gated tools declared in `metadata.include_tools`.
-2. **Persistent Memory & Experience (`AGENTS.md`)**: Consult recorded environment conventions and prior causal lessons (`Cue -> Lesson -> Evidence`) before repeating past failure modes.
-3. **Deterministic Read-Only Inspection**: Use `read_file`, `glob`, `grep`, and read-only cloud/MCP queries to verify live state on disk or in the cloud before mutating resources.
-4. **Specialized Subagent Delegation (`task` / `js_eval`)**: When a task spans multiple cloud regions, accounts, or requires a domain-specific plugin subagent, fan out work via `task` or `js_eval` (`Promise.all`) and pass file paths/ARNs as locators rather than pasting large payloads."""
+1. **Recognize when a skill applies**: Check if the operator's task matches a skill's description above.
+2. **Read the skill's full instructions**: Use `read_file(..., limit=1000)` on the skill's `SKILL.md` path before guessing CLI flags, IAM condition keys, or writing ad-hoc scripts. Reading a skill also unlocks any skill-gated tools declared in `metadata.include_tools`.
+3. **Follow the skill's workflow and supporting files**: `SKILL.md` contains step-by-step workflows and may reference helper scripts or configs in the same directory — always use full paths from the skill directory."""
 
 TALKOPS_SUBAGENT_SKILLS_SYSTEM_PROMPT = """## Skills System
 
@@ -351,6 +350,8 @@ class PluginSkillsMiddleware(SkillsMiddleware):
         return super()._format_skills_list(skills)
 
     def _is_skill_allowed(self, skill_name: str) -> bool:
+        if self._is_subagent and skill_name.strip().lower() == "openwiki":
+            return False
         if self._allowed_skills is None:
             return True
         for pattern in self._allowed_skills:
@@ -375,6 +376,10 @@ class PluginSkillsMiddleware(SkillsMiddleware):
                     or fnmatch.fnmatch(target_name, base_pat)
                     or fnmatch.fnmatch(target_name.lower(), base_pat.lower())
                 ):
+                    return True
+            elif ":" in skill_name:
+                skill_base = skill_name.rsplit(":", 1)[-1]
+                if fnmatch.fnmatch(skill_base, pattern) or fnmatch.fnmatch(skill_base.lower(), pattern.lower()):
                     return True
         return False
 
