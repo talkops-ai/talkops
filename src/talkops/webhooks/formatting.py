@@ -16,6 +16,13 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
+from talkops.webhooks.postmortem import (
+    build_slack_v2_interactive_blocks as build_slack_v2_interactive_blocks,
+)
+from talkops.webhooks.postmortem import (
+    render_sre_v2_hypothesis_summary as render_sre_v2_hypothesis_summary,
+)
+
 DEFAULT_MAX_TEXT_CHARS = 4000
 SLACK_MAX_TEXT_CHARS = 4000
 TEAMS_MAX_TEXT_CHARS = 4000
@@ -3736,6 +3743,3 @@ def exposure_from_mapping(
     )
     exposure.validate(provider)
     return exposure
-
-
-# Re-export TalkOps v2 3-Stage SRE Hypothesis & Interactive Slack Block helpers

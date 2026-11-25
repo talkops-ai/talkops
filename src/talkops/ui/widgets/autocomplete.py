@@ -1060,6 +1060,37 @@ class FuzzyFileController:
 
         all_files = self._get_files(target_dir=search_base)
 
+        if not search and self._file_cache is not None:
+            seen = set(all_files)
+            merged = list(all_files)
+            _append_walked_entries(
+                self._cwd,
+                self._cwd,
+                seen,
+                merged,
+                max_entries=_MAX_FALLBACK_FILES,
+                max_depth=1,
+            )
+            if len(merged) != len(all_files):
+                self._file_cache = merged
+                all_files = merged
+        elif leaf_query and self._file_cache is not None:
+            q_low = leaf_query.lower()
+            if not any(q_low in c.lower() for c in all_files):
+                seen = set(all_files)
+                merged = list(all_files)
+                _append_walked_entries(
+                    self._cwd,
+                    search_base,
+                    seen,
+                    merged,
+                    max_entries=_MAX_FALLBACK_FILES,
+                    max_depth=3,
+                )
+                if len(merged) != len(all_files):
+                    self._file_cache = merged
+                    all_files = merged
+
         if display_prefix:
             scoped_candidates = [
                 p[len(display_prefix) :]

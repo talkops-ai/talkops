@@ -1204,6 +1204,8 @@ def test_vertex_ai_api_key_does_not_activate_google_genai_or_pass_key_as_gcp_pro
         "GOOGLE_CLOUD_PROJECT",
         "GCP_PROJECT_ID",
         "VERTEXAI_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "VERTEXAI_LOCATION",
         "VERTEXAI_API_KEY",
         "GOOGLE_VERTEXAI_API_KEY",
         "GOOGLE_API_KEY",
@@ -1212,6 +1214,7 @@ def test_vertex_ai_api_key_does_not_activate_google_genai_or_pass_key_as_gcp_pro
     ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(s, "google_cloud_project", None, raising=False)
+    monkeypatch.setattr(s, "google_cloud_location", None, raising=False)
     monkeypatch.setattr(s, "google_api_key", None, raising=False)
     monkeypatch.setattr(s, "google_genai_use_vertexai", False, raising=False)
 
@@ -1258,6 +1261,8 @@ def test_vertex_express_mode_global_project_routing_and_404_rewrite(monkeypatch:
     )
 
     vertex_key = "AQ.test-dummy-vertex-express-key"
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
     monkeypatch.setenv("VERTEXAI_API_KEY", vertex_key)
     monkeypatch.setenv("TALKOPS_VERTEX_EXPRESS_PROJECT", "492468289179")
     _VERTEX_EXPRESS_PROJECT_CACHE.clear()
@@ -1404,6 +1409,8 @@ def test_vertex_ai_langchain_chat_google_generative_ai_v1_headers_and_labels(
     s = get_settings()
     monkeypatch.setattr(s, "reasoning_effort", None, raising=False)
     vertex_key = "AQ.test-dummy-vertex-express-key"
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
     monkeypatch.setenv("VERTEXAI_API_KEY", vertex_key)
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "otel-demo-499213")
     monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")

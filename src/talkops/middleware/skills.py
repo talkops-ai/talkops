@@ -191,7 +191,7 @@ def _compact_skill_description(description: str, max_chars: int = _MAX_INLINE_SK
 
 TALKOPS_SKILLS_SYSTEM_PROMPT = """## Skills System
 
-You have access to a skills library that provides verified cloud operations playbooks, IaC procedures, and domain knowledge.
+You have access to a skills library (including user skills in `~/.talkops/skills` or project-level `.talkops/skills`) that provides verified cloud operations playbooks, IaC procedures, and domain knowledge.
 
 {skills_locations}{skills_load_warnings}
 

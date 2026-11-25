@@ -107,7 +107,7 @@ class CommandRouter:
         self._discovered = True
 
     def reload_builtin_commands(self) -> None:
-        """Hot-reload built-in command modules and re-register their handlers."""
+        """Re-discover and re-register built-in command handlers without breaking class identity."""
         sub_packages = [
             "talkops.commands.core",
             "talkops.commands.power",
@@ -120,11 +120,9 @@ class CommandRouter:
                     for _, mod_name, _ in pkgutil.walk_packages(pkg.__path__, prefix=f"{pkg_name}."):
                         try:
                             mod = importlib.import_module(mod_name)
-                            mod = importlib.reload(mod)
                             self._register_handlers_from_module(mod)
                         except Exception as exc:
                             logger.warning("Failed reloading command module %s: %s", mod_name, exc)
-                pkg = importlib.reload(pkg)
                 self._register_handlers_from_module(pkg)
             except ImportError:
                 logger.debug("Command sub-package %s not yet available", pkg_name)

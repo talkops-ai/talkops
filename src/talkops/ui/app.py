@@ -84,6 +84,12 @@ from talkops.ui.controllers import (
     ThreadController,
 )
 from talkops.ui.controllers.server_controller import (
+    _format_mcp_server_changes as _format_mcp_server_changes,
+)
+from talkops.ui.controllers.server_controller import (
+    _McpRefreshStatus as _McpRefreshStatus,
+)
+from talkops.ui.controllers.server_controller import (
     _ServerRespawnResult,
 )
 from talkops.ui.permission_store import PermissionStore, load_permission_store

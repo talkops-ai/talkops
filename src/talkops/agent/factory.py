@@ -1274,13 +1274,14 @@ def create_talkops_agent(
     # 10. Build ordered middleware stack (matching TalkOps execution order)
     agent_middleware: list[AgentMiddleware[Any, Any]] = []
 
-    # 10.0 SRE & Central Webhook Server Middlewares — attached ONLY when `talkops serve`
-    # webhook/SRE profiles are active, NEVER in regular TUI or standard CLI sessions.
+    # 10.0 SRE & Central Webhook Server Middlewares — regular interactive TUI
+    # sessions exclude all SRE tools and middlewares; headless/central-server graphs
+    # attach `WebhookSREMiddleware` (with SRE tools gated strictly on `sre_workflow_active`).
     from talkops.addons.config import is_sre_profile_active, is_webhook_server_active
 
     sre_workflow_active = is_sre_profile_active()
     webhook_server_active = is_webhook_server_active()
-    if webhook_server_active:
+    if webhook_server_active or not interactive:
         agent_middleware.append(
             WebhookSREMiddleware(
                 assistant_id=assistant_id,
