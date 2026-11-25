@@ -103,7 +103,7 @@ def _summarize_tool_args(args: Mapping[str, Any] | None, max_len: int = 56) -> s
 class ChannelStreamSink:
     """Bridges LangGraph stream events to a `WebhookChannelAdapter` with debounced live edits.
 
-    Verbosity levels (matching `deepagents-talon` `VERBOSITY` semantics):
+    Verbosity levels:
     - `1`: Quiet — send only final assistant answer and HITL approval prompts.
     - `2`: Balanced (default) — live-update a status message with active tool calls,
            then replace/follow up with the final assistant response.

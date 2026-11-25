@@ -14,9 +14,8 @@
 
 """Central Multi-Channel Orchestrator (`ChannelHub`) for TalkOps Server Mode.
 
-Adapts `TalonHost` orchestration patterns from `deepagents-talon` (`libs/talon`) to
-TalkOps's multi-user `AgentRunGateway`, `ThreadStore`, `IdentityMapper`, and
-`GraphStreamBridge`.
+Coordinates inbound and outbound ChatOps messaging across TalkOps's multi-user
+`AgentRunGateway`, `ThreadStore`, `IdentityMapper`, and `GraphStreamBridge`.
 """
 
 from __future__ import annotations
@@ -1208,7 +1207,7 @@ class ChannelHub:
         return cancelled
 
     async def _recover_interrupted_thread(self, lg_thread_id: str) -> None:
-        """Patch dangling `tool_calls` on an interrupted LangGraph thread (matching Talon `recover_interrupted`)."""
+        """Patch dangling `tool_calls` on an interrupted LangGraph thread so subsequent turns resume cleanly."""
         if self.gateway is None or not hasattr(self.gateway, "get_thread_state"):
             return
         try:

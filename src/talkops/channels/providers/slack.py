@@ -88,7 +88,7 @@ def parse_slack_conversation_id(conversation_id: str) -> tuple[str, str | None]:
 
 
 def format_slack_conversation_id(channel_id: str, thread_ts: str | None) -> str:
-    """Format `(channel_id, thread_ts)` as `<channel_id>:<thread_ts>` (matching `deepagents-talon`)."""
+    """Format `(channel_id, thread_ts)` into canonical `<channel_id>:<thread_ts>` conversation notation."""
     if thread_ts:
         return f"{channel_id}:{thread_ts}"
     return channel_id
@@ -678,7 +678,7 @@ class SlackWebhookChannel:
 
         cmd_name = raw_cmd.lower()
         cmd_args = raw_text
-        if cmd_name in {"talkops", "talon", "ops"}:
+        if cmd_name in {"talkops", "ops"}:
             if not raw_text:
                 cmd_name = "help"
                 cmd_args = ""

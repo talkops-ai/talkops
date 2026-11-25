@@ -281,7 +281,7 @@ def _resolve_gcp_project_from_toml() -> str | None:
 
 
 def _default_vertex_user_agent() -> str:
-    """Return the Antigravity CLI aidev_client User-Agent string for Vertex AI."""
+    """Return the default TalkOps CLI User-Agent string for Vertex AI."""
     os_map = {"darwin": "darwin", "linux": "linux", "win32": "windows"}
     os_type = os_map.get(sys.platform, sys.platform)
     import platform
@@ -289,7 +289,7 @@ def _default_vertex_user_agent() -> str:
     raw_arch = platform.machine().lower()
     arch_map = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}
     arch = arch_map.get(raw_arch, raw_arch or "arm64")
-    return f"antigravity/cli/1.5.6 (aidev_client; os_type={os_type}; arch={arch}; auth_method=gcp)"
+    return f"talkops/cli/1.0.0 (os_type={os_type}; arch={arch}; auth_method=gcp)"
 
 
 def _build_vertex_additional_headers(
@@ -326,7 +326,7 @@ def _build_vertex_additional_headers(
         if not any(k.lower() == "user-agent" for k in headers):
             headers["user-agent"] = str(user_agent).strip()
 
-    stream_id = resolve_env_var("VERTEXAI_STREAM_ID") or "antigravity.cli.env_prod.tier_paid"
+    stream_id = resolve_env_var("VERTEXAI_STREAM_ID") or "talkops.cli.env_prod"
     if str(stream_id).strip().lower() not in ("off", "none", "false", "0", ""):
         raw_bytes = str(stream_id).strip().encode("utf-8")
         if 0 < len(raw_bytes) < 128:
@@ -362,7 +362,7 @@ def _build_vertex_labels(*, existing_labels: Any = None) -> dict[str, str]:
                     if k.strip():
                         labels[k.strip()] = v.strip()
 
-    labels.setdefault("client", "antigravity-cli")
+    labels.setdefault("client", "talkops-cli")
     labels.setdefault(
         "goog-originating-logical-product-id",
         "48c6cd67-05ce-4112-a170-ad8e0c7c136c",
@@ -555,7 +555,7 @@ def _get_provider_kwargs(provider: str, *, model_name: str | None = None) -> dic
             result["url"] = watsonx_url
         result.pop("base_url", None)
 
-    # Google Gemini vs Vertex AI handling (strictly separated like dcode)
+    # Google Gemini API vs Vertex AI handling (strictly separated by provider)
     if provider in ("google_genai", "google"):
         result.setdefault("vertexai", False)
     elif provider == "google_vertexai":
@@ -673,7 +673,7 @@ def _provider_retry_disable_kwargs(
 
     TalkOps's CodeModelRetryMiddleware owns the retry budget and status streaming,
     so integrations with a known retry-count parameter receive their provider-specific
-    disable value at construction time (ported from dcode).
+    disable value at construction time.
     """
     from talkops.model.config import (
         RETRY_DISABLE_VALUE_BY_PROVIDER,

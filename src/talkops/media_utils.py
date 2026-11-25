@@ -67,7 +67,7 @@ MAX_MEDIA_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_SIDE_PX = 2048
 
 # Derive canonical extension sets from deepagents.backends.utils._EXTENSION_TO_FILE_TYPE
-# plus additional container extensions supported by Antigravity CLI (agy).
+# plus additional multimodal container extensions supported by TalkOps CLI.
 IMAGE_EXTENSIONS: frozenset[str] = frozenset(
     {ext for ext, ftype in _EXTENSION_TO_FILE_TYPE.items() if ftype == "image"}
     | {".bmp", ".tiff", ".tif", ".avif", ".svg"}
@@ -267,7 +267,7 @@ class ImageData:
         return f"{self.source}, {format_media_size(self.size_bytes)}, {self.mime_type}"
 
     def expanded_label(self) -> str:
-        """Return 'source · size · mime_type' matching Antigravity CLI expanded view."""
+        """Return 'source · size · mime_type' for the expanded media attachment view."""
         return f"{self.source} · {format_media_size(self.size_bytes)} · {self.mime_type}"
 
     def to_content_block(self) -> ImageContentBlock:
@@ -304,7 +304,7 @@ class VideoData:
         return f"{self.source}, {format_media_size(self.size_bytes)}, {self.mime_type}"
 
     def expanded_label(self) -> str:
-        """Return 'source · size · mime_type' matching Antigravity CLI expanded view."""
+        """Return 'source · size · mime_type' for the expanded media attachment view."""
         return f"{self.source} · {format_media_size(self.size_bytes)} · {self.mime_type}"
 
     def to_content_block(self) -> VideoContentBlock:
@@ -341,7 +341,7 @@ class AudioData:
         return f"{self.source}, {format_media_size(self.size_bytes)}, {self.mime_type}"
 
     def expanded_label(self) -> str:
-        """Return 'source · size · mime_type' matching Antigravity CLI expanded view."""
+        """Return 'source · size · mime_type' for the expanded media attachment view."""
         return f"{self.source} · {format_media_size(self.size_bytes)} · {self.mime_type}"
 
     def to_content_block(self) -> AudioContentBlock:
@@ -381,7 +381,7 @@ class FileData:
         return f"{self.source}, {format_media_size(self.size_bytes)}, {self.mime_type}"
 
     def expanded_label(self) -> str:
-        """Return 'source · size · mime_type' matching Antigravity CLI expanded view."""
+        """Return 'source · size · mime_type' for the expanded media attachment view."""
         return f"{self.source} · {format_media_size(self.size_bytes)} · {self.mime_type}"
 
     def to_content_block(self) -> FileContentBlock:
@@ -405,14 +405,11 @@ DocumentData = FileData
 MediaItem = ImageData | VideoData | AudioData | FileData
 
 
-# ── Binary Container & Magic-Byte Validation (Antigravity CLI Parity) ────────
+# ── Binary Container & Magic-Byte Validation ────────────────────────────────
 
 
 def walk_isobmff_atoms(data: bytes) -> list[bytes]:
-    """Walk top-level ISOBMFF (MP4/MOV/M4A/3GP) boxes and return their 4-byte atom types.
-
-    Mirrors `walkTopLevelISOBMFFAtoms` in Antigravity CLI (`cortex/utils/media`).
-    """
+    """Walk top-level ISOBMFF (MP4/MOV/M4A/3GP) boxes and return their 4-byte atom types."""
     atoms: list[bytes] = []
     offset = 0
     total = len(data)
@@ -460,7 +457,7 @@ def validate_webm_container(data: bytes, *, require_media_blocks: bool = False) 
     r"""Validate a WebM / Matroska EBML container (`\x1a\x45\xdf\xa3`).
 
     When `require_media_blocks=True`, also checks for a Matroska Cluster (`\x1f\x43\xb6\x75`)
-    and SimpleBlock (`\xa3`) or BlockGroup (`\xa0`), matching `validateWebMContainer` in `agy`.
+    and SimpleBlock (`\xa3`) or BlockGroup (`\xa0`).
     """
     if len(data) < 4 or data[:4] != _WEBM_MAGIC:
         return False
@@ -475,10 +472,7 @@ def validate_webm_container(data: bytes, *, require_media_blocks: bool = False) 
 
 
 def triage_ogg_mime_type(data: bytes, default_mime: str = "audio/ogg") -> str:
-    """Inspect an Ogg container's codec identification headers to distinguish audio vs. video.
-
-    Mirrors `triageOggMimeType` (`0x100e064c0`) in Antigravity CLI (`cortex/utils/media`).
-    """
+    """Inspect an Ogg container's codec identification headers to distinguish audio vs. video."""
     if len(data) < 32 or data[:4] != _OGG_MAGIC:
         return default_mime
     head = data[:4096]
@@ -492,8 +486,7 @@ def triage_ogg_mime_type(data: bytes, default_mime: str = "audio/ogg") -> str:
 def convert_gif_to_png_bytes(gif_bytes: bytes) -> bytes:
     """Convert a GIF image (specifically animated GIFs) to a static first-frame PNG.
 
-    Mirrors `convertGIFToPNG` (`0x102cc6bd0`) in Antigravity CLI so providers that
-    reject animated GIFs receive a valid static PNG.
+    Ensures model providers that reject animated GIFs receive a valid static PNG.
     """
     img = Image.open(io.BytesIO(gif_bytes))
     img.seek(0)
@@ -511,8 +504,6 @@ def compress_image_bytes(
 ) -> tuple[bytes, str]:
     """Downscale and compress an image if its dimensions exceed `max_side`.
 
-    Mirrors `CompressMedia` (`0x100e04e00`) / `resizeToMaxSide` (`0x100e052c0`) in `agy`.
-
     Returns:
         Tuple of `(compressed_bytes, format_name)` where `format_name` is `'png'` or `'jpeg'`.
     """
@@ -529,7 +520,7 @@ def compress_image_bytes(
     resized.save(png_buf, format="PNG")
     png_data = png_buf.getvalue()
 
-    # If the image has no alpha channel, compare JPEG size vs PNG size (smallerAsJPEG in agy)
+    # If the image has no alpha channel, compare JPEG size vs PNG size and keep the smaller payload
     if resized.mode in ("RGB", "L"):
         jpg_buf = io.BytesIO()
         resized.convert("RGB").save(jpg_buf, format="JPEG", quality=jpeg_quality, optimize=True)
@@ -711,9 +702,8 @@ def _resolve_file_uri_or_path(raw: str) -> Path | None:
 def _get_macos_clipboard_file_path() -> Path | None:
     """Read a copied file's POSIX path from the macOS clipboard via `«class furl»`.
 
-    Mirrors `readClipboardFileDarwin` (`0x102cc7950`) in Antigravity CLI so copying any
-    media file (photo, screenshot, `.mp3`, `.wav`, `.mp4`, `.pdf`) in Finder and pressing
-    `Ctrl+V` / `Cmd+V` attaches the file directly.
+    Allows copying any media file (photo, screenshot, `.mp3`, `.wav`, `.mp4`, `.pdf`)
+    in Finder and pressing `Ctrl+V` / `Cmd+V` to attach the file directly.
     """
     osascript_path = shutil.which("osascript")
     if not osascript_path:
@@ -1080,7 +1070,7 @@ def get_image_from_path(file_path: str | Path) -> ImageData | None:
     """Load an image from a file path and return as `ImageData`.
 
     Validates extension, file existence, size limit, and image integrity.
-    Converts animated GIFs to first-frame static PNG (`convertGIFToPNG` parity with `agy`).
+    Converts animated GIFs to a first-frame static PNG.
     """
     path = Path(file_path) if isinstance(file_path, str) else file_path
     suffix = path.suffix.lower()
@@ -1110,7 +1100,7 @@ def get_image_from_path(file_path: str | Path) -> ImageData | None:
             return None
 
         format_lower = pil_format.lower()
-        # Convert animated GIFs to static first-frame PNG (agy convertGIFToPNG parity)
+        # Convert animated GIFs to static first-frame PNG
         if format_lower == "gif" and getattr(img, "is_animated", False):
             png_bytes = convert_gif_to_png_bytes(image_bytes)
             return ImageData(
@@ -1308,7 +1298,7 @@ def is_media_path(file_path: str | Path) -> bool:
     )
 
 
-# ── User Uploaded Media Artifact Persistence (`agy` `.user_uploaded/` Parity) ─
+# ── User Uploaded Media Artifact Persistence (`.user_uploaded/`) ─────────────
 
 
 def save_user_uploaded_media(
@@ -1320,8 +1310,7 @@ def save_user_uploaded_media(
 ) -> dict[str, str] | None:
     """Persist a user-attached `MediaItem` or LangChain `ContentBlock` to `.user_uploaded/`.
 
-    Writes `<dest_dir>/uploaded_media_<index>_<timestamp_ms>.<ext>` (matching
-    `SaveMediaAsUserMediaArtifacts` in Antigravity CLI) and returns
+    Writes `<dest_dir>/uploaded_media_<index>_<timestamp_ms>.<ext>` and returns
     `{"mime_type": mime_type, "uri": str(saved_path)}` for `transcript.jsonl`.
     """
     ts = timestamp_ms if timestamp_ms is not None else int(time.time() * 1000)

@@ -14,8 +14,8 @@
 
 """Media safety, attachment hydration, outbound Markdown media extraction, and OAuth callback protection.
 
-Ported and adapted from `deepagents_talon/media.py`, `deepagents_talon/channels/base.py`,
-`deepagents_talon/channels/slack.py`, and `deepagents_talon/mcp_auth.py`.
+Handles SSRF-safe media downloads, MIME validation, Markdown attachment extraction,
+and OAuth callback verification across Slack, Microsoft Teams, and Discord.
 """
 
 from __future__ import annotations

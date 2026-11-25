@@ -1439,11 +1439,11 @@ async def test_call_mcp_tool_json_string_arguments_and_schema_hints(
         {
             "server_name": "subagent__reverse-engineer__rea",
             "tool_name": "open_binary",
-            "arguments": '{"path": "/Users/structbinary/.local/bin/agy"}',
+            "arguments": '{"path": "/usr/local/bin/sample-app"}',
         }
     )
     assert "ok" in str(res1)
-    mock_session.call_tool.assert_awaited_with("open_binary", {"path": "/Users/structbinary/.local/bin/agy"})
+    mock_session.call_tool.assert_awaited_with("open_binary", {"path": "/usr/local/bin/sample-app"})
 
     # 2. Empty JSON string "{}" for binary_session and prefixed tool_name ("rea_binary_session")
     res2 = await dispatcher.ainvoke(
@@ -1495,12 +1495,12 @@ async def test_call_mcp_tool_json_string_arguments_and_schema_hints(
         {
             "server_name": "subagent__reverse-engineer__rea",
             "tool_name": "open_binary",
-            "arguments": '{"path": "/Users/structbinary/.local/bin/agy"}',
+            "arguments": '{"path": "/usr/local/bin/sample-app"}',
         },
     )
     assert parts.name == "OpenBinary"
     assert parts.scope == "reverse-engineer"
-    assert "agy" in parts.detail
+    assert "sample-app" in parts.detail
 
 
 

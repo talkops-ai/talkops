@@ -1428,14 +1428,14 @@ def test_vertex_ai_langchain_chat_google_generative_ai_v1_headers_and_labels(
     headers = kwargs["additional_headers"]
     assert headers["X-Goog-User-Project"] == "otel-demo-499213"
     assert headers["X-Vertex-AI-LLM-Shared-Request-Type"] == "shared"
-    assert "antigravity/cli/1.5.6 (aidev_client;" in headers["user-agent"]
-    assert headers["X-Goog-Ext-525006001-bin"] == "CiJhbnRpZ3Jhdml0eS5jbGkuZW52X3Byb2QudGllcl9wYWlk"
+    assert "talkops/cli/1.0.0 (" in headers["user-agent"]
+    assert headers["X-Goog-Ext-525006001-bin"] == "ChR0YWxrb3BzLmNsaS5lbnZfcHJvZA=="
     labels = kwargs["labels"]
-    assert labels["client"] == "antigravity-cli"
+    assert labels["client"] == "talkops-cli"
     assert labels["goog-originating-logical-product-id"] == "48c6cd67-05ce-4112-a170-ad8e0c7c136c"
     assert labels["goog-originating-service-id"] == "a153-a454-6272"
 
-    # Provider retry disable kwargs match dcode (1 for google_genai/google_vertexai, 0 for others)
+    # Provider retry disable kwargs (1 for google_genai/google_vertexai, 0 for others)
     assert _provider_retry_disable_kwargs("google_vertexai", kwargs) == {"max_retries": 1}
     assert _provider_retry_disable_kwargs("google_genai", kwargs) == {"max_retries": 1}
     assert _provider_retry_disable_kwargs("openai", {}) == {"max_retries": 0}
@@ -1462,8 +1462,8 @@ def test_vertex_ai_langchain_chat_google_generative_ai_v1_headers_and_labels(
     assert "/v1/projects/otel-demo-499213/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent" in req.url
     assert req.headers.get("X-Goog-User-Project") == "otel-demo-499213"
     assert req.headers.get("X-Vertex-AI-LLM-Shared-Request-Type") == "shared"
-    assert "antigravity/cli/1.5.6 (aidev_client;" in req.headers.get("user-agent", "")
-    assert req.headers.get("X-Goog-Ext-525006001-bin") == "CiJhbnRpZ3Jhdml0eS5jbGkuZW52X3Byb2QudGllcl9wYWlk"
+    assert "talkops/cli/1.0.0 (" in req.headers.get("user-agent", "")
+    assert req.headers.get("X-Goog-Ext-525006001-bin") == "ChR0YWxrb3BzLmNsaS5lbnZfcHJvZA=="
 
     # When VERTEXAI_SERVICE_TIER="standard" is set, X-Vertex-AI-LLM-Shared-Request-Type is omitted
     monkeypatch.setenv("VERTEXAI_SERVICE_TIER", "standard")

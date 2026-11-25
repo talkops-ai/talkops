@@ -14,7 +14,7 @@
 
 """Agent-callable `send_channel_message` tool and active conversation context.
 
-Modeled after `deepagents_talon/messaging.py`: binds the active `(channel, conversation_id, thread_id)`
+Binds the active `(channel, conversation_id, thread_id)`
 into a `ContextVar` during every agent turn and exposes a tool so the agent can send
 intermediate progress messages or upload generated files/reports mid-turn.
 """

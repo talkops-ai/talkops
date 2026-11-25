@@ -1934,7 +1934,7 @@ def _resolve_thread_id_from_runtime(
     *,
     subagent_name: str | None = None,
 ) -> str:
-    """Resolve the active conversation/thread ID, isolating subagent trajectories per Antigravity."""
+    """Resolve the active conversation/thread ID, isolating per-subagent trajectories."""
     base_thread_id = "default"
     detected_subagent = subagent_name
     subagent_run_id: str | None = None
@@ -2171,7 +2171,7 @@ def _extract_model_reported_tokens(messages: Sequence[Any]) -> int:
 def manual_compaction_requested(messages: Sequence[Any]) -> tuple[bool, str]:
     """Check whether the trajectory contains an unfulfilled user ``/compact`` request.
 
-    Mirrors Antigravity's ``prehooks.manualCompactionRequested``: scans backwards
+    Scans backwards
     through ``messages``; if a checkpoint summary message is encountered first,
     returns ``(False, "")``. If a human ``/compact`` or ``/offload`` message is
     found before any subsequent checkpoint summary, returns ``(True, instructions)``.
@@ -2437,7 +2437,7 @@ def _create_talkops_summarization_middleware(
     *,
     thread_id: str = "default",
 ) -> TalkOpsSummarizationMiddleware:
-    """Create a ``TalkOpsSummarizationMiddleware`` honoring Antigravity checkpoint budgets & ``autoCompact``."""
+    """Create a ``TalkOpsSummarizationMiddleware`` honoring model checkpoint budgets & ``autoCompact``."""
     from deepagents._models import resolve_model  # noqa: PLC0415
     from deepagents.middleware.summarization import (
         compute_summarization_defaults,  # noqa: PLC0415
@@ -2489,7 +2489,7 @@ def _create_talkops_summarization_middleware(
 class CLICompactionMiddleware(SummarizationToolMiddleware):
     """Harness-driven compaction middleware with lossless transcript logging and tool output offloading.
 
-    Follows the Antigravity CLI architecture:
+    Harness-driven compaction architecture:
     - Exposes zero compaction tools to the LLM (``self.tools = []``); compaction is
       100% harness-driven across both the main agent and spawned subagents.
     - Syncs 100% of raw steps to dual line-aligned JSONL transcripts

@@ -34,7 +34,7 @@ _VALID_MODES = frozenset({"auto", "auto_connect", "persistent", "isolated", "bro
 
 
 def format_browser_command_prompt(task_prompt: str) -> str:
-    """Wrap *task_prompt* with the Antigravity-style ``<SUBAGENT>`` directive."""
+    """Wrap *task_prompt* with the ``<SUBAGENT>`` delegation directive."""
     cleaned = task_prompt.strip()
     if cleaned.startswith("<SUBAGENT>"):
         return cleaned

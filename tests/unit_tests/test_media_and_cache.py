@@ -467,8 +467,8 @@ def test_parse_pasted_file_paths_handles_spaces_quotes_and_file_urls(
 
 
 @pytest.mark.asyncio
-async def test_chat_input_paste_clipboard_media_and_agy_attachment_bar() -> None:
-    """Verify ChatInput clipboard paste and Antigravity CLI MediaAttachmentBar layout (Screenshot 2)."""
+async def test_chat_input_paste_clipboard_media_and_attachment_bar() -> None:
+    """Verify ChatInput clipboard paste and MediaAttachmentBar expand/collapse layout."""
     from talkops.ui.widgets.chat_input import MediaAttachmentBar
 
     app = TalkOpsApp(defer_server_start=True)
@@ -501,7 +501,7 @@ async def test_chat_input_paste_clipboard_media_and_agy_attachment_bar() -> None
         assert "▸ 📎 1 media attached (clipboard, 168 KB, image/png)" in collapsed_text
         assert "(ctrl+o to expand)" in collapsed_text
 
-        # Pressing Ctrl+O expands the attachment bar into Antigravity CLI format (Screenshot 2)
+        # Pressing Ctrl+O expands the media attachment bar details
         await pilot.press("ctrl+o")
         await pilot.pause()
         expanded_text = media_bar.render().plain

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for dcode-aligned MCP, plugin, subagent, and TUI capability discovery."""
+"""Unit tests for MCP, plugin, subagent, and TUI capability discovery parity."""
 
 from __future__ import annotations
 

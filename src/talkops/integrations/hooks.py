@@ -134,7 +134,7 @@ def load_hooks(path: Path | None = None) -> list[HookConfig]:
                     )
                 )
         elif isinstance(raw_hooks, dict):
-            # Also support Antigravity / Claude Code event-dict hooks format
+            # Also support structured event-dict hooks format
             for event_name, matchers in raw_hooks.items():
                 if str(event_name) in skip_events:
                     continue

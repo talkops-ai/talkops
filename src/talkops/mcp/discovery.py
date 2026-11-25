@@ -78,7 +78,7 @@ def _load_mcp_json(path: Path) -> dict[str, dict[str, Any]]:
                 stem = path.stem.lstrip(".") or "mcp"
                 servers = {stem: data}
             elif data:
-                # Bare server map (matching dcode's _server_map while ignoring metadata like "$schema")
+                # Bare server map (ignoring top-level metadata keys like "$schema")
                 extracted = {
                     k: v
                     for k, v in data.items()

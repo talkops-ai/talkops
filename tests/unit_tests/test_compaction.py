@@ -598,7 +598,7 @@ def test_microcompact_includes_call_mcp_tool_and_ls_and_clears_artifact() -> Non
 
 
 def test_cli_compaction_middleware_exposes_no_tools_for_main_and_subagents() -> None:
-    """Verify Antigravity harness-driven architecture exposes zero compaction tools on main or subagents."""
+    """Verify TalkOps harness-driven architecture exposes zero compaction tools on main or subagents."""
     fake_model = FakeListChatModel(responses=["ok"])
     main_mw = _create_cli_compaction_middleware(fake_model, _DummyBackend())
     sub_mw = _create_cli_compaction_middleware(
@@ -633,7 +633,7 @@ def test_talkops_summarization_uses_checkpoint_config_token_limit_by_default(
 
 
 def test_manual_compaction_requested_triggers_harness_compaction_until_checkpointed() -> None:
-    """Verify manual_compaction_requested mirrors Antigravity prehooks.manualCompactionRequested."""
+    """Verify manual_compaction_requested detects unfulfilled /compact turns until checkpointed."""
     from talkops.middleware.compaction import manual_compaction_requested
 
     msgs_with_compact = [

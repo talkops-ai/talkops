@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TalkOps Browser Middleware — 4-tool Stagehand facade with Antigravity context & persona management.
+"""TalkOps Browser Middleware — 4-tool Stagehand facade with bounded snapshot & persona management.
 
-Exposes the 4-tool browser surface recommended by LangChain Deep Agents + Antigravity:
+Exposes the 4-tool browser surface for LangChain Deep Agents:
   1. ``snapshot`` — Capture accessibility tree with ``[ref=...]`` IDs, with automatic 8KB
      truncation, disk offloading, and ephemeral history compaction so snapshots never
      bloat the context window.
@@ -70,7 +70,7 @@ from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Antigravity's exact 8KB (0x2000) snapshot truncation threshold from saveSnapshot @ 0x101d04be0
+# Default 8KB (8192-byte) snapshot truncation threshold before offloading full text to disk
 DEFAULT_MAX_SNAPSHOT_BYTES: int = 8192
 
 CURRENT_SNAPSHOT_TAG = "current_snapshot"
@@ -398,10 +398,9 @@ def format_and_offload_snapshot(
     artifacts_dir: Path,
     max_bytes: int = DEFAULT_MAX_SNAPSHOT_BYTES,
 ) -> tuple[str, Path, Path | None]:
-    """Save snapshot to disk and apply Antigravity's 8KB truncation (Head + Tail) & XML wrapping.
+    """Save snapshot to disk and apply 8KB Head + Tail truncation & XML wrapping.
 
-    Matches ``saveSnapshot`` (`0x101d04be0`) and ``takeSnapshot`` (`0x101d048c0`) in
-    Antigravity CLI, enhanced with Head + Tail preservation for SaaS apps:
+    Preserves both top-level navigation and bottom portal/footer regions on dense SaaS UIs:
     - If ``len(encoded) > max_bytes`` (default 8KB = 8192 bytes):
       1. Saves full text to ``snapshots/snapshot_full_<ts>.txt``.
       2. Preserves the first ~65% (Head: top navigation & controls) and last ~35%
@@ -456,7 +455,7 @@ def format_and_offload_snapshot(
 def prune_stale_snapshots_in_messages(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
     """Replace older ``<current_snapshot>`` ToolMessages so only the newest snapshot stays in context.
 
-    Implements Antigravity's ``ephemeralMessageResult`` (`0x101d04680`) behavior for
+    Implements ephemeral snapshot compaction across
     LangChain message lists: if multiple ``ToolMessage`` objects contain ``<current_snapshot``,
     all but the last one are compacted to a single-line pointer referencing the saved file on disk.
     """
@@ -545,7 +544,7 @@ class TalkOpsBrowserMiddleware(AgentMiddleware[Any, Any]):
 
     @property
     def system_prompt_section(self) -> str:
-        """Return the combined Stagehand + Antigravity browser system prompt instructions."""
+        """Return the combined Stagehand + TalkOps browser system prompt instructions."""
         stagehand_prompt = facade_instructions("playwright").strip()
         if stagehand_prompt.startswith("Browser tool surface:"):
             stagehand_prompt = (

@@ -177,7 +177,7 @@ TalkOps checks `TALKOPS_CHROME_USER_DATA_DIR` / `CHROME_USER_DATA_DIR` first, th
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `TALKOPS_BROWSER_MODE` *(or `TALKOPS_BROWSER_PROVIDER`)* | `"auto"` | Connection mode: `auto`, `auto_connect`, `persistent`, `isolated`, or `browserbase`. |
-| `TALKOPS_BROWSER_WS_URL` *(or `TALKOPS_BROWSER_CDP_URL`, `AGY_BROWSER_WS_URL`)* | *(unset)* | Explicit Tier 1 Chrome DevTools Protocol (CDP) WebSocket or HTTP endpoint. |
+| `TALKOPS_BROWSER_WS_URL` *(or `TALKOPS_BROWSER_CDP_URL`)* | *(unset)* | Explicit Tier 1 Chrome DevTools Protocol (CDP) WebSocket or HTTP endpoint. |
 | `TALKOPS_BROWSER_USER_DATA_DIR` | `~/.talkops/browser-profile` | Custom profile directory for `persistent` or `auto_connect` mode. |
 | `TALKOPS_CHROME_USER_DATA_DIR` *(or `CHROME_USER_DATA_DIR`)* | *(OS default)* | Explicit Chrome User Data directory checked first for `DevToolsActivePort`. |
 | `TALKOPS_CHROME_PATH` *(or `CHROME_PATH`)* | *(auto-detected)* | Explicit path to the Chrome or Chromium binary. |

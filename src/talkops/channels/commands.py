@@ -14,8 +14,8 @@
 
 """Unified chat command registry shared by `ChannelHub` and channel webhook adapters.
 
-Modeled after `deepagents_talon/commands.py` and extended with TalkOps-specific
-cloud operations commands (`/status`, `/mode` for `manual`/`smart`/`jev` tool approvals).
+Provides cross-platform ChatOps slash commands across Slack, Microsoft Teams, and Discord,
+including operational controls (`/status`, `/mode` for `manual`/`smart`/`jev` tool approvals).
 """
 
 from __future__ import annotations
@@ -116,8 +116,8 @@ def parse_chat_command(text: str) -> tuple[ChatCommand, str] | None:
     if "@" in first_token:
         first_token = first_token.split("@", 1)[0]
 
-    # Support umbrella `/talkops <subcommand> [args]` or `/talon <subcommand> [args]`
-    if first_token in {"talkops", "talon", "ops"}:
+    # Support umbrella `/talkops <subcommand> [args]` or `/ops <subcommand> [args]`
+    if first_token in {"talkops", "ops"}:
         if not rest:
             return COMMANDS_BY_NAME["help"], ""
         sub_parts = rest.split(maxsplit=1)

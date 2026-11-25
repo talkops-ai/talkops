@@ -1,6 +1,6 @@
 """Shared channel exposure policies, text chunking, and Markdown formatting utilities.
 
-Adapts `deepagents_talon/channels/base.py` for Slack (`mrkdwn`), Microsoft Teams
+Provides native message formatting for Slack (`mrkdwn`), Microsoft Teams
 (Markdown + Adaptive Cards), and Discord (2000-char limit + fenced code preservation).
 """
 
@@ -81,7 +81,7 @@ APPROVAL_REACTION_MAP: dict[str, str] = {
 
 
 class ExposureMode(StrEnum):
-    """Inbound channel exposure policy, modeled after `deepagents-talon`."""
+    """Inbound channel exposure policy (`self`, `allowlist`, or `open`)."""
 
     SELF = "self"
     ALLOWLIST = "allowlist"
@@ -556,7 +556,7 @@ def _convert_markdown_tables_to_code(text: str) -> str:
 def decode_slack_mrkdwn(text: str) -> str:
     """Decode Slack's inbound message encoding back into plain user text.
 
-    Matches `deepagents-talon` `_decode_mrkdwn`:
+    Normalization steps:
     - Unwraps `<https://...|label>` into `label (https://...)` or `https://...` when label matches URL.
     - Unescapes `&lt;`, `&gt;`, and `&amp;` (`&amp;` last so literal `&lt;` is preserved).
     """

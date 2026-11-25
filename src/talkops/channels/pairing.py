@@ -14,7 +14,7 @@
 
 """Dynamic DM sender pairing for `talkops.channels`.
 
-Adapted from `deepagents_talon/pairing.py`: unknown DM senders receive a short
+Unknown DM senders receive a short
 8-character one-time code (`K7QM-3XRD`). The channel operator approves the code
 from their own DM using `/pair approve <code>`.
 """

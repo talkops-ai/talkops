@@ -1322,7 +1322,7 @@ def create_talkops_agent(
     if enable_ask_user and interactive:
         agent_middleware.append(AskUserMiddleware())
 
-    # 10.4b Optional main-agent BrowserMiddleware (mirrors Antigravity AddBrowserToMainAgent)
+    # 10.4b Optional main-agent BrowserMiddleware (direct main-agent browser tool binding)
     if browser_on_main_agent_flag:
         from talkops.middleware.browser import TalkOpsBrowserMiddleware
 

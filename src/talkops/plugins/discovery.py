@@ -588,7 +588,7 @@ def _is_likely_plugin_dir(path: Path) -> bool:
 
 
 def _matches_any_pattern(name: str, patterns: list[str]) -> bool:
-    """Match a plugin directory name against glob or regex patterns (Antigravity plugins.json style)."""
+    """Match a plugin directory name against glob or regex patterns."""
     import fnmatch
     import re
 
@@ -691,7 +691,7 @@ def _iter_workspace_plugin_dirs(root: Path) -> list[Path]:
                         discovered.append(cand)
                     break
 
-                # Antigravity plugins.json convention: scan entry directory one level deep
+                # Manifest bundle convention: scan entry directory one level deep
                 matched_children = False
                 try:
                     children = sorted(cand.iterdir())

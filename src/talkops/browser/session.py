@@ -14,11 +14,11 @@
 
 """Browser session and persona lifecycle management for TalkOps.
 
-Implements the Antigravity 3-tier Chrome connection & persona strategy on top of
+Implements the TalkOps 3-tier Chrome connection & persona strategy on top of
 ``stagehand`` (``local_browser`` / ``browserbase``) and ``stagehand_middleware``:
 
 1. **Tier 1 — Explicit / Discovered CDP Endpoint**:
-   Connects to ``TALKOPS_BROWSER_WS_URL``, ``AGY_BROWSER_WS_URL``, or an explicit
+   Connects to ``TALKOPS_BROWSER_WS_URL``, ``TALKOPS_BROWSER_CDP_URL``, or an explicit
    ``cdp_url`` via ``await local_browser.connect(cdp_url=...)`` (``keep_alive=True``).
 2. **Tier 2 — User's Live Default Chrome Persona via ``DevToolsActivePort`` (Auto-Connect)**:
    Reads ``<ChromeUserDataDir>/DevToolsActivePort`` (macOS, Linux, Windows), constructs
@@ -185,8 +185,8 @@ class BrowserConnectionConfig:
     """Connection mode:
     - ``"auto"``: Try Tier 1 (env/explicit CDP URL) -> Tier 2 (``DevToolsActivePort`` live user
       Chrome persona) -> Tier 3 (launch persistent ``~/.talkops/browser-profile``).
-    - ``"auto_connect"``: Strict Antigravity ``--autoConnect`` mode — only connect to existing
-      Chrome via ``TALKOPS_BROWSER_WS_URL`` / ``AGY_BROWSER_WS_URL`` or ``DevToolsActivePort``;
+    - ``"auto_connect"``: Strict ``--autoConnect`` mode — only connect to existing
+      Chrome via ``TALKOPS_BROWSER_WS_URL`` / ``TALKOPS_BROWSER_CDP_URL`` or ``DevToolsActivePort``;
       if unavailable, raise ``BrowserConnectionError`` instructing the user to enable
       ``chrome://inspect/#remote-debugging``.
     - ``"persistent"``: Launch Chrome with a persistent profile at ``user_data_dir``
@@ -238,7 +238,6 @@ class BrowserConnectionConfig:
 
         cdp_url = (
             os.environ.get("TALKOPS_BROWSER_WS_URL")
-            or os.environ.get("AGY_BROWSER_WS_URL")
             or os.environ.get("TALKOPS_BROWSER_CDP_URL")
             or None
         )
@@ -370,11 +369,10 @@ class BrowserSessionManager:
             )
             return browser, "tier3_browserbase", "browserbase:new_session"
 
-        # ── Tier 1: Explicit CDP URL / TALKOPS_BROWSER_WS_URL / AGY_BROWSER_WS_URL ──
+        # ── Tier 1: Explicit CDP URL / TALKOPS_BROWSER_WS_URL / TALKOPS_BROWSER_CDP_URL ──
         explicit_cdp = (
             cfg.cdp_url
             or os.environ.get("TALKOPS_BROWSER_WS_URL")
-            or os.environ.get("AGY_BROWSER_WS_URL")
             or os.environ.get("TALKOPS_BROWSER_CDP_URL")
         )
         if explicit_cdp and cfg.mode in {"auto", "auto_connect"}:

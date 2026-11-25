@@ -148,8 +148,7 @@ class ChannelMessage:
 class ChannelReaction:
     """Normalized emoji reaction event delivered to a central channel webhook.
 
-    Used to resolve pending HITL tool approvals with 👍 (`approve`) or 👎 (`reject`),
-    matching `deepagents-talon` semantics.
+    Used to resolve pending HITL tool approvals with 👍 (`approve`) or 👎 (`reject`).
     """
 
     channel: str

@@ -803,16 +803,16 @@ def test_workspace_plugin_isolation_and_agents_manifest_support(
     repo_a.mkdir()
     repo_b.mkdir()
 
-    # 1. Create a plugin in repo_a/.agents/plugins/agy-style-plugin using .agents-plugin/plugin.json
-    agy_plugin = repo_a / ".agents" / "plugins" / "agy-style-plugin"
-    (agy_plugin / ".agents-plugin").mkdir(parents=True)
-    (agy_plugin / ".agents-plugin" / "plugin.json").write_text(
-        json.dumps({"name": "agy-style-plugin", "version": "2.1.0"}),
+    # 1. Create a plugin in repo_a/.agents/plugins/agent-style-plugin using .agents-plugin/plugin.json
+    agent_plugin = repo_a / ".agents" / "plugins" / "agent-style-plugin"
+    (agent_plugin / ".agents-plugin").mkdir(parents=True)
+    (agent_plugin / ".agents-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "agent-style-plugin", "version": "2.1.0"}),
         encoding="utf-8",
     )
-    (agy_plugin / "skills" / "agy-skill").mkdir(parents=True)
-    (agy_plugin / "skills" / "agy-skill" / "SKILL.md").write_text(
-        "---\nname: agy-skill\ndescription: Agy skill\n---\nInstructions",
+    (agent_plugin / "skills" / "agent-skill").mkdir(parents=True)
+    (agent_plugin / "skills" / "agent-skill" / "SKILL.md").write_text(
+        "---\nname: agent-skill\ndescription: Agent skill\n---\nInstructions",
         encoding="utf-8",
     )
 
@@ -836,20 +836,20 @@ def test_workspace_plugin_isolation_and_agents_manifest_support(
 
     res_a = discover_plugins(project_root=repo_a)
     ids_a = {p.plugin_id for p in res_a.plugins}
-    assert "agy-style-plugin@project" in ids_a
+    assert "agent-style-plugin@project" in ids_a
     assert "declared-plugin@project" in ids_a
 
     # Verify Repo B cannot see Repo A's plugins
     res_b = discover_plugins(project_root=repo_b)
     assert len(res_b.plugins) == 0
 
-    # Verify disabling agy-style-plugin@project in repo_a suppresses it
+    # Verify disabling agent-style-plugin@project in repo_a suppresses it
     set_plugin_enabled_for_scope(
-        "agy-style-plugin@project", False, scope="project", project_root=repo_a
+        "agent-style-plugin@project", False, scope="project", project_root=repo_a
     )
     res_a_after = discover_plugins(project_root=repo_a)
     ids_a_after = {p.plugin_id for p in res_a_after.plugins}
-    assert "agy-style-plugin@project" not in ids_a_after
+    assert "agent-style-plugin@project" not in ids_a_after
     assert "declared-plugin@project" in ids_a_after
 
 
@@ -968,7 +968,7 @@ def test_install_plugin_from_local_path_and_workspace_shadowing(
 def test_agents_plugins_json_object_entries_with_include_only_and_exclude(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Verify Antigravity-style .agents/plugins.json object entries with include_only and exclude."""
+    """Verify .agents/plugins.json object entries with include_only and exclude filters."""
     from talkops.config import paths
     from talkops.plugins.discovery import discover_plugins
 

@@ -2357,7 +2357,7 @@ class TalkOpsApp(App):
         return [dict(s) for s in resolved]
 
     def _effective_workspace_root(self) -> Path | None:
-        """Resolve active project root, falling back to working directory (matching dcode)."""
+        """Resolve active project root, falling back to the current working directory."""
         from talkops.config.settings import settings
 
         app_settings = getattr(self, "_settings", None)

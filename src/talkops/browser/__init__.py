@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TalkOps browser automation subsystem (Stagehand + Antigravity 3-tier persona & subagent architecture)."""
+"""TalkOps browser automation subsystem (Stagehand + 3-tier Chrome persona & subagent architecture)."""
 
 from __future__ import annotations
 

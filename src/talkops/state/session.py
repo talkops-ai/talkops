@@ -145,7 +145,7 @@ _HELD_PRESENCE_LOCKS: dict[str, Any] = {}
 
 
 def _presence_dir(db_path: Path | None = None) -> Path:
-    """Return the directory storing per-conversation presence lock files (modeled on agy presence/)."""
+    """Return the directory storing per-conversation presence lock files (`presence/`)."""
     target = db_path or get_db_path()
     pdir = target.parent / "presence"
     with contextlib.suppress(OSError):
