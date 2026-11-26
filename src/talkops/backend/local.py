@@ -74,6 +74,44 @@ COMMON_TOOL_DIRS: tuple[str, ...] = (
     "~/.aws/bin",
 )
 
+# Windows user tool directories to prepend to PATH on native Windows (os.name == "nt")
+WINDOWS_TOOL_DIRS: tuple[str, ...] = (
+    "~/.local/bin",
+    "~/.cargo/bin",
+    "~/.aws/bin",
+)
+
+# Core Windows OS/shell variables required for subprocess execution, SSL/Winsock,
+# and cloud CLI profile discovery (~/.aws, ~/.kube, %APPDATA%) on native Windows.
+WINDOWS_SAFE_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "APPDATA",
+        "COMMONPROGRAMFILES",
+        "COMMONPROGRAMFILES(X86)",
+        "COMPUTERNAME",
+        "COMSPEC",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LOCALAPPDATA",
+        "NUMBER_OF_PROCESSORS",
+        "OS",
+        "PATHEXT",
+        "PROCESSOR_ARCHITECTURE",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "PSMODULEPATH",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "USERDOMAIN",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+    }
+)
+
 # Prefix matching for AWS, Azure, GCP, Kubernetes, and Cloud IaC ecosystem tools
 ALLOWED_ENV_PREFIXES: tuple[str, ...] = (
     "AWS_",
@@ -112,17 +150,38 @@ def _build_shell_env() -> dict[str, str]:
         "LOCALE",
     }
     env: dict[str, str] = {}
-    for key in safe_keys:
-        if key in os.environ:
-            env[key] = os.environ[key]
+    is_windows = os.name == "nt"
+
+    if is_windows:
+        allowed_upper = safe_keys | WINDOWS_SAFE_ENV_KEYS
+        path_key = "PATH"
+        for key, val in os.environ.items():
+            upper_key = key.upper()
+            if upper_key in allowed_upper:
+                if upper_key == "PATH":
+                    path_key = key
+                env[key] = val
+    else:
+        path_key = "PATH"
+        for key in safe_keys:
+            if key in os.environ:
+                env[key] = os.environ[key]
 
     # Prepend standard binary locations to PATH
-    path_val = env.get("PATH", "")
-    for tool_dir in COMMON_TOOL_DIRS:
+    path_val = env.get(path_key, "")
+    tool_dirs = WINDOWS_TOOL_DIRS if is_windows else COMMON_TOOL_DIRS
+    existing_path_parts = (
+        {p.lower() for p in path_val.split(os.pathsep) if p}
+        if is_windows
+        else set(path_val.split(os.pathsep))
+    )
+    for tool_dir in tool_dirs:
         expanded = os.path.expanduser(tool_dir)
-        if expanded not in path_val.split(os.pathsep):
+        check_val = expanded.lower() if is_windows else expanded
+        if check_val not in existing_path_parts:
             path_val = f"{expanded}{os.pathsep}{path_val}" if path_val else expanded
-    env["PATH"] = path_val
+            existing_path_parts.add(check_val)
+    env[path_key] = path_val
 
     # Ensure AWS_PAGER is disabled by default so aws CLI commands do not hang waiting for paging
     if "AWS_PAGER" in os.environ:
@@ -133,7 +192,8 @@ def _build_shell_env() -> dict[str, str]:
     # Prevent interactive terminal prompts in subshells (e.g. Git credentials, CLI pagers)
     env["GIT_TERMINAL_PROMPT"] = os.environ.get("GIT_TERMINAL_PROMPT", "0")
     if "PAGER" not in env:
-        env["PAGER"] = os.environ.get("PAGER", "cat")
+        default_pager = "" if is_windows else "cat"
+        env["PAGER"] = os.environ.get("PAGER", default_pager)
 
     # Preserve all AWS & Cloud IaC environment variables
     for key, val in os.environ.items():
@@ -256,8 +316,11 @@ class LocalShellBackend(SDKLocalShellBackend):
         timeout: int | None = None,
     ) -> Any:
         """Execute a shell command with dynamically synchronized cloud profile environment."""
+        from talkops.security.redaction import scrub_tool_payload
+
         self._sync_cloud_env()
-        return super().execute(command, timeout=timeout)
+        res = super().execute(command, timeout=timeout)
+        return scrub_tool_payload(res, tool_name="execute")
 
     async def aexecute(
         self,
@@ -266,8 +329,11 @@ class LocalShellBackend(SDKLocalShellBackend):
         timeout: int | None = None,
     ) -> Any:
         """Asynchronously execute shell command with dynamically synchronized cloud profile environment."""
+        from talkops.security.redaction import scrub_tool_payload
+
         self._sync_cloud_env()
-        return await super().aexecute(command, timeout=timeout)
+        res = await super().aexecute(command, timeout=timeout)
+        return scrub_tool_payload(res, tool_name="execute")
 
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
         """Find files matching *pattern* while pruning heavy virtualenv/cache directories."""

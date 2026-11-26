@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 import uuid
@@ -25,13 +26,16 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.messages.utils import convert_to_messages
 from textual.css.query import NoMatches
 
+from talkops.ui.widgets.message_list import HistoryEntry
 from talkops.ui.widgets.messages import (
+    _TOOL_GROUP_EXCLUSIONS,
     AssistantMessage,
     CompactionMessage,
     MessageList,
     SkillMessage,
     SystemMessage,
     ToolCallMessage,
+    ToolGroupSummary,
     UserMessage,
 )
 from talkops.utils.logger import bind_logging_to_thread, get_logger
@@ -80,6 +84,422 @@ def _is_compaction_summary_message(msg: Any, text: str) -> bool:
     )
 
 
+def _prepare_history_payload(
+    raw_messages: list[Any],
+    state_values: dict[str, Any],
+    payload: dict[str, Any],
+    model_spec: str,
+    default_provider: str,
+    thread_id: str,
+) -> dict[str, Any]:
+    """Normalize checkpoint messages, pair tool calls, fold tool groups, and sum usage off the UI thread."""
+    from talkops.middleware.cost_tracking import cache_token_counts
+    from talkops.middleware.goal_state_notice import is_internal_message
+    from talkops.ui.textual_adapter import (
+        _extract_text_and_thinking,
+        _format_tool_message_content,
+    )
+    from talkops.utils.cost_estimation import estimate_cost
+
+    if any(isinstance(m, dict) for m in raw_messages):
+        raw_messages = convert_to_messages(raw_messages)
+
+    pending_tools: dict[str, dict[str, Any]] = {}
+    unfolded_events: list[tuple[str, Any]] = []
+    linear_entries: list[HistoryEntry] = []
+    chat_input_entries: list[str] = []
+
+    restored_goal_prompt = False
+    summarization_event = state_values.get("_summarization_event")
+    event_cutoff = (
+        summarization_event.get("cutoff_index")
+        if isinstance(summarization_event, dict)
+        else None
+    )
+    event_summary_msg = (
+        summarization_event.get("summary_message")
+        if isinstance(summarization_event, dict)
+        else None
+    )
+    mounted_compaction_banner = False
+
+    for idx, msg in enumerate(raw_messages):
+        if (
+            not mounted_compaction_banner
+            and isinstance(event_cutoff, int)
+            and idx == event_cutoff
+            and event_summary_msg is not None
+        ):
+            stats = _extract_compaction_stats(event_summary_msg)
+            unfolded_events.append(("compaction", stats))
+            linear_entries.append(HistoryEntry(kind="compaction", compaction_kwargs=stats))
+            mounted_compaction_banner = True
+
+        msg_type = getattr(msg, "type", type(msg).__name__.lower().replace("message", ""))
+        content_raw = getattr(msg, "content", None)
+        is_internal = is_internal_message(msg)
+        msg_name = getattr(msg, "name", None) or ""
+
+        if msg_name in {"rubric_grader", "goal_criteria"}:
+            continue
+
+        if isinstance(content_raw, list):
+            parts = []
+            image_idx = 0
+            video_idx = 0
+            audio_idx = 0
+            file_idx = 0
+            for block in content_raw:
+                if isinstance(block, dict):
+                    btype = block.get("type")
+                    if btype == "text":
+                        t = block.get("text", "")
+                        if isinstance(t, str) and not (
+                            t.startswith("[Attached ") and t.endswith("]")
+                        ):
+                            parts.append(t)
+                    elif btype in {"image_url", "image"}:
+                        image_idx += 1
+                        parts.append(f"[image {image_idx}]")
+                    elif btype == "video" or (
+                        btype == "media"
+                        and str(block.get("mime_type", "")).startswith("video/")
+                    ):
+                        video_idx += 1
+                        parts.append(f"[video {video_idx}]")
+                    elif btype == "audio" or (
+                        btype == "media"
+                        and str(block.get("mime_type", "")).startswith("audio/")
+                    ):
+                        audio_idx += 1
+                        parts.append(f"[audio {audio_idx}]")
+                    elif btype == "file":
+                        file_idx += 1
+                        parts.append(f"[file {file_idx}]")
+                elif isinstance(block, str):
+                    parts.append(block)
+            text = " ".join(p.strip() for p in parts if p and p.strip()).strip()
+        elif content_raw is not None:
+            text = str(content_raw).strip()
+        else:
+            text = ""
+
+        if msg_type == "system":
+            if _is_compaction_summary_message(msg, text):
+                stats = _extract_compaction_stats(msg)
+                unfolded_events.append(("compaction", stats))
+                linear_entries.append(
+                    HistoryEntry(kind="compaction", compaction_kwargs=stats)
+                )
+                mounted_compaction_banner = True
+            continue
+
+        if isinstance(msg, HumanMessage) or msg_type == "human":
+            add_kwargs_raw = getattr(msg, "additional_kwargs", None) or {}
+            if isinstance(add_kwargs_raw, dict) and add_kwargs_raw.get("read_file_media_result") is True:
+                continue
+            if _is_compaction_summary_message(msg, text):
+                stats = _extract_compaction_stats(msg)
+                unfolded_events.append(("compaction", stats))
+                linear_entries.append(
+                    HistoryEntry(kind="compaction", compaction_kwargs=stats)
+                )
+                mounted_compaction_banner = True
+                continue
+
+            if text.startswith("[SYSTEM]") or is_internal:
+                if not restored_goal_prompt and idx <= 3:
+                    goal_obj = payload.get("goal_objective") or state_values.get("_goal_objective")
+                    if goal_obj and isinstance(goal_obj, str) and goal_obj.strip():
+                        text = f"/goal {goal_obj.strip()}"
+                        restored_goal_prompt = True
+                    else:
+                        continue
+                else:
+                    continue
+            elif is_internal:
+                continue
+
+            if not text:
+                continue
+            if text.startswith("This is grader iteration "):
+                continue
+            if text.startswith("System Prompt"):
+                continue
+
+            if text.startswith("<operation>"):
+                if text.startswith("<operation>draft</operation>"):
+                    match = re.search(r"<goal>\s*(.*?)\s*</goal>", text, re.DOTALL)
+                    if match:
+                        text = f"/goal {match.group(1).strip()}"
+                    else:
+                        continue
+                elif text.startswith("<operation>amend</operation>"):
+                    match = re.search(r"<user_feedback>\s*(.*?)\s*</user_feedback>", text, re.DOTALL)
+                    if match:
+                        text = f"/goal amend {match.group(1).strip()}"
+                    else:
+                        text = "/goal amend"
+                else:
+                    continue
+
+            add_kwargs = getattr(msg, "additional_kwargs", None) or {}
+            skill_meta = add_kwargs.get("__skill") if isinstance(add_kwargs, dict) else None
+            if isinstance(skill_meta, dict):
+                s_name = str(skill_meta.get("name") or skill_meta.get("slash_command", "").lstrip("/"))
+                s_desc = str(skill_meta.get("description") or "")
+                s_source = str(skill_meta.get("source") or "built-in")
+                s_args = str(skill_meta.get("args") or "")
+                s_body = str(skill_meta.get("body") or "")
+                if not s_body:
+                    scope_match = re.search(
+                        r"<SKILL>.*?Here are its contents:\n(.*?)</SKILL>",
+                        text,
+                        re.DOTALL,
+                    )
+                    s_body = scope_match.group(1) if scope_match else text
+                skill_kw = {
+                    "skill_name": s_name,
+                    "description": s_desc,
+                    "source": s_source,
+                    "body": s_body,
+                    "args": s_args,
+                }
+                unfolded_events.append(("skill", skill_kw))
+                linear_entries.append(HistoryEntry(kind="skill", skill_kwargs=skill_kw))
+                slash_cmd = str(skill_meta.get("slash_command") or f"/{s_name}").strip()
+                hist_entry = f"{slash_cmd} {s_args}".strip() if s_args else slash_cmd
+                chat_input_entries.append(hist_entry)
+                continue
+
+            skill_env_match = re.search(
+                r"<SKILL>The user has explicitly invoked the \(([^)]+)\) skill\..*?Here are its contents:\n(.*?)</SKILL>",
+                text,
+                re.DOTALL,
+            )
+            if skill_env_match:
+                s_name = skill_env_match.group(1).strip()
+                s_body = skill_env_match.group(2)
+                req_match = re.search(r"\*\*User request:\*\*\s*(.+)$", text, re.DOTALL)
+                s_args = req_match.group(1).strip() if req_match else ""
+                skill_kw = {
+                    "skill_name": s_name,
+                    "body": s_body,
+                    "args": s_args,
+                }
+                unfolded_events.append(("skill", skill_kw))
+                linear_entries.append(HistoryEntry(kind="skill", skill_kwargs=skill_kw))
+                hist_entry = f"/{s_name} {s_args}".strip() if s_args else f"/{s_name}"
+                chat_input_entries.append(hist_entry)
+                continue
+
+            unfolded_events.append(("user", text))
+            linear_entries.append(HistoryEntry(kind="user", text=text))
+            chat_input_entries.append(text)
+
+        elif isinstance(msg, AIMessage) or msg_type == "ai":
+            ai_text, thinking = _extract_text_and_thinking(
+                getattr(msg, "content", ""),
+                getattr(msg, "additional_kwargs", None),
+                getattr(msg, "response_metadata", None),
+                msg_obj=msg,
+            )
+            if ai_text or thinking:
+                if thinking:
+                    unfolded_events.append(("thinking", thinking))
+                    linear_entries.append(HistoryEntry(kind="thinking", text=thinking))
+                if ai_text:
+                    unfolded_events.append(("assistant", ai_text))
+                    linear_entries.append(HistoryEntry(kind="assistant", text=ai_text))
+
+            for tc in getattr(msg, "tool_calls", []) or []:
+                if not isinstance(tc, dict):
+                    logger.debug(
+                        "Skipping malformed tool_call entry (type=%s) during history load for thread %s",
+                        type(tc).__name__,
+                        thread_id,
+                    )
+                    continue
+                tc_id = tc.get("id", "") or ""
+                name = tc.get("name") or "tool"
+                args = tc.get("args") or {}
+                if not isinstance(args, dict):
+                    args = {}
+                spec: dict[str, Any] = {
+                    "name": name,
+                    "call_id": tc_id,
+                    "args": args,
+                }
+                unfolded_events.append(("add_tool_call", spec))
+                linear_entries.append(HistoryEntry(kind="tool_call", tool_spec=spec))
+                if tc_id:
+                    pending_tools[tc_id] = spec
+
+        elif isinstance(msg, ToolMessage) or msg_type == "tool":
+            tc_id = getattr(msg, "tool_call_id", "") or ""
+            status = getattr(msg, "status", "success")
+            tool_content = _format_tool_message_content(msg) or text or ""
+            success = status != "error"
+
+            if tc_id and tc_id in pending_tools:
+                matched_spec = pending_tools.pop(tc_id)
+                matched_spec["result"] = tool_content
+                matched_spec["success"] = success
+                unfolded_events.append(
+                    (
+                        "update_tool_result",
+                        {
+                            "call_id": tc_id,
+                            "result": tool_content,
+                            "success": success,
+                            "matched": True,
+                        },
+                    )
+                )
+            else:
+                tool_name = getattr(msg, "name", None) or "tool"
+                orphan_spec: dict[str, Any] = {
+                    "name": tool_name,
+                    "call_id": tc_id or "",
+                    "args": {},
+                    "result": tool_content,
+                    "success": success,
+                }
+                linear_entries.append(
+                    HistoryEntry(kind="tool_call", tool_spec=orphan_spec)
+                )
+                unfolded_events.append(
+                    (
+                        "update_tool_result",
+                        {
+                            "call_id": tc_id or "",
+                            "result": tool_content,
+                            "success": success,
+                            "name": tool_name,
+                            "matched": False,
+                        },
+                    )
+                )
+
+    unmatched_tool_ids = list(pending_tools.keys())
+    for unmatched_spec in pending_tools.values():
+        unmatched_spec["rejected"] = True
+
+    # Fold consecutive groupable successful tool calls into lazy ToolGroupSummary entries
+    folded_entries: list[HistoryEntry] = []
+    group_run: list[dict[str, Any]] = []
+
+    def _flush_group_run() -> None:
+        if not group_run:
+            return
+        folded_entries.append(
+            HistoryEntry(kind="tool_group", tool_group_specs=list(group_run))
+        )
+        group_run.clear()
+
+    for entry in linear_entries:
+        if entry.kind == "tool_call" and entry.tool_spec is not None:
+            ts = entry.tool_spec
+            is_groupable = (
+                str(ts.get("name") or "tool") not in _TOOL_GROUP_EXCLUSIONS
+                and ts.get("success") is True
+                and "result" in ts
+                and not ts.get("rejected")
+            )
+            if is_groupable:
+                group_run.append(ts)
+                continue
+        _flush_group_run()
+        folded_entries.append(entry)
+    _flush_group_run()
+
+    # Aggregate token, cache, and cost telemetry
+    restored_cost = 0.0
+    restored_tokens = 0
+    restored_input_tokens = 0
+    restored_cache_read_tokens = 0
+    restored_cache_write_tokens = 0
+    if ":" in model_spec:
+        provider_part, model_part = model_spec.split(":", 1)
+    else:
+        model_part = model_spec
+        provider_part = default_provider
+
+    for msg in raw_messages:
+        usage_meta = (
+            getattr(msg, "usage_metadata", None)
+            or (getattr(msg, "response_metadata", None) or {}).get("usage")
+            or (getattr(msg, "response_metadata", None) or {}).get("token_usage")
+        )
+        if isinstance(usage_meta, dict):
+            inp = usage_meta.get("input_tokens", 0) or 0
+            out = usage_meta.get("output_tokens", 0) or 0
+            if inp or out:
+                restored_tokens += inp + out
+            if inp > 0:
+                restored_input_tokens += inp
+            c_read, cw_tuple = cache_token_counts(usage_meta)
+            restored_cache_read_tokens += c_read
+            restored_cache_write_tokens += sum(cw_tuple)
+            if model_part:
+                m_name = (
+                    (getattr(msg, "response_metadata", {}) or {}).get("model_name")
+                    or model_part
+                )
+                c = estimate_cost(m_name, provider_part, inp, out)
+                if c is not None and c > 0:
+                    restored_cost += c
+
+    checkpoint_cost = state_values.get("_session_cost_usd")
+    if isinstance(checkpoint_cost, (int, float)) and math.isfinite(checkpoint_cost) and checkpoint_cost > 0:
+        restored_cost = max(restored_cost, float(checkpoint_cost))
+
+    checkpoint_tokens = state_values.get("_session_total_tokens")
+    if isinstance(checkpoint_tokens, int) and checkpoint_tokens > 0:
+        restored_tokens = max(restored_tokens, checkpoint_tokens)
+
+    checkpoint_inp = state_values.get("_session_input_tokens")
+    if isinstance(checkpoint_inp, int) and not isinstance(checkpoint_inp, bool) and checkpoint_inp > 0:
+        restored_input_tokens = max(restored_input_tokens, checkpoint_inp)
+
+    checkpoint_cache_read = state_values.get("_session_cache_read_tokens")
+    if isinstance(checkpoint_cache_read, int) and not isinstance(checkpoint_cache_read, bool) and checkpoint_cache_read > 0:
+        restored_cache_read_tokens = max(restored_cache_read_tokens, checkpoint_cache_read)
+
+    checkpoint_cache_write = state_values.get("_session_cache_write_tokens")
+    if isinstance(checkpoint_cache_write, int) and not isinstance(checkpoint_cache_write, bool) and checkpoint_cache_write > 0:
+        restored_cache_write_tokens = max(restored_cache_write_tokens, checkpoint_cache_write)
+
+    context_tokens = state_values.get("_context_tokens")
+    if isinstance(context_tokens, int) and context_tokens > 0:
+        restored_context_tokens = context_tokens
+    else:
+        last_ai_tokens = 0
+        for msg in reversed(raw_messages):
+            if getattr(msg, "type", "") == "ai" or msg.__class__.__name__ == "AIMessage":
+                u = getattr(msg, "usage_metadata", None) or {}
+                inp = u.get("input_tokens", 0) or 0
+                out = u.get("output_tokens", 0) or 0
+                if inp or out:
+                    last_ai_tokens = inp + out
+                    break
+        restored_context_tokens = last_ai_tokens or restored_tokens
+
+    return {
+        "raw_count": len(raw_messages),
+        "unfolded_events": unfolded_events,
+        "unmatched_tool_ids": unmatched_tool_ids,
+        "folded_entries": folded_entries,
+        "chat_input_entries": chat_input_entries,
+        "restored_cost": restored_cost,
+        "restored_tokens": restored_tokens,
+        "restored_input_tokens": restored_input_tokens,
+        "restored_cache_read_tokens": restored_cache_read_tokens,
+        "restored_cache_write_tokens": restored_cache_write_tokens,
+        "restored_context_tokens": restored_context_tokens,
+    }
+
+
 class ThreadController:
     """Manages thread history rehydration, resume, fork, compaction, and selector modal."""
 
@@ -87,361 +507,94 @@ class ThreadController:
         """Initialize ThreadController."""
         self._app = app
 
-    async def load_thread_history(self, thread_id: str) -> None:
+    async def load_thread_history(
+        self,
+        thread_id: str,
+        *,
+        state_values: dict[str, Any] | None = None,
+    ) -> None:
         """Fetch and mount stored message history for a thread."""
-        from talkops.middleware.goal_state_notice import is_internal_message
-
         app = self._app
         app._reset_thread_usage(0.0, 0)
-        state_values = await app._get_thread_state_values(thread_id)
+        if state_values is None:
+            state_values = await app._get_thread_state_values(thread_id)
         raw_messages = state_values.get("messages", [])
         payload = app._goal_rubric_payload_from_state(state_values, raw_messages)
         app._restore_goal_rubric_state(payload)
         if not raw_messages:
             return
 
-        if any(isinstance(m, dict) for m in raw_messages):
-            raw_messages = convert_to_messages(raw_messages)
-
-        pending_tools: dict[str, dict[str, Any]] = {}
-
         try:
             messages_container = app.query_one("#messages", MessageList)
         except NoMatches:
             return
 
-        restored_goal_prompt = False
-        summarization_event = state_values.get("_summarization_event")
-        event_cutoff = (
-            summarization_event.get("cutoff_index")
-            if isinstance(summarization_event, dict)
-            else None
-        )
-        event_summary_msg = (
-            summarization_event.get("summary_message")
-            if isinstance(summarization_event, dict)
-            else None
-        )
-        mounted_compaction_banner = False
-
-        for idx, msg in enumerate(raw_messages):
-            if (
-                not mounted_compaction_banner
-                and isinstance(event_cutoff, int)
-                and idx == event_cutoff
-                and event_summary_msg is not None
-            ):
-                await app._mount_message(
-                    CompactionMessage(**_extract_compaction_stats(event_summary_msg))
-                )
-                mounted_compaction_banner = True
-
-            msg_type = getattr(msg, "type", type(msg).__name__.lower().replace("message", ""))
-            content_raw = getattr(msg, "content", None)
-            is_internal = is_internal_message(msg)
-            msg_name = getattr(msg, "name", None) or ""
-
-            logger.info(
-                "TUI: _load_thread_history msg[%d/%d] type=%s cls=%s name=%s is_internal=%s content=%r",
-                idx,
-                len(raw_messages),
-                msg_type,
-                type(msg).__name__,
-                msg_name,
-                is_internal,
-                str(content_raw)[:80] if content_raw else "",
-            )
-
-            # Gate 1: skip named sub-graph messages
-            if msg_name in {"rubric_grader", "goal_criteria"}:
-                continue
-
-            # Normalise content → plain string
-            if isinstance(content_raw, list):
-                parts = []
-                image_idx = 0
-                video_idx = 0
-                for block in content_raw:
-                    if isinstance(block, dict):
-                        btype = block.get("type")
-                        if btype == "text":
-                            t = block.get("text", "")
-                            if isinstance(t, str) and not (
-                                t.startswith("[Attached ") and t.endswith("]")
-                            ):
-                                parts.append(t)
-                        elif btype in {"image_url", "image"}:
-                            image_idx += 1
-                            parts.append(f"[image {image_idx}]")
-                        elif btype == "video" or (
-                            btype == "media"
-                            and str(block.get("mime_type", "")).startswith("video/")
-                        ):
-                            video_idx += 1
-                            parts.append(f"[video {video_idx}]")
-                    elif isinstance(block, str):
-                        parts.append(block)
-                text = " ".join(p.strip() for p in parts if p and p.strip()).strip()
-            elif content_raw is not None:
-                text = str(content_raw).strip()
-            else:
-                text = ""
-
-            # Gate 2: LangChain system messages (render compaction banner if summary, else skip)
-            if msg_type == "system":
-                if _is_compaction_summary_message(msg, text):
-                    await app._mount_message(
-                        CompactionMessage(**_extract_compaction_stats(msg))
-                    )
-                    mounted_compaction_banner = True
-                continue
-
-            if isinstance(msg, HumanMessage) or msg_type == "human":
-                if _is_compaction_summary_message(msg, text):
-                    await app._mount_message(
-                        CompactionMessage(**_extract_compaction_stats(msg))
-                    )
-                    mounted_compaction_banner = True
-                    continue
-
-                if text.startswith("[SYSTEM]") or is_internal:
-                    if not restored_goal_prompt and idx <= 3:
-                        goal_obj = payload.get("goal_objective") or state_values.get("_goal_objective")
-                        if goal_obj and isinstance(goal_obj, str) and goal_obj.strip():
-                            text = f"/goal {goal_obj.strip()}"
-                            restored_goal_prompt = True
-                            logger.info("TUI: Restored goal objective prompt for msg[%d]: %r", idx, text)
-                        else:
-                            logger.info("TUI: Skipping internal human msg[%d] (no goal objective found)", idx)
-                            continue
-                    else:
-                        logger.info("TUI: Skipping internal human msg[%d]", idx)
-                        continue
-                elif is_internal:
-                    continue
-
-                if not text:
-                    continue
-
-                if text.startswith("This is grader iteration "):
-                    continue
-
-                if text.startswith("System Prompt"):
-                    continue
-
-                # ── Extract user intent from goal <operation> XML ─────
-                if text.startswith("<operation>"):
-                    if text.startswith("<operation>draft</operation>"):
-                        match = re.search(r"<goal>\s*(.*?)\s*</goal>", text, re.DOTALL)
-                        if match:
-                            text = f"/goal {match.group(1).strip()}"
-                        else:
-                            continue
-                    elif text.startswith("<operation>amend</operation>"):
-                        match = re.search(r"<user_feedback>\s*(.*?)\s*</user_feedback>", text, re.DOTALL)
-                        if match:
-                            text = f"/goal amend {match.group(1).strip()}"
-                        else:
-                            text = "/goal amend"
-                    else:
-                        continue
-
-                # ── Rehydrate skill invocations as SkillMessage ────────
-                add_kwargs = getattr(msg, "additional_kwargs", None) or {}
-                skill_meta = add_kwargs.get("__skill") if isinstance(add_kwargs, dict) else None
-                if isinstance(skill_meta, dict):
-                    s_name = str(skill_meta.get("name") or skill_meta.get("slash_command", "").lstrip("/"))
-                    s_desc = str(skill_meta.get("description") or "")
-                    s_source = str(skill_meta.get("source") or "built-in")
-                    s_args = str(skill_meta.get("args") or "")
-                    s_body = str(skill_meta.get("body") or "")
-                    if not s_body:
-                        scope_match = re.search(
-                            r"<SKILL>.*?Here are its contents:\n(.*?)</SKILL>",
-                            text,
-                            re.DOTALL,
-                        )
-                        s_body = scope_match.group(1) if scope_match else text
-                    await app._mount_message(
-                        SkillMessage(
-                            skill_name=s_name,
-                            description=s_desc,
-                            source=s_source,
-                            body=s_body,
-                            args=s_args,
-                        )
-                    )
-                    slash_cmd = str(skill_meta.get("slash_command") or f"/{s_name}").strip()
-                    hist_entry = f"{slash_cmd} {s_args}".strip() if s_args else slash_cmd
-                    if app._chat_input is not None and hasattr(app._chat_input, "add_history_entry"):
-                        app._chat_input.add_history_entry(hist_entry, persist=False)
-                    continue
-
-                skill_env_match = re.search(
-                    r"<SKILL>The user has explicitly invoked the \(([^)]+)\) skill\..*?Here are its contents:\n(.*?)</SKILL>",
-                    text,
-                    re.DOTALL,
-                )
-                if skill_env_match:
-                    s_name = skill_env_match.group(1).strip()
-                    s_body = skill_env_match.group(2)
-                    req_match = re.search(r"\*\*User request:\*\*\s*(.+)$", text, re.DOTALL)
-                    s_args = req_match.group(1).strip() if req_match else ""
-                    await app._mount_message(
-                        SkillMessage(
-                            skill_name=s_name,
-                            body=s_body,
-                            args=s_args,
-                        )
-                    )
-                    hist_entry = f"/{s_name} {s_args}".strip() if s_args else f"/{s_name}"
-                    if app._chat_input is not None and hasattr(app._chat_input, "add_history_entry"):
-                        app._chat_input.add_history_entry(hist_entry, persist=False)
-                    continue
-
-                await app._mount_message(UserMessage(text))
-                if app._chat_input is not None and hasattr(app._chat_input, "add_history_entry"):
-                    app._chat_input.add_history_entry(text, persist=False)
-
-            elif isinstance(msg, AIMessage) or msg_type == "ai":
-                from talkops.ui.textual_adapter import _extract_text_and_thinking
-                ai_text, thinking = _extract_text_and_thinking(
-                    getattr(msg, "content", ""),
-                    getattr(msg, "additional_kwargs", None),
-                    getattr(msg, "response_metadata", None),
-                    msg_obj=msg,
-                )
-                if ai_text or thinking:
-                    if thinking:
-                        messages_container.add_thinking_message(thinking)
-                    if ai_text:
-                        assistant_msg = AssistantMessage(ai_text)
-                        await app._mount_message(assistant_msg)
-
-                for tc in getattr(msg, "tool_calls", []) or []:
-                    if not isinstance(tc, dict):
-                        logger.debug(
-                            "Skipping malformed tool_call entry (type=%s) "
-                            "during history load for thread %s",
-                            type(tc).__name__, thread_id,
-                        )
-                        continue
-                    tc_id = tc.get("id", "")
-                    name = tc.get("name") or "tool"
-                    args = tc.get("args") or {}
-                    if not isinstance(args, dict):
-                        args = {}
-                    messages_container.add_tool_call(
-                        name=name, call_id=tc_id, args=args, live=False
-                    )
-                    if tc_id:
-                        pending_tools[tc_id] = {"name": name}
-
-            elif isinstance(msg, ToolMessage) or msg_type == "tool":
-                tc_id = getattr(msg, "tool_call_id", "") or ""
-                status = getattr(msg, "status", "success")
-                tool_content = text or ""
-                success = status != "error"
-
-                if tc_id and tc_id in pending_tools:
-                    pending_tools.pop(tc_id)
-                    messages_container.update_tool_result(
-                        call_id=tc_id,
-                        result=tool_content,
-                        success=success,
-                        live=False,
-                    )
-                else:
-                    tool_name = getattr(msg, "name", None) or "tool"
-                    messages_container.update_tool_result(
-                        call_id=tc_id or "",
-                        result=tool_content,
-                        success=success,
-                        name=tool_name,
-                        live=False,
-                    )
-            else:
-                logger.debug(
-                    "Skipping unsupported message type %s during history load",
-                    type(msg).__name__,
-                )
-
-        # Mark unmatched tool calls as rejected
-        for tc_id in pending_tools:
-            if tc_id in messages_container._tool_calls:
-                messages_container._tool_calls[tc_id].set_rejected()
-
-        # Restore context tokens, cache tokens, and cumulative estimated cost from message history
-        restored_cost = 0.0
-        restored_tokens = 0
-        restored_input_tokens = 0
-        restored_cache_read_tokens = 0
-        restored_cache_write_tokens = 0
         model_spec = getattr(app, "_model", "") or ""
-        if ":" in model_spec:
-            provider_part, model_part = model_spec.split(":", 1)
+        default_provider = (
+            getattr(getattr(app, "_settings", None), "model_provider", "") or ""
+        )
+        prepared = await asyncio.to_thread(
+            _prepare_history_payload,
+            raw_messages,
+            state_values,
+            payload,
+            model_spec,
+            default_provider,
+            thread_id,
+        )
+
+        if app._chat_input is not None and hasattr(app._chat_input, "add_history_entry"):
+            for hist_entry in prepared["chat_input_entries"]:
+                app._chat_input.add_history_entry(hist_entry, persist=False)
+
+        restored_cost = prepared["restored_cost"]
+        restored_tokens = prepared["restored_tokens"]
+        restored_input_tokens = prepared["restored_input_tokens"]
+        restored_cache_read_tokens = prepared["restored_cache_read_tokens"]
+        restored_cache_write_tokens = prepared["restored_cache_write_tokens"]
+        restored_context_tokens = prepared["restored_context_tokens"]
+
+        if isinstance(messages_container, MessageList):
+            await messages_container.load_virtualized_history(prepared["folded_entries"])
         else:
-            model_part = model_spec
-            provider_part = getattr(getattr(app, "_settings", None), "model_provider", "") or ""
-
-        from talkops.middleware.cost_tracking import cache_token_counts
-        from talkops.utils.cost_estimation import estimate_cost
-        for msg in raw_messages:
-            usage_meta = (
-                getattr(msg, "usage_metadata", None)
-                or (getattr(msg, "response_metadata", None) or {}).get("usage")
-                or (getattr(msg, "response_metadata", None) or {}).get("token_usage")
-            )
-            if isinstance(usage_meta, dict):
-                inp = usage_meta.get("input_tokens", 0) or 0
-                out = usage_meta.get("output_tokens", 0) or 0
-                if inp or out:
-                    restored_tokens += inp + out
-                if inp > 0:
-                    restored_input_tokens += inp
-                c_read, cw_tuple = cache_token_counts(usage_meta)
-                restored_cache_read_tokens += c_read
-                restored_cache_write_tokens += sum(cw_tuple)
-                if model_part:
-                    m_name = (getattr(msg, "response_metadata", {}) or {}).get("model_name") or model_part
-                    c = estimate_cost(m_name, provider_part, inp, out)
-                    if c is not None and c > 0:
-                        restored_cost += c
-
-        checkpoint_cost = state_values.get("_session_cost_usd")
-        if isinstance(checkpoint_cost, (int, float)) and math.isfinite(checkpoint_cost) and checkpoint_cost > 0:
-            restored_cost = max(restored_cost, float(checkpoint_cost))
-
-        checkpoint_tokens = state_values.get("_session_total_tokens")
-        if isinstance(checkpoint_tokens, int) and checkpoint_tokens > 0:
-            restored_tokens = max(restored_tokens, checkpoint_tokens)
-
-        checkpoint_inp = state_values.get("_session_input_tokens")
-        if isinstance(checkpoint_inp, int) and not isinstance(checkpoint_inp, bool) and checkpoint_inp > 0:
-            restored_input_tokens = max(restored_input_tokens, checkpoint_inp)
-
-        checkpoint_cache_read = state_values.get("_session_cache_read_tokens")
-        if isinstance(checkpoint_cache_read, int) and not isinstance(checkpoint_cache_read, bool) and checkpoint_cache_read > 0:
-            restored_cache_read_tokens = max(restored_cache_read_tokens, checkpoint_cache_read)
-
-        checkpoint_cache_write = state_values.get("_session_cache_write_tokens")
-        if isinstance(checkpoint_cache_write, int) and not isinstance(checkpoint_cache_write, bool) and checkpoint_cache_write > 0:
-            restored_cache_write_tokens = max(restored_cache_write_tokens, checkpoint_cache_write)
-
-        context_tokens = state_values.get("_context_tokens")
-        if isinstance(context_tokens, int) and context_tokens > 0:
-            restored_context_tokens = context_tokens
-        else:
-            last_ai_tokens = 0
-            for msg in reversed(raw_messages):
-                if getattr(msg, "type", "") == "ai" or msg.__class__.__name__ == "AIMessage":
-                    u = getattr(msg, "usage_metadata", None) or {}
-                    inp = u.get("input_tokens", 0) or 0
-                    out = u.get("output_tokens", 0) or 0
-                    if inp or out:
-                        last_ai_tokens = inp + out
-                        break
-            restored_context_tokens = last_ai_tokens or restored_tokens
+            for ev_kind, ev_data in prepared["unfolded_events"]:
+                if ev_kind == "compaction":
+                    await app._mount_message(CompactionMessage(**ev_data))
+                elif ev_kind == "skill":
+                    await app._mount_message(SkillMessage(**ev_data))
+                elif ev_kind == "user":
+                    await app._mount_message(UserMessage(ev_data))
+                elif ev_kind == "thinking":
+                    messages_container.add_thinking_message(ev_data)
+                elif ev_kind == "assistant":
+                    await app._mount_message(AssistantMessage(ev_data))
+                elif ev_kind == "add_tool_call":
+                    messages_container.add_tool_call(
+                        name=ev_data["name"],
+                        call_id=ev_data["call_id"],
+                        args=ev_data["args"],
+                        live=False,
+                    )
+                elif ev_kind == "update_tool_result":
+                    if ev_data.get("matched"):
+                        messages_container.update_tool_result(
+                            call_id=ev_data["call_id"],
+                            result=ev_data["result"],
+                            success=ev_data["success"],
+                            live=False,
+                        )
+                    else:
+                        messages_container.update_tool_result(
+                            call_id=ev_data["call_id"],
+                            result=ev_data["result"],
+                            success=ev_data["success"],
+                            name=ev_data.get("name") or "tool",
+                            live=False,
+                        )
+            tool_calls_map = getattr(messages_container, "_tool_calls", {}) or {}
+            for tc_id in prepared["unmatched_tool_ids"]:
+                if tc_id in tool_calls_map:
+                    tool_calls_map[tc_id].set_rejected()
 
         app._reset_thread_usage(
             cost_usd=restored_cost,
@@ -460,22 +613,23 @@ class ThreadController:
                     input_tokens=restored_input_tokens,
                 )
 
-        await app._regroup_completed_tools()
+        if not isinstance(messages_container, MessageList):
+            await app._regroup_completed_tools()
+            try:
+                messages_container._auto_scroll_locked = True
+                messages_container._scroll_to_end()
+            except Exception:
+                pass
 
-        logger.info(
-            "TUI: _load_thread_history completed for thread %s (raw_messages=%d, mounted_widgets=%d, tokens=%d, cost=$%.4f)",
+        logger.debug(
+            "TUI: _load_thread_history completed for thread %s (raw_messages=%d, mounted_widgets=%d, archived=%d, tokens=%d, cost=$%.4f)",
             thread_id,
-            len(raw_messages),
-            len(messages_container.children),
+            prepared["raw_count"],
+            len(getattr(messages_container, "children", [])),
+            len(getattr(messages_container, "_archived_entries", [])),
             app._context_tokens,
             app._session_cost_usd,
         )
-
-        try:
-            messages_container._auto_scroll_locked = True
-            messages_container._scroll_to_end()
-        except Exception:
-            pass
 
     def close_active_tool_group(self) -> None:
         """Finalize the open tool group into its collapsed past-tense form."""
@@ -532,11 +686,30 @@ class ThreadController:
             app._reset_thread_usage(0.0, 0)
             app.notify(f"Started new thread ({thread_id[:8]})", severity="information")
         else:
-            await app._load_thread_history(thread_id)
+            state_values: dict[str, Any] | None = None
+            if hasattr(app, "_get_thread_state_values"):
+                try:
+                    state_values = await app._get_thread_state_values(thread_id)
+                except Exception:
+                    state_values = None
+            try:
+                await app._load_thread_history(thread_id, state_values=state_values)
+            except TypeError:
+                await app._load_thread_history(thread_id)
             if hasattr(app, "_sync_goal_state_from_checkpoint"):
-                await app._sync_goal_state_from_checkpoint(force=True)
+                try:
+                    await app._sync_goal_state_from_checkpoint(
+                        force=True, state_values=state_values
+                    )
+                except TypeError:
+                    await app._sync_goal_state_from_checkpoint(force=True)
             if hasattr(app, "_sync_agent_session_state_from_checkpoint"):
-                await app._sync_agent_session_state_from_checkpoint()
+                try:
+                    await app._sync_agent_session_state_from_checkpoint(
+                        state_values=state_values
+                    )
+                except TypeError:
+                    await app._sync_agent_session_state_from_checkpoint()
             await app._mount_message(
                 SystemMessage(f"Resumed thread: `{thread_id}`")
             )
@@ -584,6 +757,9 @@ class ThreadController:
         except Exception:
             pass
         bind_logging_to_thread(new_thread_id)
+        task_watcher = getattr(app, "_task_watcher", None)
+        if task_watcher is not None and getattr(app, "is_running", False):
+            task_watcher.start(new_thread_id)
 
         session_state = getattr(app, "_session_state", None)
         if session_state is not None:
@@ -610,11 +786,18 @@ class ThreadController:
 
         app = self._app
         handler = CompactHandler()
+        active_agent = (
+            getattr(app, "_client", None)
+            or getattr(app, "_agent", None)
+            or getattr(app, "_agent_graph", None)
+        )
         ctx = CommandContext(
             raw_command="/compact",
             args="",
             app=app,
-            agent=getattr(app, "_agent_graph", None),
+            agent=active_agent,
+            thread_id=thread_id or getattr(app, "_agent_thread_id", None),
+            model_spec=getattr(app, "_model", None),
         )
         await handler.execute(ctx)
 
@@ -655,11 +838,21 @@ class ThreadController:
                 msgs = app.get_thread_messages()
             if not msgs:
                 return None
-            if any(isinstance(m, dict) for m in msgs):
-                from langchain_core.messages.utils import convert_to_messages
-                msgs = convert_to_messages(msgs)
-            from langchain_core.messages.utils import count_tokens_approximately
-            return count_tokens_approximately(msgs)
+
+            def _count(raw_msgs: list[Any]) -> int:
+                from langchain_core.messages.utils import (
+                    convert_to_messages,
+                    count_tokens_approximately,
+                )
+
+                normalized = (
+                    convert_to_messages(raw_msgs)
+                    if any(isinstance(m, dict) for m in raw_msgs)
+                    else raw_msgs
+                )
+                return count_tokens_approximately(normalized)
+
+            return await asyncio.to_thread(_count, list(msgs))
         except Exception:
             return None
 
@@ -668,9 +861,13 @@ class ThreadController:
         app = self._app
         try:
             container = app.query_one("#messages", MessageList)
-            for child in container.children:
-                if isinstance(child, (UserMessage, AssistantMessage)):
+            if isinstance(container, MessageList):
+                if container.has_any_conversation_messages():
                     return True
+            else:
+                for child in container.children:
+                    if isinstance(child, (UserMessage, AssistantMessage)):
+                        return True
         except Exception:
             pass
 
@@ -689,7 +886,10 @@ class ThreadController:
         msgs: list[Any] = []
         try:
             from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
             container = app.query_one("#messages", MessageList)
+            if isinstance(container, MessageList):
+                return container.get_all_thread_messages()
             for child in container.children:
                 if isinstance(child, UserMessage):
                     txt = getattr(child, "_raw_content", "") or ""
@@ -699,11 +899,33 @@ class ThreadController:
                     txt = getattr(child, "content_text", None) or "".join(getattr(child, "_fragments", []))
                     if txt:
                         msgs.append(AIMessage(content=txt))
+                elif isinstance(child, ToolGroupSummary):
+                    for cid, out in child.iter_tool_outputs():
+                        msgs.append(ToolMessage(content=out, tool_call_id=cid))
                 elif isinstance(child, ToolCallMessage):
-                    res = getattr(child, "_result", "") or ""
+                    if hasattr(child, "has_class") and child.has_class("-grouped"):
+                        continue
+                    res = (
+                        getattr(child, "_output", None)
+                        or getattr(child, "_deferred_output", None)
+                        or getattr(child, "_result", "")
+                        or ""
+                    )
                     call_id = getattr(child, "_call_id", "") or "call_1"
                     if res:
                         msgs.append(ToolMessage(content=str(res), tool_call_id=call_id))
+                elif hasattr(child, "_tools"):
+                    for tool_child in getattr(child, "_tools", []) or []:
+                        if isinstance(tool_child, ToolCallMessage):
+                            res = (
+                                getattr(tool_child, "_output", None)
+                                or getattr(tool_child, "_deferred_output", None)
+                                or getattr(tool_child, "_result", "")
+                                or ""
+                            )
+                            call_id = getattr(tool_child, "_call_id", "") or "call_1"
+                            if res:
+                                msgs.append(ToolMessage(content=str(res), tool_call_id=call_id))
         except Exception:
             pass
         return msgs

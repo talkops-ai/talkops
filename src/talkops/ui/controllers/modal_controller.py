@@ -64,7 +64,7 @@ class ModalController:
     # ── Approval Mode & Model Restoration ────────────────
 
     async def action_toggle_auto_approve(self) -> None:
-        """Cycle approval mode on Shift+Tab (Manual -> Auto -> Smart -> Manual)."""
+        """Cycle approval mode on Shift+Tab (Manual -> Auto -> Smart -> YOLO -> Manual)."""
         from talkops.approval_mode import next_approval_mode
 
         app = self._app
@@ -73,6 +73,7 @@ class ModalController:
             getattr(app, "_approval_mode", "manual"),
             auto_eligible=auto_eligible,
             smart_eligible=True,
+            yolo_switcher_enabled=True,
         )
         if target is None:
             app.notify("Approval mode cycling is unavailable.", severity="warning", timeout=3)
@@ -110,13 +111,13 @@ class ModalController:
             and getattr(app, "_agent_thread_id", None) is not None
         )
         if should_persist and not await app._write_live_approval_mode(target):
-            if target in (ApprovalMode.AUTO, ApprovalMode.SMART):
+            if target in (ApprovalMode.AUTO, ApprovalMode.SMART, ApprovalMode.YOLO):
                 app.notify(f"{target.value.capitalize()} could not be persisted; remaining in Manual.", severity="warning")
                 return False
 
         prev_mode = getattr(app, "_approval_mode", ApprovalMode.MANUAL)
         app._approval_mode = target
-        app._auto_approve = False
+        app._auto_approve = target is ApprovalMode.YOLO
         app._update_auto_mode_status_bar(target.value)
 
         if app._adapter:
@@ -125,7 +126,7 @@ class ModalController:
         if target is ApprovalMode.SMART:
             if not getattr(app, "_smart_routed_active", False) and getattr(app, "_model", None):
                 app._manual_model = app._model
-        elif target in (ApprovalMode.MANUAL, ApprovalMode.AUTO):
+        elif target in (ApprovalMode.MANUAL, ApprovalMode.AUTO, ApprovalMode.YOLO):
             if prev_mode is ApprovalMode.SMART or getattr(app, "_smart_routed_active", False):
                 await app._restore_manual_default_model()
 
@@ -133,7 +134,9 @@ class ModalController:
             app.notify("Switched to Auto mode (Classic LLM).", severity="information", timeout=3)
             app._notify_auto_mode_enabled_once()
         elif target is ApprovalMode.SMART:
-            from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
+            from talkops.middleware.jev_model_router import (
+                JevDynamicModelRouterMiddleware,
+            )
 
             if JevDynamicModelRouterMiddleware().is_available():
                 app.notify("Switched to Smart mode (Jev System 1 Protected).", severity="information", timeout=3)
@@ -143,6 +146,9 @@ class ModalController:
                     severity="warning",
                     timeout=6,
                 )
+        elif target is ApprovalMode.YOLO:
+            app.notify("Switched to YOLO approval mode (no review).", severity="warning", timeout=3)
+            app._notify_yolo_mode_enabled_once(previous_mode=prev_mode)
         elif target is ApprovalMode.MANUAL:
             app.notify("Switched to Manual approval mode.", severity="information", timeout=3)
         return True
@@ -279,6 +285,48 @@ class ModalController:
             app._auto_mode_notice_pending = True
         except Exception:
             logger.warning("Could not show Auto first-enable notice", exc_info=True)
+
+    def notify_yolo_mode_enabled_once(
+        self,
+        *,
+        previous_mode: ApprovalMode = ApprovalMode.MANUAL,
+    ) -> None:
+        """Show the one-time YOLO notice when the user has not acknowledged it."""
+        from talkops.approval_mode import (
+            has_yolo_acknowledgement,
+            save_yolo_acknowledgement,
+        )
+        from talkops.ui.widgets.yolo_mode_notice import (
+            YoloModeNoticeResult,
+            YoloModeNoticeScreen,
+        )
+
+        app = self._app
+        if has_yolo_acknowledgement() or getattr(app, "_yolo_mode_notice_pending", False):
+            return
+
+        fallback_mode = (
+            previous_mode
+            if previous_mode is not ApprovalMode.YOLO
+            else ApprovalMode.MANUAL
+        )
+
+        def handle_result(result: YoloModeNoticeResult | bool | None) -> None:
+            """Handle result."""
+            app._yolo_mode_notice_pending = False
+            if result is YoloModeNoticeResult.ACKNOWLEDGE or result is True:
+                save_yolo_acknowledgement()
+                return
+            if result is YoloModeNoticeResult.CANCEL:
+                asyncio.create_task(app._set_approval_mode(fallback_mode))
+                return
+            asyncio.create_task(app._set_approval_mode(ApprovalMode.MANUAL))
+
+        try:
+            app.push_screen(YoloModeNoticeScreen(), handle_result)
+            app._yolo_mode_notice_pending = True
+        except Exception:
+            logger.warning("Could not show YOLO first-enable notice", exc_info=True)
 
     # ── Debug Console, Editor, Notifications & Tool Output ─
 
@@ -1038,7 +1086,9 @@ class ModalController:
             for p in provs:
                 apply_stored_credentials(p)
 
-            from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
+            from talkops.middleware.jev_model_router import (
+                JevDynamicModelRouterMiddleware,
+            )
 
             jev_available = JevDynamicModelRouterMiddleware().is_available()
             if jev_available:
@@ -1205,6 +1255,9 @@ class ModalController:
 
         app._agent_thread_id = str(uuid.uuid4())
         bind_logging_to_thread(app._agent_thread_id)
+        task_watcher = getattr(app, "_task_watcher", None)
+        if task_watcher is not None and getattr(app, "is_running", False):
+            task_watcher.start(app._agent_thread_id)
 
         if app._adapter:
             app._adapter._assistant_id = agent_name
@@ -1233,8 +1286,15 @@ class ModalController:
         )
 
         app = self._app
-        project_root = getattr(app._settings, "project_root", None) if app._settings else None
-        p_root = Path(project_root) if project_root else None
+        p_root = (
+            app._effective_workspace_root()
+            if hasattr(app, "_effective_workspace_root")
+            else (
+                Path(project_root)
+                if (project_root := getattr(app._settings, "project_root", None) if app._settings else None)
+                else None
+            )
+        ) or Path.cwd()
         enabled = load_all_enabled_plugin_ids(project_root=p_root)
         installed = {
             k: (v.scope, v.install_path)
@@ -1294,8 +1354,15 @@ class ModalController:
                 )
 
         mcp_info = app.get_mcp_servers() if hasattr(app, "get_mcp_servers") else ()
-        project_root = getattr(app._settings, "project_root", None) if app._settings else None
-        p_root = Path(project_root) if project_root else None
+        p_root = (
+            app._effective_workspace_root()
+            if hasattr(app, "_effective_workspace_root")
+            else (
+                Path(project_root)
+                if (project_root := getattr(app._settings, "project_root", None) if app._settings else None)
+                else None
+            )
+        ) or Path.cwd()
         loaded_ids = load_all_enabled_plugin_ids(project_root=p_root)
 
         screen = PluginManagerScreen(
@@ -1330,8 +1397,21 @@ class ModalController:
             sync_agent_session_status_label(app, ag_state)
         except Exception:
             pass
+        try:
+            bg_panel = getattr(app, "_get_background_task_panel", lambda: None)()
+            if bg_panel is not None:
+                bg_panel.clear_tasks()
+            task_watcher = getattr(app, "_task_watcher", None)
+            if task_watcher is not None and getattr(app, "is_running", False):
+                task_watcher.start(getattr(app, "_agent_thread_id", None))
+        except Exception:
+            pass
 
-    async def sync_agent_session_state_from_checkpoint(self) -> None:
+    async def sync_agent_session_state_from_checkpoint(
+        self,
+        *,
+        state_values: dict[str, Any] | None = None,
+    ) -> None:
         """Mirror the thread's `_active_agent_id` channel into `AgentSessionState`."""
         from talkops.commands.power.agents import (
             _clean_short_name,
@@ -1343,7 +1423,11 @@ class ModalController:
 
         app = self._app
         state = get_agent_session_state(app)
-        values = await app._get_thread_state_values()
+        values = (
+            state_values
+            if state_values is not None
+            else await app._get_thread_state_values()
+        )
         if not values:
             state.clear()
             sync_agent_session_status_label(app, state)
@@ -1353,17 +1437,20 @@ class ModalController:
         if isinstance(active_id, str) and active_id.strip():
             full_name = active_id.strip()
             spec = resolve_plugin_agent(full_name, _discover_plugin_agents(app))
-            state.agent_id = str(spec.get("name") or full_name) if spec else full_name
-            state.short_name = _clean_short_name(state.agent_id)
-            state.plugin_id = str(spec.get("plugin_id") or "") if spec else ""
-            state.description = (
-                str(spec.get("description") or "").splitlines()[0]
-                if spec and spec.get("description")
-                else ""
-            )
-            state.attached = True
-            state.thread_id = app._agent_thread_id
-            state.needs_server_reset = False
+            if spec is None:
+                state.clear()
+            else:
+                state.agent_id = str(spec.get("name") or full_name)
+                state.short_name = _clean_short_name(state.agent_id)
+                state.plugin_id = str(spec.get("plugin_id") or "")
+                state.description = (
+                    str(spec.get("description") or "").splitlines()[0]
+                    if spec.get("description")
+                    else ""
+                )
+                state.attached = True
+                state.thread_id = app._agent_thread_id
+                state.needs_server_reset = False
         else:
             state.clear()
         sync_agent_session_status_label(app, state)

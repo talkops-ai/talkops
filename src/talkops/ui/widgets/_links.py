@@ -20,7 +20,7 @@ import ast
 import asyncio
 import re
 import webbrowser
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from talkops.security.unicode_security import check_url_safety, strip_dangerous_unicode
 from talkops.utils.logger import get_logger
@@ -112,6 +112,49 @@ def _style_url(style: object) -> str | None:
     return _link_action_url(meta.get("@click"))
 
 
+def upgrade_content_links_for_osc8(content: Any) -> Any:
+    r"""Ensure every `@click: link(...)` span on a Textual `Content` also sets `Style.link`.
+
+    Setting `Style.link = href` causes Rich/Textual to emit OSC 8 terminal hyperlinks
+    (`\x1b]8;id=<id>;<href>\x1b\\`) with a shared `id` across soft-wrapped lines while
+    preserving Textual's `@click` metadata for `Markdown.LinkClicked` events.
+    """
+    from textual.content import Content, Span
+    from textual.style import Style
+
+    if not isinstance(content, Content) or not content.spans:
+        return content
+
+    changed = False
+    new_spans: list[Span] = []
+    for span in content.spans:
+        st = span.style
+        if isinstance(st, Style) and not st.link and st._meta is not None:
+            href = _link_action_url(st.meta.get("@click"))
+            if href:
+                st = Style(
+                    background=st.background,
+                    foreground=st.foreground,
+                    bold=st.bold,
+                    dim=st.dim,
+                    italic=st.italic,
+                    underline=st.underline,
+                    underline2=st.underline2,
+                    reverse=st.reverse,
+                    strike=st.strike,
+                    blink=st.blink,
+                    link=href,
+                    _meta=st._meta,
+                    auto_color=st.auto_color,
+                )
+                changed = True
+        new_spans.append(Span(span.start, span.end, st))
+
+    if not changed:
+        return content
+    return Content(content.plain, spans=new_spans)
+
+
 def event_targets_link(event: MouseMove) -> bool:
     """Return whether the style under the mouse points to a clickable link."""
     return _style_url(event.style) is not None
@@ -155,6 +198,15 @@ async def open_url_async(
     return opened
 
 
+_AUTOLINK_PATTERN = re.compile(
+    r"(?P<fence>```[\s\S]*?```)|"
+    r"(?P<code>`[^`\n]+`)|"
+    r"(?P<link>!?\[[^\]\n]*\]\([^)\n]+\))|"
+    r"(?P<url>[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s<>)\]]+)|"
+    r"(?<![a-zA-Z0-9_\-\./:~\[])(?P<path>(?:(?:/[a-zA-Z0-9_\-\.]+){2,}/?|~/(?:[a-zA-Z0-9_\-\.]+/)*[a-zA-Z0-9_\-\.]+|\./(?:[a-zA-Z0-9_\-\.]+/)*[a-zA-Z0-9_\-\.]+|(?:\b[a-zA-Z]:[\\/](?:[a-zA-Z0-9_\-\.]+[\\/])*[a-zA-Z0-9_\-\.]+))(?:\.[a-zA-Z0-9_]+)?)"
+)
+
+
 def autolink_file_paths(text: str) -> str:
     """Detect unadorned local file paths in text and wrap them as markdown links.
 
@@ -166,13 +218,8 @@ def autolink_file_paths(text: str) -> str:
     so sentences like 'Saved to /path/to/report.md.' cleanly link to
     '/path/to/report.md' with the period outside the link.
     """
-    pattern = re.compile(
-        r"(?P<fence>```[\s\S]*?```)|"
-        r"(?P<code>`[^`\n]+`)|"
-        r"(?P<link>!?\[[^\]\n]*\]\([^)\n]+\))|"
-        r"(?P<url>[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s<>)\]]+)|"
-        r"(?<![a-zA-Z0-9_\-\./:~\[])(?P<path>(?:(?:/[a-zA-Z0-9_\-\.]+){2,}/?|~/(?:[a-zA-Z0-9_\-\.]+/)*[a-zA-Z0-9_\-\.]+|\./(?:[a-zA-Z0-9_\-\.]+/)*[a-zA-Z0-9_\-\.]+|(?:\b[a-zA-Z]:[\\/](?:[a-zA-Z0-9_\-\.]+[\\/])*[a-zA-Z0-9_\-\.]+))(?:\.[a-zA-Z0-9_]+)?)"
-    )
+    if not text or ("/" not in text and "\\" not in text):
+        return text
 
     def _replace(m: re.Match[str]) -> str:
         if (
@@ -191,7 +238,7 @@ def autolink_file_paths(text: str) -> str:
             return m.group(0)
         return f"[{p}](file://{p}){trailing}"
 
-    return pattern.sub(_replace, text)
+    return _AUTOLINK_PATTERN.sub(_replace, text)
 
 
 async def open_link_or_file_async(

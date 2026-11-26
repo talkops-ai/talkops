@@ -27,7 +27,7 @@ from unittest.mock import MagicMock
 import pytest
 from textual.app import App, ComposeResult
 from textual.events import Click
-from textual.widgets import Input, OptionList, Static
+from textual.widgets import OptionList, Static
 
 from talkops.ui.theme import (
     get_css_variable_defaults,
@@ -35,11 +35,12 @@ from talkops.ui.theme import (
     register_app_themes,
 )
 from talkops.ui.widgets.modal_base import (
+    ModalBodyScroll,
     ModalDialog,
+    ModalFooter,
     ModalOptionRow,
     ModalSearchInput,
     OpsModalScreen,
-    PillTab,
     PillTabs,
     format_modal_hints,
     format_modal_option_row,
@@ -618,6 +619,94 @@ def test_all_modal_subclasses_declare_dialog_classes():
         assert screen_cls.DIALOG_CLASSES == expected, (
             f"{screen_cls.__name__} expected DIALOG_CLASSES={expected!r}, got {screen_cls.DIALOG_CLASSES!r}"
         )
+
+
+@pytest.mark.asyncio
+async def test_generic_split_detail_mode_pins_actions_and_scrolls_body() -> None:
+    """Any workspace OpsModalScreen using ModalBodyScroll + set_detail_view keeps bottom actions visible."""
+    from textual.widgets.option_list import Option
+
+    class _GenericManagerModal(OpsModalScreen[str | None]):
+        DIALOG_CLASSES: ClassVar[str] = "-workspace"
+
+        def compose_modal(self) -> ComposeResult:
+            yield PillTabs([("browse", "Browse"), ("installed", "Installed")], id="tabs")
+            with ModalBodyScroll(id="body-scroll"):
+                yield Static("", id="body-text")
+            yield OptionList(id="actions")
+
+    modal = _GenericManagerModal()
+    app = _ThemedModalApp(modal)
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        assert modal.dialog is not None
+        body_scroll = modal.query_one("#body-scroll", ModalBodyScroll)
+        body_text = modal.query_one("#body-text", Static)
+        actions = modal.query_one("#actions", OptionList)
+
+        # 1. Browse mode: short banner does not trigger PgUp/PgDn body interception
+        body_text.update("Ready.")
+        for i in range(20):
+            actions.add_option(Option(f"Item {i}", id=f"item:{i}"))
+        await pilot.pause()
+        assert modal.check_action("scroll_body_down", ()) is False
+
+        # 2. Split-detail mode with 50 lines of detail text + 4 bottom action options
+        body_text.update("\n".join(f"Detail line {i}: long component metadata" for i in range(50)))
+        actions.clear_options()
+        for label in ("Install (user)", "Install (project)", "Install (local)", "Back"):
+            actions.add_option(Option(label))
+        modal.set_detail_view(True)
+        actions.focus()
+        await pilot.pause()
+
+        # Action OptionList stays pinned inside ModalDialog even on an 80x24 terminal
+        assert modal.has_class("-split-detail")
+        assert actions.region.height >= 4
+        assert actions.region.y >= modal.dialog.region.y
+        assert actions.region.bottom <= modal.dialog.region.bottom
+
+        # PgDn scrolls ModalBodyScroll while focus remains on OptionList
+        assert body_scroll.max_scroll_y > 0
+        assert modal.check_action("scroll_body_down", ()) is True
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert body_scroll.scroll_y > 0
+        assert actions.has_focus
+
+        # Returning to browse mode resets split-detail class
+        modal.set_detail_view(False)
+        await pilot.pause()
+        assert not modal.has_class("-split-detail")
+
+
+@pytest.mark.asyncio
+async def test_approval_modal_long_command_keeps_footer_buttons_visible_on_small_terminal() -> None:
+    """ApprovalModalScreen uses ModalBodyScroll + ModalFooter so Approve/Reject never clip off-screen."""
+    from textual.widgets import Button
+
+    from talkops.ui.widgets.approval import ApprovalModalScreen
+
+    long_cmd = "\n".join(f"kubectl apply -f manifest-{i:02d}.yaml --namespace prod" for i in range(35))
+    modal = ApprovalModalScreen(
+        tool_name="execute",
+        call_id="call-99",
+        args={"command": long_cmd},
+    )
+    app = _ThemedModalApp(modal)
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        assert modal.dialog is not None
+        footer = modal.query_one("#modal-approval-footer", ModalFooter)
+        approve_btn = modal.query_one("#btn-modal-approve", Button)
+        args_scroll = modal.query_one("#modal-args-scroll", ModalBodyScroll)
+
+        assert footer.region.bottom <= modal.dialog.region.bottom
+        assert approve_btn.region.bottom <= modal.dialog.region.bottom
+        assert args_scroll.max_scroll_y > 0
+
 
 
 

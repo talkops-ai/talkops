@@ -24,7 +24,6 @@ import os
 from typing import TYPE_CHECKING, ClassVar
 
 from textual.binding import Binding, BindingType
-from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
@@ -32,7 +31,7 @@ from textual.widgets.option_list import Option
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from textual.app import ComposeResult
+    pass
 
 from talkops.config.settings import get_glyphs
 from talkops.model.config import get_credential_env_var, get_provider_auth_status

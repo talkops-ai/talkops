@@ -35,10 +35,8 @@ from talkops.plugins.adapters.skills import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
 
     from talkops.project_utils import ProjectContext
-    from talkops.subagents.types import SubagentMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -113,12 +111,12 @@ def get_skill_sources(
     # 2. User Deepagents / TalkOps skills (~/.talkops/{agent}/skills/)
     user_skills_dir = paths.get_user_skills_dir(assistant_id)
     if user_skills_dir and user_skills_dir.is_dir():
-        sources.append((str(user_skills_dir), "User Skills"))
+        sources.append((str(user_skills_dir), "User"))
 
     # 3. User Agents skills (~/.agents/skills/)
     user_agent_skills_dir = paths.get_user_agent_skills_dir()
     if user_agent_skills_dir and user_agent_skills_dir.is_dir():
-        sources.append((str(user_agent_skills_dir), "User Agent Skills"))
+        sources.append((str(user_agent_skills_dir), "User Agent"))
 
     # 4. Project Deepagents / TalkOps skills (.talkops/skills/)
     project_skills_dir = (
@@ -127,7 +125,7 @@ def get_skill_sources(
         else paths.get_project_skills_dir(effective_root)
     )
     if project_skills_dir and project_skills_dir.is_dir():
-        sources.append((str(project_skills_dir), "Project Skills"))
+        sources.append((str(project_skills_dir), "Project"))
 
     # 5. Project Agents skills (.agents/skills/)
     project_agent_skills_dir = (
@@ -136,7 +134,7 @@ def get_skill_sources(
         else paths.get_project_agent_skills_dir(effective_root)
     )
     if project_agent_skills_dir and project_agent_skills_dir.is_dir():
-        sources.append((str(project_agent_skills_dir), "Project Agent Skills"))
+        sources.append((str(project_agent_skills_dir), "Project Agent"))
 
     # 6. Additional compatible skill directories (.claude/skills)
     user_claude_skills_dir = paths.get_user_claude_skills_dir()

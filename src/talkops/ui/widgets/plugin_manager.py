@@ -28,16 +28,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, Vertical
 from textual.content import Content
 from textual.css.query import NoMatches
 from textual.events import Key
 from textual.message import Message
-from textual.screen import ModalScreen
-from textual.widgets import Input, OptionList, Rule, Static
+from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
-from talkops.config.settings import get_glyphs, is_ascii_mode
+from talkops.config.settings import get_glyphs
 from talkops.plugins import (
     add_marketplace_source,
     discover_marketplace_plugins,
@@ -48,6 +46,7 @@ from talkops.plugins import (
 )
 from talkops.plugins.manifest import (
     UnsupportedComponent,
+    inspect_plugin_components,
 )
 from talkops.plugins.marketplace import (
     MarketplaceError,
@@ -56,7 +55,7 @@ from talkops.plugins.marketplace import (
     redact_marketplace_source,
     redact_urls_in_text,
 )
-from talkops.plugins.models import InstallScope
+from talkops.plugins.models import InstallScope, LocalPluginSource
 from talkops.plugins.store import (
     load_all_enabled_plugin_ids,
     load_installed_plugin_entries,
@@ -64,6 +63,7 @@ from talkops.plugins.store import (
     load_marketplace_records,
 )
 from talkops.ui.widgets.modal_base import (
+    ModalBodyScroll,
     ModalSearchInput,
     OpsModalScreen,
     PillTabs,
@@ -110,6 +110,8 @@ class _PluginRow:
     display_name: str = ""
     skill_count: int | None = None
     skill_names: tuple[str, ...] = ()
+    agent_names: tuple[str, ...] = ()
+    command_names: tuple[str, ...] = ()
     mcp_connected: bool | None = None
     mcp_server_names: tuple[str, ...] = ()
     mcp_login_servers: tuple[str, ...] = ()
@@ -118,6 +120,7 @@ class _PluginRow:
     load_error: str | None = None
     scope: InstallScope | None = None
     project_path: str | None = None
+    foreign_project: bool = False
 
     @property
     def load_state(self) -> PluginLoadState:
@@ -213,7 +216,10 @@ def _plugin_prompt(
     if marketplace:
         badges.append((marketplace, "$secondary"))
     if row.scope:
-        badges.append((str(row.scope), "dim"))
+        if row.foreign_project and row.project_path:
+            badges.append((f"{row.scope}: {Path(row.project_path).name}", "dim"))
+        else:
+            badges.append((str(row.scope), "dim"))
 
     status_tuple: str | tuple[str, str] | None = None
     meta_parts: list[str] = []
@@ -224,6 +230,8 @@ def _plugin_prompt(
         status_tuple = (f"{glyphs.error} Error", "bold $error")
     elif row.load_state == "pending_reload":
         status_tuple = ("pending /reload", "dim")
+    elif row.foreign_project:
+        status_tuple = ("other workspace", "dim")
     elif status:
         status_tuple = (status, "dim")
 
@@ -260,16 +268,16 @@ def _plugin_prompt(
 
 def _install_details_options(*, has_project: bool) -> list[Option]:
     options = [
-        Option("Install for you", id="action:install-user"),
+        Option("Install for you (user / global scope)", id="action:install-user"),
     ]
     if has_project:
         options.extend([
             Option(
-                "Install for all collaborators on this repository",
+                "Install for all collaborators on this repository (project scope)",
                 id="action:install-project",
             ),
             Option(
-                "Install for you, in this repo only",
+                "Install for you, in this workspace only (local scope)",
                 id="action:install-local",
             ),
         ])
@@ -279,27 +287,37 @@ def _install_details_options(*, has_project: bool) -> list[Option]:
 
 def _installed_details_options(row: _PluginRow, *, divider_width: int) -> list[Option]:
     glyphs = get_glyphs()
-    return [
+    options: list[Option] = [
         Option(
             "Disable plugin" if row.enabled else "Enable plugin",
             id="action:toggle-enabled",
         ),
-        Option(Content.styled("Uninstall", "bold"), id="action:uninstall"),
-        Option(
-            Content.styled(glyphs.box_horizontal * divider_width, "dim"),
-            id="details-divider",
-            disabled=True,
-        ),
-        Option("Back to plugin list", id="details-back"),
     ]
+    if row.scope != "workspace":
+        options.append(Option(Content.styled("Uninstall", "bold"), id="action:uninstall"))
+    options.extend(
+        [
+            Option(
+                Content.styled(glyphs.box_horizontal * divider_width, "dim"),
+                id="details-divider",
+                disabled=True,
+            ),
+            Option("Back to plugin list", id="details-back"),
+        ]
+    )
+    return options
 
 
 def _component_summary_lines(row: _PluginRow) -> list[str]:
     lines: list[str] = []
+    if row.agent_names:
+        lines.append(f"Agents: {', '.join(row.agent_names)}")
     if row.skill_names:
         lines.append(f"Skills: {', '.join(row.skill_names)}")
     elif row.skill_count:
         lines.append(f"Skills: {row.skill_count}")
+    if row.command_names:
+        lines.append(f"Commands: {', '.join(f'/{c}' for c in row.command_names)}")
     if row.mcp_server_names:
         lines.append(f"MCP: {', '.join(row.mcp_server_names)}")
     if row.unsupported_components:
@@ -359,6 +377,13 @@ def _installed_plugin_details_content(row: _PluginRow) -> Content:
     glyphs = get_glyphs()
     if row.load_state == "enabled":
         parts.append(Content.styled(f"Status: {glyphs.checkmark} Enabled", "$success"))
+    elif row.load_state == "disabled" and row.foreign_project and row.project_path:
+        parts.append(
+            Content.styled(
+                f"Status: Not active in this workspace (installed in {Path(row.project_path).name})",
+                "dim",
+            )
+        )
     elif row.load_state == "disabled":
         parts.append(Content.styled("Status: Disabled", "dim"))
     elif row.load_state == "error":
@@ -461,6 +486,20 @@ def _marketplace_removal_content(row: _MarketplaceRow) -> Content:
 
 
 # ── State Loader ──────────────────────────────────────────
+
+
+def _is_foreign_project_install(
+    scope: InstallScope | None,
+    project_path: str | None,
+    project_root: Path | None,
+) -> bool:
+    """Return True when a project/local plugin belongs to a different workspace."""
+    if scope not in {"project", "local"} or not project_path or project_root is None:
+        return False
+    try:
+        return Path(project_path).resolve() != project_root.resolve()
+    except OSError:
+        return project_path != str(project_root)
 
 
 def _load_manager_state(
@@ -578,6 +617,24 @@ def _load_manager_state(
                 if primary_entry
                 else (str(project_root) if is_project_marketplace and project_root else None)
             )
+            comp_root: Path | None = None
+            if instance is not None and instance.root.is_dir():
+                comp_root = instance.root
+            elif primary_entry is not None and Path(primary_entry.install_path).is_dir():
+                comp_root = Path(primary_entry.install_path)
+            elif isinstance(plugin.source, LocalPluginSource):
+                cand_root = (marketplace.root / plugin.source.path).resolve()
+                if cand_root.is_dir():
+                    comp_root = cand_root
+
+            comp_info = (
+                inspect_plugin_components(
+                    comp_root, instance.manifest if instance else None
+                )
+                if comp_root is not None
+                else None
+            )
+
             row = _PluginRow(
                 plugin_id=plugin_id,
                 description=plugin.description or "",
@@ -585,14 +642,41 @@ def _load_manager_state(
                 version=instance.version if instance else getattr(plugin, "version", None),
                 author=author,
                 display_name=display_name,
-                skill_count=len(instance.inventory.skills) if instance else None,
-                skill_names=tuple(p.stem for p in instance.inventory.skills) if instance else (),
+                skill_count=(
+                    comp_info["skill_count"]
+                    if comp_info is not None
+                    else (len(instance.inventory.skills) if instance else None)
+                ),
+                skill_names=(
+                    tuple(comp_info["skill_names"])
+                    if comp_info is not None
+                    else (tuple(p.stem for p in instance.inventory.skills) if instance else ())
+                ),
+                agent_names=(
+                    tuple(comp_info.get("agent_names", ()))
+                    if comp_info is not None
+                    else ()
+                ),
+                command_names=(
+                    tuple(comp_info.get("command_names", ()))
+                    if comp_info is not None
+                    else ()
+                ),
                 mcp_connected=None,
-                mcp_server_names=(),
+                mcp_server_names=(
+                    tuple(comp_info.get("mcp_server_names", ()))
+                    if comp_info is not None
+                    else ()
+                ),
                 unsupported_components=instance.inventory.unsupported if instance else (),
                 session_loaded=plugin_id in loaded_plugin_ids,
                 scope=scope if is_installed else None,
                 project_path=project_path if is_installed else None,
+                foreign_project=(
+                    _is_foreign_project_install(scope, project_path, project_root)
+                    if is_installed
+                    else False
+                ),
             )
             (installed_plugins if is_installed else available_plugins).append(row)
 
@@ -603,6 +687,22 @@ def _load_manager_state(
             entry_list = all_entries.get(plugin_id, [entry])
             primary_entry = entry_list[0] if entry_list else entry
             instance = discovered.get(plugin_id)
+            comp_root = (
+                instance.root
+                if instance is not None and instance.root.is_dir()
+                else (
+                    Path(primary_entry.install_path)
+                    if Path(primary_entry.install_path).is_dir()
+                    else None
+                )
+            )
+            comp_info = (
+                inspect_plugin_components(
+                    comp_root, instance.manifest if instance else None
+                )
+                if comp_root is not None
+                else None
+            )
             row = _PluginRow(
                 plugin_id=plugin_id,
                 description="",
@@ -610,14 +710,90 @@ def _load_manager_state(
                 version=instance.version if instance else primary_entry.version,
                 author=None,
                 display_name=instance.manifest.display_name if instance and instance.manifest and instance.manifest.display_name else plugin_id.partition("@")[0],
-                skill_count=len(instance.inventory.skills) if instance else None,
-                skill_names=tuple(p.stem for p in instance.inventory.skills) if instance else (),
+                skill_count=(
+                    comp_info["skill_count"]
+                    if comp_info is not None
+                    else (len(instance.inventory.skills) if instance else None)
+                ),
+                skill_names=(
+                    tuple(comp_info["skill_names"])
+                    if comp_info is not None
+                    else (tuple(p.stem for p in instance.inventory.skills) if instance else ())
+                ),
+                agent_names=(
+                    tuple(comp_info.get("agent_names", ()))
+                    if comp_info is not None
+                    else ()
+                ),
+                command_names=(
+                    tuple(comp_info.get("command_names", ()))
+                    if comp_info is not None
+                    else ()
+                ),
                 mcp_connected=None,
-                mcp_server_names=(),
+                mcp_server_names=(
+                    tuple(comp_info.get("mcp_server_names", ()))
+                    if comp_info is not None
+                    else ()
+                ),
                 unsupported_components=instance.inventory.unsupported if instance else (),
                 session_loaded=plugin_id in loaded_plugin_ids,
                 scope=primary_entry.scope,
                 project_path=primary_entry.project_path,
+                foreign_project=_is_foreign_project_install(
+                    primary_entry.scope,
+                    primary_entry.project_path,
+                    project_root,
+                ),
+            )
+            installed_plugins.append(row)
+
+    # Also include discovered workspace plugins not in marketplace records or installed_plugins.json
+    seen_installed_ids = {row.plugin_id for row in installed_plugins}
+    for plugin_id, instance in sorted(discovered.items()):
+        if plugin_id not in seen_installed_ids:
+            comp_info = (
+                inspect_plugin_components(instance.root, instance.manifest)
+                if instance.root.is_dir()
+                else None
+            )
+            row = _PluginRow(
+                plugin_id=plugin_id,
+                description=instance.manifest.description if instance.manifest and instance.manifest.description else "",
+                enabled=plugin_id not in disabled,
+                version=instance.version,
+                author=instance.manifest.author.name if instance.manifest and instance.manifest.author else None,
+                display_name=instance.manifest.display_name if instance.manifest and instance.manifest.display_name else instance.name,
+                skill_count=(
+                    comp_info["skill_count"]
+                    if comp_info is not None
+                    else len(instance.inventory.skills)
+                ),
+                skill_names=(
+                    tuple(comp_info["skill_names"])
+                    if comp_info is not None
+                    else tuple(p.stem for p in instance.inventory.skills)
+                ),
+                agent_names=(
+                    tuple(comp_info.get("agent_names", ()))
+                    if comp_info is not None
+                    else ()
+                ),
+                command_names=(
+                    tuple(comp_info.get("command_names", ()))
+                    if comp_info is not None
+                    else ()
+                ),
+                mcp_connected=None,
+                mcp_server_names=(
+                    tuple(comp_info.get("mcp_server_names", ()))
+                    if comp_info is not None
+                    else ()
+                ),
+                unsupported_components=instance.inventory.unsupported,
+                session_loaded=plugin_id in loaded_plugin_ids,
+                scope=instance.scope,
+                project_path=str(project_root) if project_root and instance.is_workspace_plugin else None,
             )
             installed_plugins.append(row)
 
@@ -689,10 +865,15 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         margin-bottom: 1;
     }
 
+    PluginManagerScreen.plugin-close-state ModalBodyScroll {
+        height: auto;
+        max-height: 12;
+    }
+
     PluginManagerScreen .plugin-manager-status {
         color: $text-muted;
-        margin-bottom: 1;
         height: auto;
+        width: 100%;
     }
 
     PluginManagerScreen .plugin-manager-error {
@@ -701,9 +882,8 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         height: auto;
     }
 
-    PluginManagerScreen #plugin-manager-options {
-        height: 1fr;
-        min-height: 5;
+    PluginManagerScreen OptionList {
+        min-height: 4;
         background: transparent;
     }
     """
@@ -743,6 +923,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         self._selected_marketplace: _MarketplaceRow | None = None
         self._search_query = ""
         self._last_highlighted_index: int | None = None
+        self._last_details_target: tuple[str, str | None] | None = None
         self._is_refreshing_marketplaces: bool = False
 
     def compose_modal(self) -> ComposeResult:
@@ -757,7 +938,8 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
             id="plugin-manager-tabs",
             initial_tab=self._tab,
         )
-        yield Static("", id="plugin-manager-status", classes="plugin-manager-status")
+        with ModalBodyScroll(id="plugin-manager-details-scroll"):
+            yield Static("", id="plugin-manager-status", classes="plugin-manager-status")
         yield Static("", id="plugin-manager-error", classes="plugin-manager-error")
         yield ModalSearchInput(
             placeholder="Search plugins...",
@@ -1017,6 +1199,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
             return
         self._update_tabs()
 
+        details_scroll = self.query_one("#plugin-manager-details-scroll", ModalBodyScroll)
         status_widget = self.query_one("#plugin-manager-status", Static)
         if self._mode == "plugin_details" and self._selected_plugin is not None:
             status_widget.update(_plugin_details_content(self._selected_plugin))
@@ -1066,6 +1249,8 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
             tabs = None
 
         if self._mode == "add_marketplace":
+            self.set_detail_view(False)
+            self._last_details_target = None
             self.set_modal_title("Add Marketplace")
             self.set_modal_subtitle([("↵", "add"), ("esc", "cancel")])
             if tabs is not None:
@@ -1079,6 +1264,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
                     f"  {get_glyphs().bullet} ./path/to/marketplace"
                 )
                 status_widget.display = True
+            details_scroll.display = status_widget.display
             options.display = False
             search_box.display = False
             search_input.display = False
@@ -1090,12 +1276,23 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
             tabs.display = True
 
         if self._details_mode_active():
+            details_target = (
+                self._mode,
+                self._selected_plugin.plugin_id
+                if self._selected_plugin is not None
+                else (self._selected_marketplace.name if self._selected_marketplace is not None else None),
+            )
+            target_changed = details_target != self._last_details_target
+            self._last_details_target = details_target
+            self.set_detail_view(True, reset_scroll=target_changed)
+            details_scroll.display = status_widget.display
+
             if self._mode == "plugin_details":
                 self.set_modal_title(f"Install {self._selected_plugin.label}" if self._selected_plugin else "Plugin Details")
-                self.set_modal_subtitle([("↑↓", "select"), ("↵", "choose"), ("esc", "back")])
+                self.set_modal_subtitle([("↑↓", "select"), ("↵", "choose"), ("pgup/pgdn", "scroll"), ("esc", "back")])
             elif self._mode == "installed_details":
                 self.set_modal_title(self._selected_plugin.label if self._selected_plugin else "Installed Plugin")
-                self.set_modal_subtitle([("↑↓", "select"), ("↵", "choose"), ("esc", "back")])
+                self.set_modal_subtitle([("↑↓", "select"), ("↵", "choose"), ("pgup/pgdn", "scroll"), ("esc", "back")])
             elif self._mode == "marketplace_details":
                 self.set_modal_title(self._selected_marketplace.name if self._selected_marketplace else "Marketplace Details")
                 self.set_modal_subtitle([("↑↓", "select"), ("↵", "choose"), ("esc", "back")])
@@ -1108,11 +1305,19 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
             source_input.display = False
             options.display = True
             options.clear_options()
+            self._last_highlighted_index = None
             for option in self._active_details_options():
                 options.add_option(option)
+            if options.option_count:
+                first_hl = self._nearest_enabled_index(options, 0)
+                options.highlighted = first_hl
+                self._last_highlighted_index = first_hl
             options.focus()
             return
 
+        self.set_detail_view(False)
+        self._last_details_target = None
+        details_scroll.display = status_widget.display
         source_input.display = False
         options.display = True
         search_available = self._search_available()
@@ -1195,6 +1400,29 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
             loaded_plugin_ids=self._loaded_plugin_ids,
             project_root=self._project_root,
         )
+        if self._selected_plugin is not None:
+            pool = (
+                self._state.installed_plugins
+                if self._mode == "installed_details"
+                else self._state.available_plugins
+            )
+            updated_plugin = next(
+                (
+                    p
+                    for p in pool
+                    if p.plugin_id == self._selected_plugin.plugin_id
+                    and (
+                        self._mode != "installed_details"
+                        or p.scope == self._selected_plugin.scope
+                    )
+                ),
+                None,
+            ) or next(
+                (p for p in pool if p.plugin_id == self._selected_plugin.plugin_id),
+                None,
+            )
+            if updated_plugin is not None:
+                self._selected_plugin = updated_plugin
         if self._selected_marketplace is not None:
             updated_mp = next(
                 (m for m in self._state.marketplaces if m.name == self._selected_marketplace.name),
@@ -1270,7 +1498,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
                 return not self.query_one("#plugin-manager-search", Input).has_focus
             except NoMatches:
                 return True
-        return True
+        return super().check_action(action, parameters)
 
     def on_key(self, event: Key) -> None:
         """Focus plugin search when a letter is typed from another control."""
@@ -1298,6 +1526,7 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
 
     def _show_close_state(self, title: str, body: str, help_text: str = "") -> None:
         """Switch the modal to the reload confirmation prompt."""
+        self.set_detail_view(False)
         self.add_class("plugin-close-state")
         self.set_modal_title(title)
         self.set_modal_subtitle([
@@ -1306,6 +1535,10 @@ class PluginManagerScreen(OpsModalScreen[PluginManagerResult]):
         ])
         try:
             self.query_one("#plugin-manager-tabs").display = False
+        except NoMatches:
+            pass
+        try:
+            self.query_one("#plugin-manager-details-scroll", ModalBodyScroll).display = True
         except NoMatches:
             pass
         status = self.query_one("#plugin-manager-status", Static)

@@ -32,9 +32,7 @@ import pytest
 from talkops.model.factory import clear_model_cache, create_model
 from talkops.model.pool import DynamicModelPoolManager
 from talkops.model.reasoning import (
-    current_effort_from_model_params,
     default_effort_for_model,
-    has_explicit_effort_model_params,
     is_effort_supported_for_model,
     supported_efforts_for_model,
     with_effort_model_params,

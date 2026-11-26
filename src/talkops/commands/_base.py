@@ -28,10 +28,8 @@ from talkops.commands._types import (
 )
 
 if TYPE_CHECKING:
-    from textual.app import App
 
-    from talkops.config.settings import Settings
-    from talkops.state.session import SessionManager
+    pass
 
 
 @dataclass(frozen=True)

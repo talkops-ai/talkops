@@ -93,7 +93,9 @@ class PoolHandler(BaseCommandHandler):
                 f"• **Powerful (Tier 2):** `{tiers[2][0]}` *(effort: {tiers[2][1]})*\n\n"
                 f"In smart mode, Jev routes tasks across these tiers based on complexity."
             )
-            from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
+            from talkops.middleware.jev_model_router import (
+                JevDynamicModelRouterMiddleware,
+            )
 
             if not JevDynamicModelRouterMiddleware().is_available():
                 msg += (

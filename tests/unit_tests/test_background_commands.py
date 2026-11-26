@@ -274,6 +274,104 @@ async def test_manage_task_kill_terminates_process(tmp_path: Path) -> None:
     assert kill_res.update["background_tasks"][task_id]["status"] == "killed"
 
 
+@pytest.mark.asyncio
+async def test_manage_task_status_and_list_for_running_and_completed_task(
+    tmp_path: Path,
+) -> None:
+    """`manage_task(action='status')` and `manage_task(action='list')` succeed for active and finished tasks."""
+    manager = BackgroundTaskManager(tasks_root=tmp_path / "tasks")
+    middleware = BackgroundCommandMiddleware(
+        working_dir=tmp_path,
+        task_manager=manager,
+    )
+    manage_tool = middleware.tools[0]
+
+    req = _make_request(
+        args={
+            "command": (
+                f'"{sys.executable}" -c '
+                '"import time; print(\'status-output-line\', flush=True); time.sleep(0.45)"'
+            ),
+            "wait_ms_before_async": 120,
+        },
+        thread_id="thread-status",
+    )
+
+    async def _unused_handler(_req: Any) -> ToolMessage:
+        raise AssertionError("handler should not be called")
+
+    res = await middleware.awrap_tool_call(req, _unused_handler)
+    assert isinstance(res, Command)
+    assert res.update is not None
+    task_id = next(iter(res.update["background_tasks"].keys()))
+    detached_msg = str(res.update["messages"][0].content)
+    assert "YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS:" in detached_msg
+    assert "DO NOTHING ELSE." in detached_msg
+    assert "Never use a shell `sleep` command as a timer" in detached_msg
+
+    # 1. Check status while task is still running
+    running_status = await manage_tool.ainvoke(
+        {
+            "name": "manage_task",
+            "id": "call-status-1",
+            "type": "tool_call",
+            "args": {
+                "action": "status",
+                "task_id": task_id,
+                "state": {"thread_id": "thread-status"},
+            },
+        }
+    )
+    assert isinstance(running_status, Command)
+    assert running_status.update is not None
+    assert running_status.update["background_tasks"][task_id]["status"] == "running"
+    running_msg = running_status.update["messages"][0]
+    assert "status: `running`" in str(running_msg.content)
+    assert "last_progress:" in str(running_msg.content)
+
+    # 2. Wait for task completion and check status again
+    await asyncio.sleep(0.6)
+    completed_status = await manage_tool.ainvoke(
+        {
+            "name": "manage_task",
+            "id": "call-status-2",
+            "type": "tool_call",
+            "args": {
+                "action": "status",
+                "task_id": task_id,
+                "state": {"thread_id": "thread-status"},
+            },
+        }
+    )
+    assert isinstance(completed_status, Command)
+    assert completed_status.update is not None
+    assert completed_status.update["background_tasks"][task_id]["status"] == "completed"
+    assert completed_status.update["background_tasks"][task_id]["exit_code"] == 0
+    completed_msg = completed_status.update["messages"][0]
+    assert "status: `completed`" in str(completed_msg.content)
+    assert "exit_code: `0`" in str(completed_msg.content)
+    assert "last_progress:" in str(completed_msg.content)
+    assert "status-output-line" in str(completed_msg.content)
+
+    # 3. Check `list` action
+    list_res = await manage_tool.ainvoke(
+        {
+            "name": "manage_task",
+            "id": "call-list-1",
+            "type": "tool_call",
+            "args": {
+                "action": "list",
+                "state": {"thread_id": "thread-status"},
+            },
+        }
+    )
+    assert isinstance(list_res, Command)
+    assert list_res.update is not None
+    assert task_id in list_res.update["background_tasks"]
+    assert list_res.update["background_tasks"][task_id]["status"] == "completed"
+    assert task_id in str(list_res.update["messages"][0].content)
+
+
 def test_prepare_model_request_extends_execute_schema_and_system_prompt(
     tmp_path: Path,
 ) -> None:
@@ -305,7 +403,36 @@ def test_prepare_model_request_extends_execute_schema_and_system_prompt(
     upgraded_tool = captured["tools"][0]
     assert upgraded_tool.args_schema is AsyncExecuteSchema
     assert "wait_ms_before_async" in upgraded_tool.description
-    assert "manage_task" in str(captured["system_message"].content)
+    assert "sleep command as a timer" in upgraded_tool.description
+    sys_content = str(captured["system_message"].content)
+    assert "manage_task" in sys_content
+    assert "YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS:" in sys_content
+
+
+def test_manage_task_ui_display_and_group_summary() -> None:
+    """`manage_task` renders clean header parts and tool-group summaries in the TUI."""
+    from talkops.ui.widgets.tool_display import format_tool_display, format_tool_parts
+    from talkops.ui.widgets.tool_group import summarize_tool_group
+
+    parts = format_tool_parts(
+        "manage_task",
+        {"action": "status", "task_id": "cmd-cad37449"},
+    )
+    assert parts.name == "Task"
+    assert parts.detail == "status cmd-cad37449"
+    assert format_tool_display(
+        "manage_task",
+        {"action": "status", "task_id": "cmd-cad37449"},
+    ) == "● Task(status cmd-cad37449)"
+
+    assert (
+        summarize_tool_group(["manage_task"], tense="present")
+        == "Managing 1 background task"
+    )
+    assert (
+        summarize_tool_group(["manage_task"], tense="past")
+        == "Managed 1 background task"
+    )
 
 
 @pytest.mark.asyncio
@@ -474,3 +601,278 @@ async def test_task_watcher_controller_reactive_wakeup_and_typing_deferral(
     finally:
         watcher.stop()
 
+
+@pytest.mark.asyncio
+async def test_background_task_panel_reconciles_completed_task_even_without_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify `BackgroundTaskPanel` reconciles a finished task on tick even if the complete event was missed."""
+    from talkops.ui.widgets.background_task_panel import BackgroundTaskPanel
+
+    manager = BackgroundTaskManager(tasks_root=tmp_path / "tasks")
+    monkeypatch.setattr(
+        "talkops.tasks.manager.get_background_task_manager",
+        lambda: manager,
+    )
+
+    panel = BackgroundTaskPanel()
+    res = await manager.run_or_detach(
+        thread_id="thread-reconcile",
+        command=f'"{sys.executable}" -c "import time; time.sleep(0.35)"',
+        cwd=tmp_path,
+        wait_ms_before_async=100,
+    )
+    assert hasattr(res, "handle")
+    handle = res.handle  # type: ignore[union-attr]
+    task_id = handle.task_id
+
+    # Simulate only receiving the initial start event
+    panel.on_task_event(
+        {
+            "type": "background_task",
+            "phase": "start",
+            "task_id": task_id,
+            "command": handle.command,
+            "status": "running",
+            "started_at": handle.started_at,
+        }
+    )
+    assert panel._records[task_id].status == "running"
+
+    # Wait for the process to exit without delivering the completion event to the panel
+    await asyncio.sleep(0.6)
+    assert handle.status == "completed"
+
+    # Calling _visible_records() (invoked every 0.1s by _on_tick) reconciles the record
+    visible = panel._visible_records()
+    assert len(visible) == 1
+    assert panel._records[task_id].status == "completed"
+    assert panel._records[task_id].exit_code == 0
+    assert panel._records[task_id].completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_task_watcher_controller_tracks_tasks_after_thread_switch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify `TaskWatcherController` receives completion events even after `_agent_thread_id` changes (e.g. `/clear`)."""
+    from talkops.ui.controllers.task_watcher_controller import TaskWatcherController
+    from talkops.ui.widgets.background_task_panel import BackgroundTaskPanel
+
+    manager = BackgroundTaskManager(tasks_root=tmp_path / "tasks")
+    monkeypatch.setattr(
+        "talkops.ui.controllers.task_watcher_controller.get_background_task_manager",
+        lambda: manager,
+    )
+    monkeypatch.setattr(
+        "talkops.tasks.manager.get_background_task_manager",
+        lambda: manager,
+    )
+
+    panel = BackgroundTaskPanel()
+
+    class _FakeApp:
+        _exit = False
+        _agent_running = False
+        _shell_running = False
+        _pending_approval_widget = None
+        _pending_ask_user_widget = None
+        _agent_thread_id = "initial-thread"
+        _client = None
+        _adapter = None
+
+        def _get_background_task_panel(self) -> BackgroundTaskPanel:
+            return panel
+
+        def _is_user_typing(self) -> bool:
+            return False
+
+        async def _mount_message(self, widget: Any) -> None:
+            pass
+
+        async def _send_to_agent(
+            self,
+            prompt: str,
+            *,
+            message_kwargs: dict[str, Any] | None = None,
+        ) -> None:
+            pass
+
+    fake_app = _FakeApp()
+    watcher = TaskWatcherController(fake_app)  # type: ignore[arg-type]
+    watcher.start("initial-thread")
+
+    try:
+        # Simulate `/clear` changing `_agent_thread_id`
+        fake_app._agent_thread_id = "new-thread-after-clear"
+
+        res = await manager.run_or_detach(
+            thread_id="new-thread-after-clear",
+            command=f'"{sys.executable}" -c "import time; time.sleep(0.35)"',
+            cwd=tmp_path,
+            wait_ms_before_async=100,
+        )
+        assert hasattr(res, "handle")
+        task_id = res.handle.task_id  # type: ignore[union-attr]
+
+        await asyncio.sleep(0.7)
+        assert task_id in panel._records
+        assert panel._records[task_id].status == "completed"
+        assert panel._records[task_id].exit_code == 0
+    finally:
+        watcher.stop()
+
+
+
+def _make_wake_fake_app(thread_id: str, sent_prompts: list[str]) -> Any:
+    """Build a minimal `TalkOpsApp` stand-in for `TaskWatcherController` wakeup tests."""
+
+    class _FakeApp:
+        _exit = False
+        _agent_running = False
+        _agent_reconciling = False
+        _shell_running = False
+        _pending_approval_widget = None
+        _pending_ask_user_widget = None
+        _agent_thread_id = thread_id
+        _client = None
+        _adapter = None
+
+        def _get_background_task_panel(self) -> None:
+            return None
+
+        def _is_user_typing(self) -> bool:
+            return False
+
+        async def _mount_message(self, widget: Any) -> None:
+            pass
+
+        async def _send_to_agent(
+            self,
+            prompt: str,
+            *,
+            message_kwargs: dict[str, Any] | None = None,
+        ) -> None:
+            sent_prompts.append(prompt)
+
+    return _FakeApp()
+
+
+@pytest.mark.asyncio
+async def test_task_watcher_wakes_after_turn_when_task_completes_mid_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a task finishing during the turn's final model call must still wake the agent.
+
+    The completion lands after the running turn's last `abefore_model` drain, so the
+    wakeup must be deferred (not dropped) until the turn ends.
+    """
+    from talkops.ui.controllers.task_watcher_controller import TaskWatcherController
+
+    manager = BackgroundTaskManager(tasks_root=tmp_path / "tasks")
+    monkeypatch.setattr(
+        "talkops.ui.controllers.task_watcher_controller.get_background_task_manager",
+        lambda: manager,
+    )
+    sent_prompts: list[str] = []
+    fake_app = _make_wake_fake_app("thread-midturn", sent_prompts)
+    fake_app._agent_running = True  # turn still in flight (final model call)
+    watcher = TaskWatcherController(fake_app)  # type: ignore[arg-type]
+    watcher.start("thread-midturn")
+    try:
+        res = await manager.run_or_detach(
+            thread_id="thread-midturn",
+            command=f'"{sys.executable}" -c "import time; time.sleep(0.3)"',
+            cwd=tmp_path,
+            wait_ms_before_async=100,
+        )
+        task_id = res.handle.task_id  # type: ignore[union-attr]
+
+        await asyncio.sleep(1.0)
+        assert res.handle.status == "completed"  # type: ignore[union-attr]
+        assert sent_prompts == [], "must not wake while a turn is running"
+
+        # Turn ends without draining the notification -> wakeup must fire now.
+        fake_app._agent_running = False
+        await asyncio.sleep(0.9)
+        assert len(sent_prompts) == 1
+        assert task_id in sent_prompts[0]
+    finally:
+        watcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_task_watcher_skips_wake_when_running_turn_drained_notification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the in-flight turn's `abefore_model` delivered the notification, do not wake again."""
+    from talkops.ui.controllers.task_watcher_controller import TaskWatcherController
+
+    manager = BackgroundTaskManager(tasks_root=tmp_path / "tasks")
+    monkeypatch.setattr(
+        "talkops.ui.controllers.task_watcher_controller.get_background_task_manager",
+        lambda: manager,
+    )
+    sent_prompts: list[str] = []
+    fake_app = _make_wake_fake_app("thread-drained", sent_prompts)
+    fake_app._agent_running = True
+    watcher = TaskWatcherController(fake_app)  # type: ignore[arg-type]
+    watcher.start("thread-drained")
+    try:
+        await manager.run_or_detach(
+            thread_id="thread-drained",
+            command=f'"{sys.executable}" -c "import time; time.sleep(0.3)"',
+            cwd=tmp_path,
+            wait_ms_before_async=100,
+        )
+        await asyncio.sleep(1.0)
+        # Simulate the running turn's next model call draining the notification.
+        assert len(manager.drain_notifications("thread-drained")) == 1
+        fake_app._agent_running = False
+        await asyncio.sleep(0.9)
+        assert sent_prompts == []
+    finally:
+        watcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_task_watcher_turn_end_sweep_wakes_for_stranded_notification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`check_pending_notifications` wakes once for a notification whose event was missed."""
+    from talkops.ui.controllers.task_watcher_controller import TaskWatcherController
+
+    manager = BackgroundTaskManager(tasks_root=tmp_path / "tasks")
+    monkeypatch.setattr(
+        "talkops.ui.controllers.task_watcher_controller.get_background_task_manager",
+        lambda: manager,
+    )
+    sent_prompts: list[str] = []
+    fake_app = _make_wake_fake_app("thread-sweep", sent_prompts)
+    watcher = TaskWatcherController(fake_app)  # type: ignore[arg-type]
+    # Watcher deliberately NOT started: the completion event is never observed.
+    res = await manager.run_or_detach(
+        thread_id="thread-sweep",
+        command=f'"{sys.executable}" -c "import time; time.sleep(0.2)"',
+        cwd=tmp_path,
+        wait_ms_before_async=100,
+    )
+    task_id = res.handle.task_id  # type: ignore[union-attr]
+    await asyncio.sleep(0.8)
+    assert manager.peek_notifications("thread-sweep")
+
+    watcher.check_pending_notifications()
+    await asyncio.sleep(0.8)
+    assert len(sent_prompts) == 1
+    assert task_id in sent_prompts[0]
+
+    # A second sweep for the same (still undrained) notification must not re-wake.
+    watcher.check_pending_notifications()
+    await asyncio.sleep(0.8)
+    assert len(sent_prompts) == 1
+    watcher.stop()

@@ -153,6 +153,8 @@ Instead of trying to do everything in one giant conversation, TalkOps can bring 
 | **Marketplace Plugins** | `/plugins` or `talkops plugin install <name>` | [Plugins & Marketplaces](plugins.md) |
 | **Specialist Subagents** | `/agent` or `talkops -a <name>` | [Subagents](subagents.md) |
 | **Team Runbooks & Memory** | `/skills`, `/memory`, `/remember` | [Memory & Skills](memory-and-skills.md) |
+| **OpenWiki Knowledge Base** | `/openwiki init`, `talkops openwiki status` | [OpenWiki Guide](openwiki.md) |
+| **Browser Automation Agent** | `/browser <task>`, `/browser status` | [Browser Automation](browser-automation.md) |
 | **Custom Slash Shortcuts** | Create `.md` files in `.talkops/commands/` | [Custom Commands](custom-commands.md) |
 | **External MCP Tools** | `/mcp` or `talkops mcp list` | [MCP Tools](mcp-tools.md) |
 | **Server Addons** | `talkops serve addons` or `talkops addon list` | [Server Addons](server-addons.md) |
@@ -171,9 +173,10 @@ Instead of trying to do everything in one giant conversation, TalkOps can bring 
 - **[Approval Modes & Smart Mode](approval-mode.md)** — Understand Manual, Smart, and Auto approval modes.
 - **[Central Server & Team Collaboration](central-server.md)** — Set up `talkops serve` so your team can share sessions and cloud access.
 - **[Webhooks & Automated Alerting](webhooks.md)** — Connect PagerDuty, Alertmanager, Datadog, AWS SNS, ServiceNow, Jenkins, and GitHub alerts.
+- **[ChatOps Setup Guides](server-addons.md)** — Connect **[Slack](slack-portal-setup.md)**, **[Discord](discord-portal-setup.md)**, and **[Microsoft Teams](teams-portal-setup.md)** for two-way threads, HITL approvals, and RCA feedback.
 - **[Goal Mode & Rubrics](goal-and-rubrics.md)** — Give TalkOps a multi-step goal (`/goal`) or success checklist (`--rubric`) to work through until finished.
 
 ### Configuration & Customization
 - **[Configuration Guide](Configuration.md)** & **[`config.toml` Reference](config.toml.md)** — Customize your default settings, cloud profiles, and safety rules.
 - **[Credentials & Authentication](credentials.md)** & **[Model Providers](model-providers.md)** — Connect any of the 26+ supported AI providers and cloud accounts.
-- **[Subagents](subagents.md)**, **[Memory & Skills](memory-and-skills.md)**, & **[Plugins](plugins.md)** — Tailor TalkOps to your team's infrastructure and workflows.
+- **[Subagents](subagents.md)**, **[Memory & Skills](memory-and-skills.md)**, **[OpenWiki](openwiki.md)**, **[Browser Automation](browser-automation.md)**, & **[Plugins](plugins.md)** — Tailor TalkOps to your team's codebase, browser workflows, and infrastructure.

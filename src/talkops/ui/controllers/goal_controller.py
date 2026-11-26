@@ -234,10 +234,10 @@ class GoalController:
         rows: list[tuple[str, bytes]],
         serde: Any,
     ) -> list[Any]:
-        """Replay message-channel write rows through `add_messages`."""
+        """Replay message-channel write rows through `add_messages` in a single O(W) pass."""
         from langgraph.graph.message import add_messages
 
-        accumulated: list[Any] = []
+        all_deltas: list[Any] = []
 
         for type_str, value_blob in rows:
             if not type_str or not value_blob:
@@ -252,11 +252,13 @@ class GoalController:
                 continue
 
             if isinstance(delta, list):
-                accumulated = list(add_messages(accumulated, delta))
+                all_deltas.extend(delta)
             else:
-                accumulated = list(add_messages(accumulated, [delta]))
+                all_deltas.append(delta)
 
-        return accumulated
+        if not all_deltas:
+            return []
+        return list(add_messages([], all_deltas))
 
     async def sync_goal_state_from_checkpoint(
         self,
@@ -264,6 +266,7 @@ class GoalController:
         force: bool = False,
         proposal_request_id: str | None = None,
         allow_pending_proposal: bool = True,
+        state_values: dict[str, Any] | None = None,
     ) -> bool:
         """Refresh goal/rubric metadata from the active checkpoint."""
         from talkops.commands.power.goal import GoalHandler, get_goal_state
@@ -284,34 +287,35 @@ class GoalController:
         ):
             return True
 
-        try:
-            state_values = await app._get_thread_state_values()
-        except Exception:
-            logger.warning("Failed to refresh goal/rubric state", exc_info=True)
-            if force:
-                if goal_state.pending_objective and goal_state.pending_rubric:
-                    try:
-                        app._open_goal_review(
-                            goal_state.pending_objective,
-                            goal_state.pending_rubric,
-                            amendment=(goal_state.pending_kind == "amend"),
-                            plan=goal_state.pending_plan,
-                            todos=goal_state.pending_todos,
-                            questions=goal_state.pending_questions,  # type: ignore[arg-type]
+        if state_values is None:
+            try:
+                state_values = await app._get_thread_state_values()
+            except Exception:
+                logger.warning("Failed to refresh goal/rubric state", exc_info=True)
+                if force:
+                    if goal_state.pending_objective and goal_state.pending_rubric:
+                        try:
+                            app._open_goal_review(
+                                goal_state.pending_objective,
+                                goal_state.pending_rubric,
+                                amendment=(goal_state.pending_kind == "amend"),
+                                plan=goal_state.pending_plan,
+                                todos=goal_state.pending_todos,
+                                questions=goal_state.pending_questions,  # type: ignore[arg-type]
+                            )
+                        except TypeError:
+                            app._open_goal_review(
+                                goal_state.pending_objective,
+                                goal_state.pending_rubric,
+                            )
+                    else:
+                        await app._mount_message(
+                            ErrorMessage(
+                                "Acceptance criteria were generated but could not be "
+                                "loaded from the thread. Run `/goal` again to retry."
+                            )
                         )
-                    except TypeError:
-                        app._open_goal_review(
-                            goal_state.pending_objective,
-                            goal_state.pending_rubric,
-                        )
-                else:
-                    await app._mount_message(
-                        ErrorMessage(
-                            "Acceptance criteria were generated but could not be "
-                            "loaded from the thread. Run `/goal` again to retry."
-                        )
-                    )
-            return False
+                return False
 
         if not state_values:
             return True
@@ -471,19 +475,24 @@ class GoalController:
 
         return True
 
-    async def sync_session_cost_from_checkpoint(self) -> None:
+    async def sync_session_cost_from_checkpoint(
+        self,
+        *,
+        state_values: dict[str, Any] | None = None,
+    ) -> None:
         """Reconcile displayed context tokens, cumulative cost, cache tokens, and session tokens from the checkpoint."""
         app = self._app
         if not app._agent_thread_id:
             return
-        try:
-            state_values = await app._get_thread_state_values(app._agent_thread_id)
-        except Exception:
-            logger.debug(
-                "Could not load thread state while reconciling cost and token state",
-                exc_info=True,
-            )
-            return
+        if state_values is None:
+            try:
+                state_values = await app._get_thread_state_values(app._agent_thread_id)
+            except Exception:
+                logger.debug(
+                    "Could not load thread state while reconciling cost and token state",
+                    exc_info=True,
+                )
+                return
 
         cost_val = state_values.get("_session_cost_usd")
         if isinstance(cost_val, (int, float)) and math.isfinite(cost_val) and cost_val >= 0:

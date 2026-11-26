@@ -29,10 +29,8 @@ from __future__ import annotations
 import gc
 import json
 import logging
-import tempfile
 from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -43,7 +41,6 @@ from talkops.cli.main import build_parser, main
 from talkops.utils.logger import (
     DEFAULT_LOG_DIR,
     DEFAULT_LOG_FILE,
-    AgentLogger,
     bind_logging_to_thread,
     configure_logging,
     get_active_log_dir,

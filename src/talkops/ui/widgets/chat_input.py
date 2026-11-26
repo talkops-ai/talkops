@@ -34,7 +34,7 @@ from rich.segment import Segment
 from rich.style import Style
 from textual import events
 from textual.app import ComposeResult
-from textual.binding import Binding, BindingType
+from textual.binding import BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.events import Click
@@ -47,6 +47,8 @@ from textual.widgets.text_area import EditResult
 
 from talkops.config.settings import get_glyphs
 from talkops.input import (
+    AUDIO_PLACEHOLDER_PATTERN,
+    FILE_PLACEHOLDER_PATTERN,
     IMAGE_PLACEHOLDER_PATTERN,
     VIDEO_PLACEHOLDER_PATTERN,
     MediaSnapshot,
@@ -405,13 +407,33 @@ def format_completion_row(
     if column <= 0:
         return Content.assemble(*pieces)
 
-    matches = set(_match_spans(query, name))
+    alias_start = (
+        name.find(" (")
+        if kind == "command" and name.endswith(")") and " (" in name
+        else -1
+    )
+    if alias_start > 0:
+        alias_inner = name[alias_start + 2 : -1]
+        alias_matches = _match_spans(query, alias_inner)
+        matches = (
+            {alias_start + 2 + i for i in alias_matches}
+            if alias_matches
+            else set(_match_spans(query, name))
+        )
+    else:
+        matches = set(_match_spans(query, name))
+
     base = "bold" if selected else ""
     if kind == "file":
         trimmed = name.rstrip("/")
         dir_end = trimmed.rfind("/") + 1
         styles = [
             _MATCH_STYLE if i in matches else ("dim" if i < dir_end else base)
+            for i in range(len(name))
+        ]
+    elif alias_start > 0:
+        styles = [
+            _MATCH_STYLE if i in matches else ("dim" if i >= alias_start else base)
             for i in range(len(name))
         ]
     else:
@@ -621,7 +643,10 @@ class CompletionPopup(VerticalScroll):
         owner = self._chat_input()
         query = owner.completion_query(kind) if owner is not None else ""
         hint_map = owner._argument_hints if owner is not None and kind == "command" else {}
-        hints = [hint_map.get(label.removeprefix("/"), "") for label, _ in suggestions]
+        hints = [
+            hint_map.get(label.removeprefix("/").split(" ", 1)[0], "")
+            for label, _ in suggestions
+        ]
         width = self._row_width()
         label_width = completion_label_width(suggestions, hints, kind=kind, width=width)
         layout = CompletionRowLayout(
@@ -901,9 +926,7 @@ class ChatTextArea(TextArea):
         tracker = owner._image_tracker if owner is not None else None
         if tracker is None:
             return set()
-        placeholders = {img.placeholder for img in tracker.images}
-        placeholders.update(video.placeholder for video in tracker.videos)
-        return placeholders
+        return {item.placeholder for item in tracker.all_media()}
 
     def _find_placeholder_span(
         self, cursor_offset: int, *, backwards: bool
@@ -913,7 +936,12 @@ class ChatTextArea(TextArea):
         media_placeholders = self._bound_media_placeholders()
         if not media_placeholders:
             return None
-        for pattern in (IMAGE_PLACEHOLDER_PATTERN, VIDEO_PLACEHOLDER_PATTERN):
+        for pattern in (
+            IMAGE_PLACEHOLDER_PATTERN,
+            VIDEO_PLACEHOLDER_PATTERN,
+            AUDIO_PLACEHOLDER_PATTERN,
+            FILE_PLACEHOLDER_PATTERN,
+        ):
             for match in pattern.finditer(text):
                 if match.group(0) not in media_placeholders:
                     continue
@@ -1061,17 +1089,19 @@ class MediaAttachmentBar(Static):
             lines: list[Content] = [
                 Content.assemble(
                     ("▾ ", "dim"),
-                    (f"📎 {count} media attached", "dim"),
-                    ("   (ctrl+o to collapse · backspace to remove)", "dim"),
+                    (f"📎 {count} Media(s) attached", "dim"),
                 )
             ]
             for idx, item in enumerate(items, 1):
                 lines.append(
                     Content.assemble(
-                        (f"   {idx}. {item.source} ", "dim"),
-                        (f"({format_media_size(item.size_bytes)}, {item.mime_type})", "dim"),
+                        (
+                            f"  {idx}. {item.source} · {format_media_size(item.size_bytes)} · {item.mime_type}",
+                            "dim",
+                        ),
                     )
                 )
+            lines.append(Content.assemble(("(ctrl+o to collapse)", "dim")))
             self.update(Content("\n").join(lines))
 
 
@@ -1443,30 +1473,32 @@ class ChatInput(Widget):
     # ── Media & Paste Handling ──────────────────────────
 
     async def paste_clipboard_image(self) -> bool:
-        """Attempt to read an image from the system clipboard and attach it.
+        """Attempt to read media (image, audio, video, PDF, or copied Finder file) from clipboard and attach it.
 
         Returns:
-            ``True`` when an image was found on the clipboard and attached.
+            ``True`` when media was found on the clipboard and attached.
         """
         if not self._text_area or self._image_tracker is None:
             return False
-        from talkops.media_utils import get_clipboard_image
+        from talkops.media_utils import get_clipboard_media
 
         try:
-            image = await asyncio.to_thread(get_clipboard_image)
+            media = await asyncio.to_thread(get_clipboard_media)
         except Exception:
-            logger.debug("Clipboard image check failed", exc_info=True)
+            logger.debug("Clipboard media check failed", exc_info=True)
             return False
 
-        if image is None:
+        if media is None:
             return False
 
-        self._image_tracker.add_image(
-            image,
+        self._image_tracker.add_media(
+            media,
             existing_text=self._text_area.text,
             inline=False,
         )
         return True
+
+    paste_clipboard_media = paste_clipboard_image
 
     def on_paste(self, event: events.Paste | Any) -> None:
         """Handle paste events with file-path media attachment and large-paste collapsing."""
@@ -1661,9 +1693,10 @@ class ChatInput(Widget):
             return raw_text, False
 
         from talkops.media_utils import (
+            AUDIO_EXTENSIONS,
+            FILE_EXTENSIONS,
             MAX_MEDIA_BYTES,
             VIDEO_EXTENSIONS,
-            ImageData,
             get_media_from_path,
             is_media_path,
         )
@@ -1673,11 +1706,9 @@ class ChatInput(Widget):
         for path in paths:
             media = get_media_from_path(path)
             if media is not None:
-                kind = "image" if isinstance(media, ImageData) else "video"
                 existing_text = self._text_area.text if self._text_area else raw_text
                 self._image_tracker.add_media(
                     media,
-                    kind,
                     existing_text=existing_text,
                     inline=False,
                 )
@@ -1686,7 +1717,14 @@ class ChatInput(Widget):
 
             suffix = path.suffix.lower()
             if is_media_path(path):
-                label = "Video" if suffix in VIDEO_EXTENSIONS else "Image"
+                if suffix in VIDEO_EXTENSIONS:
+                    label = "Video"
+                elif suffix in AUDIO_EXTENSIONS:
+                    label = "Audio"
+                elif suffix in FILE_EXTENSIONS:
+                    label = "Document"
+                else:
+                    label = "Image"
                 try:
                     size = path.stat().st_size
                     if size > MAX_MEDIA_BYTES:
@@ -2128,9 +2166,11 @@ class ChatInput(Widget):
         if self.mode == "normal":
             for mode, prefix in (("shell_incognito", "!!"), ("shell", "!"), ("command", "/")):
                 if text.startswith(prefix):
-                    if prefix == "/" and self._parse_dropped_path_payload(
-                        text, allow_leading_path=True
-                    ) is not None:
+                    if (
+                        prefix == "/"
+                        and ("/" in text[1:] or "." in text[1:])
+                        and self._parse_dropped_path_payload(text, allow_leading_path=True) is not None
+                    ):
                         return
                     self.mode = mode
                     self._text_area.text = text[len(prefix) :]
@@ -2144,17 +2184,25 @@ class ChatInput(Widget):
         """Update slash command autocomplete entries and argument hints."""
         if hasattr(self, "_slash_controller") and self._slash_controller:
             self._slash_controller.update_commands(commands)
-        self._rebuild_argument_hints()
+        self._rebuild_argument_hints(commands)
 
-    def _rebuild_argument_hints(self) -> None:
-        """Rebuild the command-name -> argument-hint lookup from registry."""
+    def _rebuild_argument_hints(self, entries: list[Any] | None = None) -> None:
+        """Rebuild the command-name -> argument-hint lookup from registry (including aliases)."""
         from talkops.ui.command_registry import get_all_entries
 
-        self._argument_hints = {
-            entry.name.removeprefix("/"): entry.argument_hint
-            for entry in get_all_entries()
-            if entry.argument_hint
-        }
+        source_entries = entries if entries is not None else get_all_entries()
+        hints: dict[str, str] = {}
+        for entry in source_entries:
+            hint = getattr(entry, "argument_hint", "")
+            if not hint:
+                continue
+            hints[entry.name.removeprefix("/")] = hint
+            display_name = getattr(entry, "display_name", "")
+            if display_name:
+                hints[display_name.removeprefix("/")] = hint
+            for alias in getattr(entry, "aliases", ()):
+                hints[alias.removeprefix("/")] = hint
+        self._argument_hints = hints
 
     def _update_argument_hint(self) -> None:
         """Show or clear inline ghost text for slash-command argument hints."""
@@ -2180,7 +2228,7 @@ class ChatInput(Widget):
         content = self._pasted_full_text if self._pasted_full_text else self.text.strip()
         self._pasted_full_text = None
 
-        if content:
+        if content and self.mode != "command":
             content = self._replace_submitted_paths_with_images(content)
 
         if not content and not self.has_attached_media():

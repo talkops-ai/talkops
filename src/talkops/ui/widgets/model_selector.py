@@ -20,7 +20,7 @@ import asyncio
 from typing import Any, ClassVar
 
 from textual.binding import Binding, BindingType
-from textual.containers import Container, Vertical, VerticalScroll
+from textual.containers import Container, VerticalScroll
 from textual.content import Content
 from textual.css.query import NoMatches
 from textual.events import Click
@@ -44,7 +44,7 @@ from talkops.model.config import (
     load_recent_models,
     save_default_model,
 )
-from talkops.ui.widgets.modal_base import ModalDialog, OpsModalScreen
+from talkops.ui.widgets.modal_base import OpsModalScreen
 from talkops.ui.widgets.modal_base import escape_markup as escape
 from talkops.utils.logger import get_logger
 

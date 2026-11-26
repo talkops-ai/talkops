@@ -136,6 +136,22 @@ def _parse_subagent_file(file_path: Path, *, fallback_name: str | None = None) -
 parse_subagent_file = _parse_subagent_file
 
 
+_RESERVED_DOT_AGENTS_SUBDIRS: frozenset[str] = frozenset(
+    {"skills", "commands", "plugins", "hooks", "workflows", "memory", ".git", ".data", ".state", "agents"}
+)
+
+
+def _first_existing_mcp_file(directory: Path | None) -> Path | None:
+    """Return the first existing ``.mcp.json`` or ``mcp.json`` file in ``directory``."""
+    if directory is None:
+        return None
+    for name in (".mcp.json", "mcp.json"):
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _scan_subagents_dir(agents_dir: Path, source: str) -> dict[str, SubagentMetadata]:
     """Scan a directory for subagent definitions.
 
@@ -151,19 +167,18 @@ def _scan_subagents_dir(agents_dir: Path, source: str) -> dict[str, SubagentMeta
         return subagents
 
     parent_bundle = agents_dir.parent if agents_dir.name == "agents" else None
-    parent_mcp = (
-        parent_bundle / ".mcp.json"
-        if parent_bundle is not None and (parent_bundle / ".mcp.json").is_file()
-        else None
-    )
+    parent_mcp = _first_existing_mcp_file(parent_bundle)
     parent_skills = (
         _discover_local_skill_names(parent_bundle / "skills")
         if parent_bundle is not None and (parent_bundle / "skills").is_dir()
         else []
     )
+    skip_reserved = agents_dir.name in {".agents", ".talkops"}
 
     for entry in agents_dir.iterdir():
         if entry.is_dir():
+            if skip_reserved and entry.name in _RESERVED_DOT_AGENTS_SUBDIRS:
+                continue
             md_file = entry / "AGENTS.md"
             if not md_file.exists():
                 direct_md = entry / f"{entry.name}.md"
@@ -178,8 +193,8 @@ def _scan_subagents_dir(agents_dir: Path, source: str) -> dict[str, SubagentMeta
                 parsed = _parse_subagent_file(md_file, fallback_name=entry.name)
                 if parsed:
                     parsed["source"] = source
-                    bundle_mcp = entry / ".mcp.json"
-                    if bundle_mcp.exists() and "mcp_files" not in parsed and "mcp_config" not in parsed:
+                    bundle_mcp = _first_existing_mcp_file(entry)
+                    if bundle_mcp is not None and "mcp_files" not in parsed and "mcp_config" not in parsed:
                         parsed["mcp_files"] = [str(bundle_mcp)]
                     elif parent_mcp is not None and "mcp_files" not in parsed and "mcp_config" not in parsed:
                         parsed["mcp_files"] = [str(parent_mcp)]
@@ -266,9 +281,7 @@ def list_subagents(
 
     # 3. Project subagents (highest precedence: override user and plugin subagents)
     proj_dirs: list[Path] = []
-    if project_agents_dir is not None:
-        proj_dirs.append(project_agents_dir)
-    elif project_root is not None:
+    if project_root is not None:
         for candidate in (
             project_root / "agents",
             project_root / ".agents",
@@ -277,6 +290,8 @@ def list_subagents(
         ):
             if candidate.is_dir() and candidate not in proj_dirs:
                 proj_dirs.append(candidate)
+    if project_agents_dir is not None and project_agents_dir not in proj_dirs:
+        proj_dirs.append(project_agents_dir)
 
     for proj_dir in proj_dirs:
         if proj_dir.is_dir():

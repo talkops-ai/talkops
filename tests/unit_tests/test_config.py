@@ -764,7 +764,6 @@ def test_load_dotenv_read_project_dotenv_disabled(tmp_path: Path, monkeypatch):
 def test_strip_dotenv_loaded_values(tmp_path: Path, monkeypatch):
     """_strip_dotenv_loaded_values cleans injected keys but retains modified or pre-existing values."""
     from talkops.config.settings import (
-        _dotenv_loaded_values,
         _strip_dotenv_loaded_values,
     )
 

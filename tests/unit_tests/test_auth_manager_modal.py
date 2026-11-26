@@ -200,3 +200,78 @@ async def test_selecting_auto_jev_in_model_selector_prompts_typesafe_auth_not_op
         assert "OpenAI" not in str(top_screen.dialog.border_title)
 
 
+@pytest.mark.asyncio
+async def test_auth_prompt_screen_vertex_ai_saves_all_env_vars(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Verify AuthPromptScreen for google_vertexai renders project/location/api_version inputs and persists env vars."""
+    import os
+
+    from talkops.auth.storage import CompositeCredentialStorage
+    from talkops.ui.widgets.auth import AuthPromptScreen
+
+    env_file = tmp_path / ".env"
+    auth_file = tmp_path / "auth.json"
+    storage = CompositeCredentialStorage(auth_file_path=auth_file, env_file_path=env_file)
+    monkeypatch.setattr("talkops.auth.storage.get_credential_storage", lambda: storage)
+    monkeypatch.setattr("talkops.ui.widgets.auth.upsert_env_vars", lambda d: storage.set_provider_key("google_vertexai", d.get("VERTEXAI_API_KEY") or d.get("GOOGLE_CLOUD_PROJECT", ""), extra_env=d, sync_dotenv=True))
+
+    for k in (
+        "VERTEXAI_API_KEY",
+        "GOOGLE_VERTEXAI_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEXAI_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "VERTEXAI_LOCATION",
+        "VERTEXAI_API_VERSION",
+        "GOOGLE_CLOUD_QUOTA_PROJECT",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    screen = AuthPromptScreen(provider="google_vertexai")
+    app = DummyAuthPromptApp(screen)
+
+    async with app.run_test() as pilot:
+        key_inp = screen.query_one("#auth-prompt-input", Input)
+        proj_inp = screen.query_one("#auth-prompt-vertex-project", Input)
+        loc_inp = screen.query_one("#auth-prompt-vertex-location", Input)
+        ver_inp = screen.query_one("#auth-prompt-vertex-api-version", Input)
+        quota_inp = screen.query_one("#auth-prompt-vertex-quota-project", Input)
+
+        assert key_inp.display is True
+        assert proj_inp.display is True
+        assert loc_inp.display is True
+        assert loc_inp.value == "global"
+        assert ver_inp.display is False
+        assert quota_inp.display is False
+
+        # Toggle F2 Advanced
+        screen.action_toggle_advanced()
+        await pilot.pause()
+        assert ver_inp.display is True
+        assert quota_inp.display is True
+
+        key_inp.value = "AQ.test-vertex-key-123"
+        proj_inp.value = "otel-demo-499213"
+        loc_inp.value = "global"
+        ver_inp.value = "v1"
+        quota_inp.value = "otel-demo-499213"
+
+        screen.action_save()
+        await pilot.pause()
+
+    assert os.environ.get("VERTEXAI_API_KEY") == "AQ.test-vertex-key-123"
+    assert os.environ.get("GOOGLE_CLOUD_PROJECT") == "otel-demo-499213"
+    assert os.environ.get("VERTEXAI_PROJECT") == "otel-demo-499213"
+    assert os.environ.get("GOOGLE_CLOUD_LOCATION") == "global"
+    assert os.environ.get("VERTEXAI_LOCATION") == "global"
+    assert os.environ.get("VERTEXAI_API_VERSION") == "v1"
+    assert os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT") == "otel-demo-499213"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "GOOGLE_CLOUD_PROJECT=otel-demo-499213" in env_text
+    assert "GOOGLE_CLOUD_LOCATION=global" in env_text
+    assert "VERTEXAI_API_KEY=AQ.test-vertex-key-123" in env_text
+    assert "VERTEXAI_API_VERSION=v1" in env_text
+
+
+

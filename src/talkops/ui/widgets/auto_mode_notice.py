@@ -24,15 +24,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar
 
 from textual.binding import Binding, BindingType
-from textual.containers import Vertical
-from textual.screen import ModalScreen
 from textual.widgets import Markdown, Static
 
 from talkops.ui.widgets._links import open_checked_url_async
-from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.ui.widgets.modal_base import ModalBodyScroll, OpsModalScreen
 
 if TYPE_CHECKING:
-    from textual.app import ComposeResult
+    pass
 
 AUTO_MODE_DOCS_URL = (
     "https://docs.langchain.com/oss/python/deepagents/code/approval-modes"
@@ -111,11 +109,12 @@ class AutoModeNoticeScreen(OpsModalScreen[bool]):
             classes="auto-mode-notice-title",
             markup=False,
         )
-        yield Markdown(
-            self._body,
-            classes="auto-mode-notice-body",
-            open_links=False,
-        )
+        with ModalBodyScroll(notice=True):
+            yield Markdown(
+                self._body,
+                classes="auto-mode-notice-body",
+                open_links=False,
+            )
         yield Static(
             "Enter to keep Auto · Esc for Manual",
             classes="auto-mode-notice-help",

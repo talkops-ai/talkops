@@ -16,11 +16,9 @@
 
 from __future__ import annotations
 
-import logging
 import sys
-from pathlib import Path
 
-from talkops.config.paths import DATA_DIR, ensure_agent_dir, user_agent_md
+from talkops.config.paths import ensure_agent_dir, user_agent_md
 from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)

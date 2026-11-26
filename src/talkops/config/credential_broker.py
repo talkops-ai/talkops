@@ -38,10 +38,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
 from talkops.config.cloud_discovery import (
@@ -49,7 +46,6 @@ from talkops.config.cloud_discovery import (
     CloudExecutionMode,
     CloudProviderType,
     CloudTargetContext,
-    LocalCloudDiscoveryService,
 )
 from talkops.utils.logger import get_logger
 

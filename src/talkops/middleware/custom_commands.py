@@ -42,7 +42,6 @@ from langchain.agents.middleware.types import (
     ModelResponse,
 )
 from langchain_core.messages import SystemMessage, ToolMessage
-from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import BaseModel, ConfigDict, Field
@@ -363,6 +362,9 @@ class CustomCommandsMiddleware(AgentMiddleware):
                 "effort": effort_override,
                 "execution_context": exec_ctx,
                 "agent": req.get("agent"),
+                "is_agent_plugin": bool(req.get("is_agent_plugin")),
+                "plugin_id": req.get("plugin_id"),
+                "command_prompt": req.get("custom_command_prompt"),
                 "base_dir": req.get("base_dir"),
             }
 
@@ -383,10 +385,78 @@ class CustomCommandsMiddleware(AgentMiddleware):
                 "_forked_command_turn": exec_ctx == "fork",
             }
 
+        # Headless / server raw slash-command message fallback for agent-plugin shortcuts:
+        # e.g. `HumanMessage(content="/kubernetes-delivery-engineer:deploy payments-api")`
+        msgs = list(state.get("messages") or [])
+        if msgs:
+            last_msg = msgs[-1]
+            last_role = (
+                str(last_msg.get("role", last_msg.get("type", ""))).lower()
+                if isinstance(last_msg, Mapping)
+                else str(getattr(last_msg, "type", "")).lower()
+            )
+            raw_content = (
+                last_msg.get("content", "")
+                if isinstance(last_msg, Mapping)
+                else getattr(last_msg, "content", "")
+            )
+            last_text = raw_content.strip() if isinstance(raw_content, str) else ""
+            if last_role in {"human", "user"} and last_text.startswith("/") and len(last_text) > 1:
+                first_tok, _, rest_args = last_text[1:].partition(" ")
+                all_cmds = discover_custom_commands(
+                    cwd=self.cwd,
+                    project_root=self.project_root,
+                    include_conditional=True,
+                )
+                by_name: dict[str, CustomCommandDefinition] = {}
+                for c in all_cmds:
+                    by_name[c.name] = c
+                    for alias in c.aliases:
+                        by_name.setdefault(alias, c)
+                resolved_pair = resolve_command_with_colon_fallback(
+                    first_tok.strip(),
+                    rest_args.strip(),
+                    by_name.get,
+                )
+                if resolved_pair is not None:
+                    matched_cmd, rem_args = resolved_pair
+                    if matched_cmd.is_agent_plugin and matched_cmd.frontmatter.agent:
+                        expanded = expand_custom_command_prompt(
+                            matched_cmd,
+                            rem_args,
+                            cwd=self.cwd,
+                            project_dir=self.project_root,
+                        )
+                        rendered = f"{expanded.xml_command_message}\n\n{expanded.expanded_prompt}"
+                        return {
+                            "_active_command_permissions": {
+                                "command_name": matched_cmd.name,
+                                "allowed_tools": list(
+                                    dict.fromkeys([*session_allowed, *matched_cmd.allowed_tools])
+                                ),
+                                "disallowed_tools": list(matched_cmd.disallowed_tools),
+                                "model": resolve_command_model_spec(matched_cmd.frontmatter.model),
+                                "effort": matched_cmd.frontmatter.effort,
+                                "execution_context": matched_cmd.execution_context,
+                                "agent": matched_cmd.frontmatter.agent,
+                                "is_agent_plugin": True,
+                                "plugin_id": matched_cmd.plugin_id,
+                                "command_prompt": rendered,
+                                "base_dir": str(matched_cmd.base_dir),
+                            },
+                            "_forked_command_turn": False,
+                        }
+
         # Normal user turn:
         # Clear turn-scoped `disallowed_tools`, `model`, `effort`, and `_forked_command_turn`
         # while preserving session-level `allowed_tools` in `command_permissions`.
-        if existing_perms.get("disallowed_tools") or existing_perms.get("model") or existing_perms.get("effort") is not None or state.get("_forked_command_turn"):
+        if (
+            existing_perms.get("disallowed_tools")
+            or existing_perms.get("model")
+            or existing_perms.get("effort") is not None
+            or existing_perms.get("is_agent_plugin")
+            or state.get("_forked_command_turn")
+        ):
             cleaned_perms = {
                 "command_name": existing_perms.get("command_name", ""),
                 "allowed_tools": session_allowed,
@@ -395,6 +465,9 @@ class CustomCommandsMiddleware(AgentMiddleware):
                 "effort": None,
                 "execution_context": "inline",
                 "agent": None,
+                "is_agent_plugin": False,
+                "plugin_id": None,
+                "command_prompt": None,
                 "base_dir": existing_perms.get("base_dir"),
             }
             return {

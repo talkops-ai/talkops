@@ -20,12 +20,11 @@ Displays operation status, elapsed timer, live log stream, and cancellation cont
 from __future__ import annotations
 
 import time
-from typing import Any, ClassVar
+from typing import Any
 
 from rich.text import Text
 from textual import on
-from textual.binding import Binding
-from textual.containers import Container, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Button, Static

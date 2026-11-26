@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from textual.app import App
-    from textual.selection import Selection
 
 logger = get_logger(__name__)
 

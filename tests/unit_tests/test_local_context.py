@@ -13,7 +13,6 @@
 # limitations under the License.
 
 """Unit tests for LocalContextMiddleware, detection script generation, and context injection."""
-import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -44,6 +43,9 @@ def test_build_detect_script_content():
     assert "cdk.json" in script
     assert "serverless.yml" in script
     assert "pyproject.toml" in script
+    assert "**Files**" in script
+    assert "**Tree** (3 levels):" in script
+    assert "**Makefile**" in script
 
     # Ensure hardcoded local devops tools and package managers are NOT probed
     assert "command -v kubectl" not in script

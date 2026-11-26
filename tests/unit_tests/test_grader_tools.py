@@ -17,8 +17,6 @@
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from talkops.rubrics.evaluator import _create_rubric_grader_tools
 
 

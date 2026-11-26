@@ -16,7 +16,6 @@
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 from tests.evals.evaluators.output_evaluator import evaluate_output_patterns

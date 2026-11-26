@@ -39,9 +39,12 @@ class EffortSelectorScreen(OpsModalScreen[str | None]):
     ]
 
     _EFFORT_DESCRIPTIONS: ClassVar[dict[str, str]] = {
+        "minimal": "Ultra-fast responses, minimal deliberation",
         "low": "Fast responses, minimal thinking tokens",
         "medium": "Balanced reasoning depth and speed",
-        "high": "Maximum thinking budget and depth",
+        "high": "Deep thinking budget and reasoning depth",
+        "xhigh": "Extended maximum thinking depth",
+        "max": "Maximum thinking budget and depth",
         "off": "Disable explicit reasoning effort",
     }
 

@@ -32,7 +32,6 @@ Covers:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import os
 import sys
@@ -41,7 +40,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import ToolException, tool
 
 from talkops.cli.commands.mcp import run_mcp_command
 from talkops.config.adapters.sqlite import SqliteConfigAdapter
@@ -51,7 +49,7 @@ from talkops.mcp.config import (
     resolve_mcp_server_env,
     sync_mcp_env_aliases,
 )
-from talkops.mcp.discovery import MCPDiscovery, discover_mcp_configs
+from talkops.mcp.discovery import MCPDiscovery
 from talkops.mcp.mcp_info import MCPServerInfo, MCPToolInfo
 from talkops.mcp.preload import (
     _mcp_tool_name,
@@ -63,7 +61,7 @@ from talkops.mcp.preload import (
     probe_one_mcp_server,
 )
 from talkops.mcp.raw_config import export_raw_mcp_config, import_raw_mcp_config
-from talkops.mcp.semantic_profiler import MCPSemanticProfiler, ToolSafetyProfile
+from talkops.mcp.semantic_profiler import MCPSemanticProfiler
 from talkops.mcp.session_manager import (
     MCPSessionManager,
     _build_cached_mcp_tool,
@@ -71,12 +69,10 @@ from talkops.mcp.session_manager import (
     _enhance_mcp_error_diagnostics,
     _is_transient_session_error,
     _normalize_mcp_arguments,
-    create_mcp_connection,
 )
 from talkops.middleware.headless_mcp_guard import (
     HeadlessMCPGuardMiddleware,
     gated_mcp_tool_names,
-    mcp_tool_is_coherently_read_only,
 )
 from talkops.middleware.mcp_context import (
     MCPContextMiddleware,
@@ -1269,6 +1265,7 @@ def test_tool_filter_middleware_call_mcp_tool_validation() -> None:
 def test_main_coordinator_call_mcp_tool_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify lazy MCP tools & call_mcp_tool across main coordinator HITL, HeadlessGuard, AutoMode, Jev, and ServerHooks."""
     from pathlib import Path as _Path
+
     from langgraph.prebuilt.tool_node import ToolCallRequest
 
     import talkops.mcp.preload as mcp_preload
@@ -1277,7 +1274,6 @@ def test_main_coordinator_call_mcp_tool_integration(tmp_path: Path, monkeypatch:
     from talkops.middleware.auto_mode_hitl import _deterministic_allow
     from talkops.middleware.headless_mcp_guard import (
         HeadlessMCPGuardMiddleware,
-        gated_mcp_tool_names,
     )
     from talkops.middleware.server_hooks import _tool_call_data_from_call
     from talkops.security.jev_classifier import JevSecurityClassifier
@@ -1443,11 +1439,11 @@ async def test_call_mcp_tool_json_string_arguments_and_schema_hints(
         {
             "server_name": "subagent__reverse-engineer__rea",
             "tool_name": "open_binary",
-            "arguments": '{"path": "/Users/structbinary/.local/bin/agy"}',
+            "arguments": '{"path": "/usr/local/bin/sample-app"}',
         }
     )
     assert "ok" in str(res1)
-    mock_session.call_tool.assert_awaited_with("open_binary", {"path": "/Users/structbinary/.local/bin/agy"})
+    mock_session.call_tool.assert_awaited_with("open_binary", {"path": "/usr/local/bin/sample-app"})
 
     # 2. Empty JSON string "{}" for binary_session and prefixed tool_name ("rea_binary_session")
     res2 = await dispatcher.ainvoke(
@@ -1499,12 +1495,12 @@ async def test_call_mcp_tool_json_string_arguments_and_schema_hints(
         {
             "server_name": "subagent__reverse-engineer__rea",
             "tool_name": "open_binary",
-            "arguments": '{"path": "/Users/structbinary/.local/bin/agy"}',
+            "arguments": '{"path": "/usr/local/bin/sample-app"}',
         },
     )
     assert parts.name == "OpenBinary"
     assert parts.scope == "reverse-engineer"
-    assert "agy" in parts.detail
+    assert "sample-app" in parts.detail
 
 
 

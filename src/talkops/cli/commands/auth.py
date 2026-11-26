@@ -253,9 +253,13 @@ def setup_auth_parser(
         help="Store an API key for a model provider (or 'talkops' for Control Plane).",
     )
     add_output_args(set_p)
-    set_p.add_argument("provider", help="Provider name (e.g. anthropic, openai, google_genai, talkops).")
+    set_p.add_argument("provider", help="Provider name (e.g. anthropic, openai, google_genai, google_vertexai, talkops).")
     set_p.add_argument("api_key_value", nargs="?", default=None, help="API key value (prompts if omitted).")
     set_p.add_argument("--base-url", dest="base_url", default=None, help="Optional custom base URL.")
+    set_p.add_argument("--project", dest="project", default=None, help="Optional GCP Project ID (sets GOOGLE_CLOUD_PROJECT for Vertex AI).")
+    set_p.add_argument("--location", dest="location", default=None, help="Optional GCP Location/Region (sets GOOGLE_CLOUD_LOCATION, default: global).")
+    set_p.add_argument("--api-version", dest="api_version", default=None, help="Optional API version override (sets VERTEXAI_API_VERSION, default: v1).")
+    set_p.add_argument("--quota-project", dest="quota_project", default=None, help="Optional GCP Quota Project ID (sets GOOGLE_CLOUD_QUOTA_PROJECT).")
 
     # talkops auth remove <provider>
     rem_p = auth_sub.add_parser(
@@ -858,14 +862,29 @@ def run_auth_set_command(
     )
     api_key = getattr(args, "api_key_value", None)
     base_url = getattr(args, "base_url", None)
+    project = (getattr(args, "project", None) or "").strip() or None
+    location = (getattr(args, "location", None) or "").strip() or None
+    api_version = (getattr(args, "api_version", None) or "").strip() or None
+    quota_project = (getattr(args, "quota_project", None) or "").strip() or None
+    is_vertex = provider in {"google_vertexai", "google_anthropic_vertex"}
 
-    if not api_key and not (provider == "ollama" and base_url) and sys.stdin.isatty() and output_format != "json":
+    if (
+        not api_key
+        and not (provider == "ollama" and base_url)
+        and not (is_vertex and project)
+        and sys.stdin.isatty()
+        and output_format != "json"
+    ):
         try:
             api_key = getpass.getpass(f"Enter API key for {provider}: ").strip()
         except (EOFError, KeyboardInterrupt):
             return 1
 
-    if not api_key and not (provider == "ollama" and base_url):
+    if is_vertex and api_key and not str(api_key).strip().startswith(("AQ.", "AIza")) and not project:
+        project = str(api_key).strip()
+        api_key = None
+
+    if not api_key and not (provider == "ollama" and base_url) and not (is_vertex and project):
         err = f"API key value is required for provider '{provider}'."
         if output_format == "json":
             write_json("auth set", {"saved": False, "provider": provider, "error": err})
@@ -883,8 +902,37 @@ def run_auth_set_command(
         )
         return run_auth_login_command(login_ns, output_format=output_format)
 
+    extra_env: dict[str, str] = {}
+    if is_vertex:
+        if project:
+            extra_env["GOOGLE_CLOUD_PROJECT"] = project
+            extra_env["VERTEXAI_PROJECT"] = project
+        loc_val = location or "global"
+        extra_env["GOOGLE_CLOUD_LOCATION"] = loc_val
+        extra_env["VERTEXAI_LOCATION"] = loc_val
+        extra_env["VERTEXAI_API_VERSION"] = api_version or "v1"
+        effective_quota_proj = quota_project or project
+        if effective_quota_proj:
+            extra_env["GOOGLE_CLOUD_QUOTA_PROJECT"] = effective_quota_proj
+        if api_key and str(api_key).strip().startswith(("AQ.", "AIza")):
+            extra_env["VERTEXAI_API_KEY"] = str(api_key).strip()
+            extra_env["GOOGLE_VERTEXAI_API_KEY"] = str(api_key).strip()
+
     storage = get_credential_storage()
-    ok = storage.set_provider_key(provider, api_key or "", base_url=base_url, sync_dotenv=True)
+    primary_val = api_key or (project if is_vertex else "") or ""
+    primary_env = (
+        "VERTEXAI_API_KEY"
+        if (is_vertex and api_key and str(api_key).strip().startswith(("AQ.", "AIza")))
+        else ("GOOGLE_CLOUD_PROJECT" if (is_vertex and not api_key and project) else None)
+    )
+    ok = storage.set_provider_key(
+        provider,
+        primary_val,
+        env_var=primary_env,
+        base_url=base_url,
+        extra_env=extra_env or None,
+        sync_dotenv=True,
+    )
     if output_format == "json":
         write_json(
             "auth set",
@@ -892,13 +940,15 @@ def run_auth_set_command(
                 "saved": ok,
                 "provider": provider,
                 "key_prefix": mask_api_key(api_key) if api_key else None,
+                "project": project,
+                "location": extra_env.get("GOOGLE_CLOUD_LOCATION") if is_vertex else None,
                 "base_url": base_url,
             },
         )
         return 0 if ok else 1
 
     if ok:
-        suffix = f" ({mask_api_key(api_key)})" if api_key else ""
+        suffix = f" ({mask_api_key(api_key)})" if api_key else (f" (project={project})" if project else "")
         Console().print(
             f"[bold green]Saved credentials for {provider}{suffix}.[/bold green]"
         )

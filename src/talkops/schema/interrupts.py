@@ -46,7 +46,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    TypeAdapter,
 )
 from typing_extensions import TypedDict
 

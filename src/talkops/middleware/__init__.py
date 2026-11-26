@@ -36,6 +36,7 @@ if TYPE_CHECKING:
         AsyncExecuteSchema,
         BackgroundCommandMiddleware,
     )
+    from talkops.middleware.browser import TalkOpsBrowserMiddleware
     from talkops.middleware.btw import (
         BTW_PROMPT_PREFIX,
         BTW_TIMEOUT_SECONDS,
@@ -75,9 +76,20 @@ if TYPE_CHECKING:
     from talkops.middleware.jev_model_router import JevDynamicModelRouterMiddleware
     from talkops.middleware.local_context import LocalContextMiddleware
     from talkops.middleware.mcp_context import MCPContextMiddleware
-    from talkops.middleware.mcp_middleware import MCPToolMiddleware, normalize_mcp_arguments
+    from talkops.middleware.mcp_middleware import (
+        MCPToolMiddleware,
+        normalize_mcp_arguments,
+    )
     from talkops.middleware.memory_guard import ManagedMemoryGuardMiddleware
     from talkops.middleware.model_retry import CodeModelRetryMiddleware
+    from talkops.middleware.plugin_hooks import (
+        PluginCommandHook,
+        PluginHooksMiddleware,
+        PluginHooksSpec,
+        PluginPermissionDenyRule,
+        load_plugin_hooks_spec,
+        merge_plugin_hooks_specs,
+    )
     from talkops.middleware.registry import (
         BaseAgentMiddleware,
         MiddlewareRegistry,
@@ -109,6 +121,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "BACKGROUND_TASK_NOTIFICATION_SOURCE": ("talkops.middleware.background_commands", "BACKGROUND_TASK_NOTIFICATION_SOURCE"),
     "AsyncExecuteSchema": ("talkops.middleware.background_commands", "AsyncExecuteSchema"),
     "BackgroundCommandMiddleware": ("talkops.middleware.background_commands", "BackgroundCommandMiddleware"),
+    "TalkOpsBrowserMiddleware": ("talkops.middleware.browser", "TalkOpsBrowserMiddleware"),
     "BTW_PROMPT_PREFIX": ("talkops.middleware.btw", "BTW_PROMPT_PREFIX"),
     "BTW_TIMEOUT_SECONDS": ("talkops.middleware.btw", "BTW_TIMEOUT_SECONDS"),
     "BtwSideQuestionMiddleware": ("talkops.middleware.btw", "BtwSideQuestionMiddleware"),
@@ -142,6 +155,12 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "normalize_mcp_arguments": ("talkops.middleware.mcp_middleware", "normalize_mcp_arguments"),
     "ManagedMemoryGuardMiddleware": ("talkops.middleware.memory_guard", "ManagedMemoryGuardMiddleware"),
     "CodeModelRetryMiddleware": ("talkops.middleware.model_retry", "CodeModelRetryMiddleware"),
+    "PluginCommandHook": ("talkops.middleware.plugin_hooks", "PluginCommandHook"),
+    "PluginHooksMiddleware": ("talkops.middleware.plugin_hooks", "PluginHooksMiddleware"),
+    "PluginHooksSpec": ("talkops.middleware.plugin_hooks", "PluginHooksSpec"),
+    "PluginPermissionDenyRule": ("talkops.middleware.plugin_hooks", "PluginPermissionDenyRule"),
+    "load_plugin_hooks_spec": ("talkops.middleware.plugin_hooks", "load_plugin_hooks_spec"),
+    "merge_plugin_hooks_specs": ("talkops.middleware.plugin_hooks", "merge_plugin_hooks_specs"),
     "BaseAgentMiddleware": ("talkops.middleware.registry", "BaseAgentMiddleware"),
     "MiddlewareRegistry": ("talkops.middleware.registry", "MiddlewareRegistry"),
     "get_middleware_registry": ("talkops.middleware.registry", "get_middleware_registry"),
@@ -215,6 +234,12 @@ __all__ = [
     "normalize_mcp_arguments",
     "ManagedMemoryGuardMiddleware",
     "CodeModelRetryMiddleware",
+    "PluginCommandHook",
+    "PluginHooksMiddleware",
+    "PluginHooksSpec",
+    "PluginPermissionDenyRule",
+    "load_plugin_hooks_spec",
+    "merge_plugin_hooks_specs",
     "ServerHooksMiddleware",
     "ServerHooksState",
     "ShellAllowListMiddleware",
@@ -232,4 +257,5 @@ __all__ = [
     "BACKGROUND_EXEC_SYSTEM_INSTRUCTIONS",
     "BACKGROUND_TASK_NOTIFICATION_SOURCE",
     "BackgroundCommandMiddleware",
+    "TalkOpsBrowserMiddleware",
 ]

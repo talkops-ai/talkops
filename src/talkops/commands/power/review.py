@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 
 from talkops.commands._base import BaseCommandHandler, CommandContext, CommandResult
@@ -103,7 +104,7 @@ class ReviewHandler(BaseCommandHandler):
         staged_only = "--staged" in args
         path_arg = args.replace("--staged", "").strip() or None
 
-        diff = _get_diff(path=path_arg, staged_only=staged_only)
+        diff = await asyncio.to_thread(_get_diff, path=path_arg, staged_only=staged_only)
         if diff is None:
             return CommandResult(
                 success=False,

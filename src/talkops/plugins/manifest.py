@@ -25,7 +25,11 @@ from talkops.plugins.models import (
     ComponentInventory,
     JsonObject,
     PluginManifest,
+    PluginPoliciesSpec,
+    PluginRubricsSpec,
+    PluginWorkflowsSpec,
     UnsupportedComponent,
+    normalize_execution_profile,
 )
 from talkops.utils.logger import get_logger
 
@@ -38,8 +42,8 @@ _MANIFEST_RELATIVE_PATHS = (
     Path(".codex-plugin") / "plugin.json",
     Path("plugin.json"),
 )
-_PATH_COMPONENT_FIELDS = {"skills", "mcpServers", "agents", "commands"}
-_UNSUPPORTED_COMPONENT_DIRS: tuple[UnsupportedComponent, ...] = ("hooks",)
+_PATH_COMPONENT_FIELDS = {"skills", "mcpServers", "agents", "commands", "hooks"}
+_UNSUPPORTED_COMPONENT_DIRS: tuple[UnsupportedComponent, ...] = ()
 _NAME_RE = re.compile(r"^[^\s]+$")
 
 
@@ -170,7 +174,7 @@ def load_manifest(
         declaration = raw.get(field_name)
         if declaration is None:
             continue
-        if field_name == "mcpServers" and isinstance(declaration, dict):
+        if field_name in {"mcpServers", "hooks"} and isinstance(declaration, dict):
             continue
         paths = _resolve_component_paths(declaration, root, field_name, warnings)
         if paths:
@@ -178,18 +182,140 @@ def load_manifest(
 
     version_value = raw.get("version")
     version = version_value if isinstance(version_value, str) else "1.0.0"
+    raw_schema_version = raw.get("schemaVersion") or raw.get("schema_version")
+    schema_version = str(raw_schema_version).strip() if isinstance(raw_schema_version, (str, int, float)) else "1.0"
     display_name_value = raw.get("displayName") or raw.get("display_name")
     description_value = raw.get("description")
     author_value = raw.get("author")
 
+    raw_envs = raw.get("environments")
+    environments: tuple[str, ...] = ()
+    if isinstance(raw_envs, list):
+        environments = tuple(str(item).strip() for item in raw_envs if isinstance(item, str) and item.strip())
+
+    # Resolve optional MCP schema lockfile (Plugin Manifest v2.1 — OWASP MCP03)
+    mcp_lockfile: Path | None = None
+    raw_lockfile = raw.get("mcpLockfile") or raw.get("mcp_lockfile")
+    if isinstance(raw_lockfile, str):
+        mcp_lockfile = _resolve_component_path(raw_lockfile, root, "mcpLockfile", warnings)
+    elif raw_lockfile is not None:
+        warnings.append("ignoring mcpLockfile: expected './' relative path string")
+    elif (root / "mcp.lock.json").is_file():
+        mcp_lockfile = (root / "mcp.lock.json").resolve()
+
+    # Resolve typed workflows (preflight, postRemediation, scheduled)
+    workflows_spec = PluginWorkflowsSpec()
+    raw_workflows = raw.get("workflows")
+    if isinstance(raw_workflows, dict):
+        wf_pre = raw_workflows.get("preflight")
+        wf_post = raw_workflows.get("postRemediation") or raw_workflows.get("post_remediation")
+        wf_sched = raw_workflows.get("scheduled")
+        workflows_spec = PluginWorkflowsSpec(
+            preflight=_resolve_component_path(wf_pre, root, "workflows.preflight", warnings)
+            if isinstance(wf_pre, str)
+            else None,
+            post_remediation=_resolve_component_path(wf_post, root, "workflows.postRemediation", warnings)
+            if isinstance(wf_post, str)
+            else None,
+            scheduled=_resolve_component_path(wf_sched, root, "workflows.scheduled", warnings)
+            if isinstance(wf_sched, str)
+            else None,
+        )
+    elif raw_workflows is not None:
+        warnings.append("ignoring workflows: expected JSON object with preflight/postRemediation/scheduled")
+
+    # Resolve two-stage AutoQA rubrics (deterministicGates, scorecard)
+    rubrics_spec = PluginRubricsSpec()
+    raw_rubrics = raw.get("rubrics")
+    if isinstance(raw_rubrics, dict):
+        rub_gates = (
+            raw_rubrics.get("deterministicGates")
+            or raw_rubrics.get("deterministic_gates")
+            or raw_rubrics.get("gates")
+        )
+        rub_card = raw_rubrics.get("scorecard")
+        rubrics_spec = PluginRubricsSpec(
+            deterministic_gates=_resolve_component_path(rub_gates, root, "rubrics.deterministicGates", warnings)
+            if isinstance(rub_gates, str)
+            else None,
+            scorecard=_resolve_component_path(rub_card, root, "rubrics.scorecard", warnings)
+            if isinstance(rub_card, str)
+            else None,
+        )
+    elif raw_rubrics is not None:
+        warnings.append("ignoring rubrics: expected JSON object with deterministicGates/scorecard")
+
+    # Resolve graduated execution trust policies & scope boundaries
+    policies_spec = PluginPoliciesSpec()
+    raw_policies = raw.get("policies")
+    if isinstance(raw_policies, dict):
+        raw_prof = (
+            raw_policies.get("defaultExecutionProfile")
+            or raw_policies.get("default_execution_profile")
+            or raw_policies.get("executionProfile")
+            or raw_policies.get("execution_profile")
+        )
+        prof = normalize_execution_profile(raw_prof if isinstance(raw_prof, str) else None)
+        meta_only_raw = raw_policies.get(
+            "metadataOnlyDatastores",
+            raw_policies.get("metadata_only_datastores", prof == "readonly-metadata"),
+        )
+        raw_egress = raw_policies.get("egressAllowlist") or raw_policies.get("egress_allowlist")
+        egress_tuple: tuple[str, ...] = ()
+        if isinstance(raw_egress, list):
+            egress_tuple = tuple(str(h).strip() for h in raw_egress if isinstance(h, str) and h.strip())
+        pol_scope = raw_policies.get("scopeGuards") or raw_policies.get("scope_guards")
+        pol_check = raw_policies.get("companionChecklists") or raw_policies.get("companion_checklists")
+        pol_esc = raw_policies.get("escalationRules") or raw_policies.get("escalation_rules")
+        policies_spec = PluginPoliciesSpec(
+            default_execution_profile=prof,
+            metadata_only_datastores=bool(meta_only_raw) or prof == "readonly-metadata",
+            egress_allowlist=egress_tuple,
+            scope_guards=_resolve_component_path(pol_scope, root, "policies.scopeGuards", warnings)
+            if isinstance(pol_scope, str)
+            else None,
+            companion_checklists=_resolve_component_path(pol_check, root, "policies.companionChecklists", warnings)
+            if isinstance(pol_check, str)
+            else None,
+            escalation_rules=_resolve_component_path(pol_esc, root, "policies.escalationRules", warnings)
+            if isinstance(pol_esc, str)
+            else None,
+        )
+    elif raw_policies is not None:
+        warnings.append("ignoring policies: expected JSON object")
+
+    # Resolve synthetic & adversarial simulation suites
+    simulations_paths: tuple[Path, ...] = ()
+    raw_sims = raw.get("simulations")
+    if raw_sims is not None:
+        simulations_paths = _resolve_component_paths(raw_sims, root, "simulations", warnings)
+
     skills_dir = root / "skills" if (root / "skills").is_dir() else None
     agents_dir = root / "agents" if (root / "agents").is_dir() else None
+    disabled = bool(raw.get("disabled", False)) if isinstance(raw.get("disabled"), bool) else False
+    raw_hooks_cfg = raw.get("hooks") if isinstance(raw.get("hooks"), dict) else {}
+    raw_keywords = raw.get("keywords")
+    keywords = (
+        tuple(str(k).strip() for k in raw_keywords if isinstance(k, str) and k.strip())
+        if isinstance(raw_keywords, (list, tuple))
+        else ()
+    )
 
     manifest = PluginManifest(
         name=name,
         version=version,
+        schema_version=schema_version,
+        disabled=disabled,
+        keywords=keywords,
+        environments=environments,
         component_paths=component_paths,
         inline_mcp=_inline_mcp(raw.get("mcpServers")),
+        hooks_config=dict(raw_hooks_cfg),
+        mcp_lockfile=mcp_lockfile,
+        workflows=workflows_spec,
+        rubrics=rubrics_spec,
+        policies=policies_spec,
+        simulations_paths=simulations_paths,
         display_name=(display_name_value if isinstance(display_name_value, str) else None),
         description=(description_value if isinstance(description_value, str) else None),
         author=author_value,
@@ -254,8 +380,50 @@ def build_inventory(
 
     mcp_files = (
         *_existing_component_path(plugin_root / ".mcp.json", plugin_root),
+        *_existing_component_path(plugin_root / "mcp.json", plugin_root),
         *metadata_paths.get("mcpServers", ()),
     )
+
+    declared_hooks: list[Path] = []
+    for hp in metadata_paths.get("hooks", ()):
+        if hp.is_dir():
+            declared_hooks.extend(_existing_component_path(hp / "hooks.json", plugin_root))
+        elif hp.is_file():
+            declared_hooks.extend(_existing_component_path(hp, plugin_root))
+    hooks_files = (
+        *_existing_component_path(plugin_root / "hooks" / "hooks.json", plugin_root),
+        *_existing_component_path(plugin_root / "hooks.json", plugin_root),
+        *declared_hooks,
+    )
+
+    default_sims = _existing_component_path(plugin_root / "simulations", plugin_root)
+    declared_sims: list[Path] = []
+    if manifest and manifest.simulations_paths:
+        for sim_path in manifest.simulations_paths:
+            declared_sims.extend(_existing_component_path(sim_path, plugin_root))
+    simulations = tuple(declared_sims) if declared_sims else default_sims
+
+    workflows_map: dict[str, Path] = {}
+    if manifest:
+        if manifest.workflows.preflight and manifest.workflows.preflight.exists():
+            workflows_map["preflight"] = manifest.workflows.preflight.resolve()
+        if manifest.workflows.post_remediation and manifest.workflows.post_remediation.exists():
+            workflows_map["postRemediation"] = manifest.workflows.post_remediation.resolve()
+        if manifest.workflows.scheduled and manifest.workflows.scheduled.exists():
+            workflows_map["scheduled"] = manifest.workflows.scheduled.resolve()
+
+    rubrics_map: dict[str, Path] = {}
+    if manifest:
+        if manifest.rubrics.deterministic_gates and manifest.rubrics.deterministic_gates.exists():
+            rubrics_map["deterministicGates"] = manifest.rubrics.deterministic_gates.resolve()
+        if manifest.rubrics.scorecard and manifest.rubrics.scorecard.exists():
+            rubrics_map["scorecard"] = manifest.rubrics.scorecard.resolve()
+
+    lockfile_resolved: Path | None = None
+    if manifest and manifest.mcp_lockfile and manifest.mcp_lockfile.is_file():
+        lockfile_resolved = manifest.mcp_lockfile.resolve()
+    elif (plugin_root / "mcp.lock.json").is_file():
+        lockfile_resolved = (plugin_root / "mcp.lock.json").resolve()
 
     unsupported = _unsupported_component_dirs(plugin_root)
 
@@ -264,6 +432,11 @@ def build_inventory(
         mcp_files=tuple(dict.fromkeys(mcp_files)),
         agents=tuple(dict.fromkeys(agents)),
         commands=tuple(dict.fromkeys(commands)),
+        hooks_files=tuple(dict.fromkeys(hooks_files)),
+        simulations=tuple(dict.fromkeys(simulations)),
+        workflows=workflows_map,
+        rubrics=rubrics_map,
+        mcp_lockfile=lockfile_resolved,
         unsupported=unsupported,
         warnings=tuple(warnings),
     )
@@ -298,30 +471,59 @@ def inspect_plugin_components(
 
     # 2. MCP Servers
     mcp_server_names: list[str] = []
-    mcp_file = plugin_root / ".mcp.json"
-    if mcp_file.is_file():
-        try:
-            data = json.loads(mcp_file.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                servers = data.get("mcpServers")
-                if isinstance(servers, dict):
-                    mcp_server_names.extend(servers.keys())
-                elif "mcpServers" not in data:
-                    mcp_server_names.extend(data.keys())
-        except Exception:
-            pass
+    for mcp_candidate in (plugin_root / ".mcp.json", plugin_root / "mcp.json"):
+        if mcp_candidate.is_file():
+            try:
+                data = json.loads(mcp_candidate.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    servers = data.get("mcpServers")
+                    if not isinstance(servers, dict):
+                        servers = data.get("mcp_servers")
+                    if isinstance(servers, dict):
+                        for k in servers:
+                            if k not in mcp_server_names:
+                                mcp_server_names.append(k)
+                    elif "mcpServers" not in data and "mcp_servers" not in data:
+                        for k, v in data.items():
+                            if not str(k).startswith("$") and isinstance(v, dict) and k not in mcp_server_names:
+                                mcp_server_names.append(k)
+            except Exception:
+                pass
 
     if manifest and manifest.inline_mcp:
         for k in manifest.inline_mcp:
             if k not in mcp_server_names:
                 mcp_server_names.append(k)
 
-    # 3. Commands
+    # 3. Commands & Agents
     command_names: list[str] = []
     commands_dir = plugin_root / "commands"
     if commands_dir.is_dir():
         for item in sorted(commands_dir.glob("*.md")):
             command_names.append(item.stem)
+
+    agent_names: list[str] = []
+    agents_dir = plugin_root / "agents"
+    if agents_dir.is_dir():
+        for item in sorted(agents_dir.iterdir()):
+            if item.is_file() and item.suffix == ".md":
+                agent_names.append(item.stem)
+            elif item.is_dir() and (
+                (item / "AGENTS.md").is_file()
+                or (item / f"{item.name}.md").is_file()
+                or any(item.glob("*.md"))
+            ):
+                agent_names.append(item.name)
+    if manifest and manifest.component_paths.get("agents"):
+        for agent_path in manifest.component_paths["agents"]:
+            if agent_path.is_file() and agent_path.suffix == ".md":
+                stem = (
+                    agent_path.parent.name
+                    if agent_path.name.upper() == "AGENTS.MD"
+                    else agent_path.stem
+                )
+                if stem not in agent_names:
+                    agent_names.append(stem)
 
     # 4. Author string normalization
     raw_author = manifest.author if manifest else None
@@ -342,9 +544,17 @@ def inspect_plugin_components(
         "display_name": manifest.display_name if manifest and manifest.display_name else None,
         "description": manifest.description if manifest and manifest.description else None,
         "version": manifest.version if manifest and manifest.version else "1.0.0",
+        "schema_version": manifest.schema_version if manifest else "1.0",
+        "environments": list(manifest.environments) if manifest else [],
+        "execution_profile": manifest.policies.default_execution_profile if manifest else "hitl-gated",
+        "has_mcp_lockfile": bool(
+            (manifest and manifest.mcp_lockfile and manifest.mcp_lockfile.is_file())
+            or (plugin_root / "mcp.lock.json").is_file()
+        ),
         "author": author_str,
         "skill_names": skill_names,
         "skill_count": len(skill_names),
         "mcp_server_names": mcp_server_names,
         "command_names": command_names,
+        "agent_names": agent_names,
     }

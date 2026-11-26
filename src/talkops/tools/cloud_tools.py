@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 from typing import Any, Literal, cast
 
-from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from talkops.config.cloud_discovery import CloudProviderType
@@ -39,15 +38,12 @@ _VALID_PROVIDERS: tuple[CloudProviderType, ...] = ("aws", "azure", "gcp", "k8s")
 @tool
 def cloud_list_contexts(
     provider: Literal["aws", "azure", "gcp", "k8s"] | None = None,
-    config: RunnableConfig | None = None,
 ) -> str:
     """List discovered cloud profiles, subscriptions, projects, Kubernetes contexts, and ambient service roles.
 
     Args:
         provider: Optional filter ('aws', 'azure', 'gcp', 'k8s'). Omit to list all providers.
-        config: Optional LangChain RunnableConfig injected at runtime.
     """
-    del config
     prov_filter: CloudProviderType | None = (
         cast("CloudProviderType", provider.lower())
         if provider and provider.lower() in _VALID_PROVIDERS
@@ -89,7 +85,6 @@ def cloud_switch_context(
     provider: Literal["aws", "azure", "gcp", "k8s"],
     target_id: str,
     region: str | None = None,
-    config: RunnableConfig | None = None,
 ) -> str:
     """Switch the active cloud provider and target context (AWS profile, Azure subscription, GCP config, K8s context, or '@ambient').
 
@@ -97,9 +92,7 @@ def cloud_switch_context(
         provider: Cloud provider ('aws', 'azure', 'gcp', 'k8s').
         target_id: Profile name, subscription ID/name, gcloud config name, kubeconfig context, or '@ambient' / '@in-cluster'.
         region: Optional region, location, or Kubernetes namespace override.
-        config: Optional LangChain RunnableConfig injected at runtime.
     """
-    del config
     prov_norm = provider.lower().strip()
     if prov_norm not in _VALID_PROVIDERS:
         return json.dumps(
@@ -139,15 +132,12 @@ def cloud_switch_context(
 @tool
 def cloud_get_status(
     verify_live: bool = False,
-    config: RunnableConfig | None = None,
 ) -> str:
     """Get the active multi-cloud provider, target, ambient service role status, and execution mode.
 
     Args:
         verify_live: When True, performs a live STS / CLI / metadata identity check.
-        config: Optional LangChain RunnableConfig injected at runtime.
     """
-    del config
     active_prov, active_target, active_region = get_active_cloud_target()
     exec_mode = get_cloud_execution_mode()
     info = get_cloud_target_info(active_prov, active_target)

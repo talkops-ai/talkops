@@ -150,6 +150,44 @@ IMPLICIT_AUTH_PROVIDERS: set[str] = set()
 NO_AUTH_REQUIRED_PROVIDERS: set[str] = {"ollama"}
 OPTIONAL_AUTH_ENV: dict[str, str] = {"ollama": "OLLAMA_API_KEY"}
 
+RETRY_PARAM_BY_PROVIDER: dict[str, str | None] = {
+    "anthropic": "max_retries",
+    "azure_openai": "max_retries",
+    "baseten": "max_retries",
+    "bedrock": "max_retries",
+    "cerebras": "max_retries",
+    "deepseek": "max_retries",
+    "fireworks": "max_retries",
+    "google": "max_retries",
+    "google_anthropic_vertex": "max_retries",
+    "google_genai": "max_retries",
+    "google_vertexai": "max_retries",
+    "groq": "max_retries",
+    "litellm": "max_retries",
+    "meta": "max_retries",
+    "mistralai": "max_retries",
+    "openai": "max_retries",
+    "openai_codex": "max_retries",
+    "openrouter": "max_retries",
+    "perplexity": "max_retries",
+    "sambanova": "max_retries",
+    "together": "max_retries",
+    "typesafe": "max_retries",
+    "xai": "max_retries",
+    "huggingface": None,
+    "ibm": None,
+    "nvidia": None,
+    "ollama": None,
+}
+"""Constructor kwargs used to disable provider-owned SDK retry loops so CodeModelRetryMiddleware owns retry budgets."""
+
+RETRY_DISABLE_VALUE_BY_PROVIDER: dict[str, int] = {
+    "google": 1,
+    "google_genai": 1,
+    "google_vertexai": 1,
+}
+"""Non-zero provider-specific values that disable SDK retries (`google-genai` counts total attempts and coerces 0 to 1)."""
+
 # Snapshot of ambient shell AWS credentials at import time so DevOps CLI env vars
 # (e.g. ~/.zshrc AWS_ACCESS_KEY_ID for `aws` commands) are not mistaken for
 # explicit Amazon Bedrock LLM provider configuration.
@@ -731,7 +769,9 @@ def get_provider_auth_status(provider: str) -> ProviderAuthStatus:
                 env_var="AWS_ACCESS_KEY_ID",
                 detail="Bedrock credentials not explicitly configured",
             )
-        env_lookup = lambda k: os.environ.get(f"TALKOPS_{k}") or os.environ.get(k)
+        def env_lookup(k: str) -> str | None:
+            return os.environ.get(f"TALKOPS_{k}") or os.environ.get(k)
+
         resolved = resolve_env_kwargs(AWS_CREDENTIAL_ENV_SOURCES, lookup=env_lookup)
         has_keys = bool(
             (resolved.get("aws_access_key_id") and resolved.get("aws_secret_access_key"))
@@ -931,21 +971,21 @@ def apply_stored_credentials(provider: str | None = None) -> bool:
 
     if val:
         val_str = str(val).strip()
-        if canon in ("google_vertexai", "google_anthropic_vertex") and _is_google_api_key_value(val_str):
-            os.environ["VERTEXAI_API_KEY"] = val_str
-            os.environ["GOOGLE_VERTEXAI_API_KEY"] = val_str
-            if _is_google_api_key_value(os.environ.get("GOOGLE_CLOUD_PROJECT")):
-                os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+        if canon in ("google_vertexai", "google_anthropic_vertex"):
+            if _is_google_api_key_value(val_str):
+                os.environ["VERTEXAI_API_KEY"] = val_str
+                os.environ["GOOGLE_VERTEXAI_API_KEY"] = val_str
+                if _is_google_api_key_value(os.environ.get("GOOGLE_CLOUD_PROJECT")):
+                    os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+            else:
+                os.environ["GOOGLE_CLOUD_PROJECT"] = val_str
+                os.environ.setdefault("VERTEXAI_PROJECT", val_str)
         else:
             if env_var:
                 os.environ[env_var] = val_str
             if canon in PROVIDER_KEY_ALIASES:
                 for alias in PROVIDER_KEY_ALIASES[canon]:
-                    # Only populate key aliases that are API key vars (do not overwrite GOOGLE_CLOUD_PROJECT with an API key)
-                    if alias not in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "VERTEXAI_PROJECT"):
-                        os.environ[alias] = val_str
-                    elif env_var in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID") and not _is_google_api_key_value(val_str):
-                        os.environ[alias] = val_str
+                    os.environ[alias] = val_str
         applied = True
 
     # Reconcile provider endpoint / base URLs across canonical key, aliases, and storage
@@ -971,10 +1011,23 @@ def apply_stored_credentials(provider: str | None = None) -> bool:
                 os.environ[alias] = str(stored_base_url)
             applied = True
 
+    if stored_entry and isinstance(stored_entry.get("extra_env"), dict):
+        for ext_k, ext_v in stored_entry["extra_env"].items():
+            ext_k_str = str(ext_k).strip()
+            ext_v_str = str(ext_v).strip()
+            if not ext_k_str or not ext_v_str:
+                continue
+            if ext_k_str in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "VERTEXAI_PROJECT") and _is_google_api_key_value(ext_v_str):
+                continue
+            if not os.environ.get(ext_k_str):
+                os.environ[ext_k_str] = ext_v_str
+            applied = True
+
     if canon in ("google_vertexai", "google_anthropic_vertex"):
         proj = (
             resolve_env_var("GOOGLE_CLOUD_PROJECT")
             or resolve_env_var("GCP_PROJECT_ID")
+            or resolve_env_var("VERTEXAI_PROJECT")
             or getattr(settings, "google_cloud_project", None)
         )
         if proj and _is_google_api_key_value(str(proj)):
@@ -989,6 +1042,7 @@ def apply_stored_credentials(provider: str | None = None) -> bool:
             resolve_env_var("GOOGLE_CLOUD_LOCATION")
             or resolve_env_var("GCP_LOCATION")
             or resolve_env_var("CLOUD_ML_REGION")
+            or resolve_env_var("VERTEXAI_LOCATION")
             or getattr(settings, "google_cloud_location", None)
         )
         if loc:
@@ -1459,15 +1513,48 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "tool_calling": True,
         "structured_output": True,
     },
+    "google_genai:gemini-4-carbon": {
+        "name": "Gemini 4 Carbon",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "audio_inputs": True,
+        "pdf_inputs": True,
+        "video_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
     "google_genai:gemini-4-argon": {
         "name": "Gemini 4 Argon",
         "max_input_tokens": 1_048_576,
         "max_output_tokens": 65_536,
         "text_inputs": True,
         "image_inputs": True,
+        "audio_inputs": True,
+        "pdf_inputs": True,
+        "video_inputs": True,
         "reasoning_output": True,
         "reasoning_effort_levels": ["low", "medium", "high"],
         "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "google_genai:gemini-4-hydrogen": {
+        "name": "Gemini 4 Hydrogen",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "audio_inputs": True,
+        "pdf_inputs": True,
+        "video_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high", "xhigh"],
+        "reasoning_effort_default": "high",
         "tool_calling": True,
         "structured_output": True,
     },
@@ -1531,15 +1618,48 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
     },
 
     # Google Vertex AI
+    "google_vertexai:gemini-4-carbon": {
+        "name": "Gemini 4 Carbon (Vertex)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "audio_inputs": True,
+        "pdf_inputs": True,
+        "video_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
     "google_vertexai:gemini-4-argon": {
         "name": "Gemini 4 Argon (Vertex)",
         "max_input_tokens": 1_048_576,
         "max_output_tokens": 65_536,
         "text_inputs": True,
         "image_inputs": True,
+        "audio_inputs": True,
+        "pdf_inputs": True,
+        "video_inputs": True,
         "reasoning_output": True,
         "reasoning_effort_levels": ["low", "medium", "high"],
         "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "google_vertexai:gemini-4-hydrogen": {
+        "name": "Gemini 4 Hydrogen (Vertex)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "audio_inputs": True,
+        "pdf_inputs": True,
+        "video_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high", "xhigh"],
+        "reasoning_effort_default": "high",
         "tool_calling": True,
         "structured_output": True,
     },
@@ -1563,6 +1683,30 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "image_inputs": True,
         "reasoning_output": True,
         "reasoning_effort_levels": ["low", "medium", "high"],
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "google_vertexai:gemini-3.5-flash": {
+        "name": "Gemini 3.5 Flash (Vertex)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["minimal", "low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "google_vertexai:gemini-3.5-flash-lite": {
+        "name": "Gemini 3.5 Flash-Lite (Vertex)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["minimal", "low", "medium", "high"],
+        "reasoning_effort_default": "minimal",
         "tool_calling": True,
         "structured_output": True,
     },
@@ -1846,6 +1990,18 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "tool_calling": True,
         "structured_output": True,
     },
+    "openrouter:google/gemini-4-carbon": {
+        "name": "Gemini 4 Carbon (OpenRouter)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
     "openrouter:google/gemini-4-argon": {
         "name": "Gemini 4 Argon (OpenRouter)",
         "max_input_tokens": 1_048_576,
@@ -1855,6 +2011,18 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "reasoning_output": True,
         "reasoning_effort_levels": ["low", "medium", "high"],
         "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "openrouter:google/gemini-4-hydrogen": {
+        "name": "Gemini 4 Hydrogen (OpenRouter)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high", "xhigh"],
+        "reasoning_effort_default": "high",
         "tool_calling": True,
         "structured_output": True,
     },
@@ -2281,6 +2449,18 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "tool_calling": True,
         "structured_output": True,
     },
+    "litellm:gemini/gemini-4-carbon": {
+        "name": "Gemini 4 Carbon (LiteLLM)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high"],
+        "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
     "litellm:gemini/gemini-4-argon": {
         "name": "Gemini 4 Argon (LiteLLM)",
         "max_input_tokens": 1_048_576,
@@ -2290,6 +2470,18 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         "reasoning_output": True,
         "reasoning_effort_levels": ["low", "medium", "high"],
         "reasoning_effort_default": "medium",
+        "tool_calling": True,
+        "structured_output": True,
+    },
+    "litellm:gemini/gemini-4-hydrogen": {
+        "name": "Gemini 4 Hydrogen (LiteLLM)",
+        "max_input_tokens": 1_048_576,
+        "max_output_tokens": 65_536,
+        "text_inputs": True,
+        "image_inputs": True,
+        "reasoning_output": True,
+        "reasoning_effort_levels": ["low", "medium", "high", "xhigh"],
+        "reasoning_effort_default": "high",
         "tool_calling": True,
         "structured_output": True,
     },
@@ -2546,13 +2738,15 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
         ("gpt-5.2", "GPT-5.2"),
     ],
     "google_genai": [
+        ("gemini-4-carbon", "Gemini 4 Carbon"),
+        ("gemini-4-argon", "Gemini 4 Argon"),
+        ("gemini-4-hydrogen", "Gemini 4 Hydrogen"),
         ("gemini-3.8-flash", "Gemini 3.8 Flash"),
         ("gemini-3.7-flash", "Gemini 3.7 Flash"),
         ("gemini-3.6-flash", "Gemini 3.6 Flash"),
         ("gemini-3.5-flash", "Gemini 3.5 Flash"),
         ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"),
         ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview"),
-        ("gemini-4-argon", "Gemini 4 Argon"),
         ("gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
         ("gemini-3-flash-preview", "Gemini 3 Flash Preview"),
         ("gemini-flash-latest", "Gemini Flash (Latest)"),
@@ -2594,7 +2788,9 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
         ("openai/gpt-5.6-luna", "GPT-5.6 Luna (OpenRouter)"),
         ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro (OpenRouter)"),
         ("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash (OpenRouter)"),
+        ("google/gemini-4-carbon", "Gemini 4 Carbon (OpenRouter)"),
         ("google/gemini-4-argon", "Gemini 4 Argon (OpenRouter)"),
+        ("google/gemini-4-hydrogen", "Gemini 4 Hydrogen (OpenRouter)"),
         ("google/gemini-3.8-flash", "Gemini 3.8 Flash (OpenRouter)"),
         ("google/gemini-3.7-flash", "Gemini 3.7 Flash (OpenRouter)"),
         ("moonshotai/kimi-k3", "Kimi K3 (OpenRouter)"),
@@ -2682,7 +2878,9 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
         ("gpt-4o-mini", "GPT-4o Mini (Azure)"),
     ],
     "google_vertexai": [
+        ("gemini-4-carbon", "Gemini 4 Carbon (Vertex)"),
         ("gemini-4-argon", "Gemini 4 Argon (Vertex)"),
+        ("gemini-4-hydrogen", "Gemini 4 Hydrogen (Vertex)"),
         ("gemini-3.8-flash", "Gemini 3.8 Flash (Vertex)"),
         ("gemini-3.7-flash", "Gemini 3.7 Flash (Vertex)"),
         ("gemini-3.5-flash", "Gemini 3.5 Flash (Vertex)"),
@@ -2742,7 +2940,9 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str]]] = {
     "litellm": [
         ("openai/gpt-5.6-luna", "GPT-5.6 Luna (LiteLLM)"),
         ("anthropic/claude-sonnet-5", "Claude Sonnet 5 (LiteLLM)"),
+        ("gemini/gemini-4-carbon", "Gemini 4 Carbon (LiteLLM)"),
         ("gemini/gemini-4-argon", "Gemini 4 Argon (LiteLLM)"),
+        ("gemini/gemini-4-hydrogen", "Gemini 4 Hydrogen (LiteLLM)"),
         ("gemini/gemini-3.8-flash", "Gemini 3.8 Flash (LiteLLM)"),
         ("openai/gpt-4o", "GPT-4o (LiteLLM)"),
     ],
@@ -3622,6 +3822,8 @@ __all__ = [
     "ProviderAuthState",
     "ProviderAuthStatus",
     "RECOMMENDED_SPECS",
+    "RETRY_DISABLE_VALUE_BY_PROVIDER",
+    "RETRY_PARAM_BY_PROVIDER",
     "apply_stored_credentials",
     "clear_default_model",
     "detect_provider",

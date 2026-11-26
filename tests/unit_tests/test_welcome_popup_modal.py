@@ -62,7 +62,7 @@ async def test_welcome_detail_popup_full_height() -> None:
     screen = WelcomeDetailPopup("Discovered Skills", items)
     app = DummyWelcomePopupApp(screen)
 
-    async with app.run_test(size=(100, 50)) as pilot:
+    async with app.run_test(size=(100, 50)):
         scroll = screen.query_one("#welcome-detail-scroll")
         dialog = screen.query_one(".ops-modal-dialog")
         # Ensure scroll container fills dialog height and is not capped at 24

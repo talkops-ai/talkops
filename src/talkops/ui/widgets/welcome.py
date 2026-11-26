@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from rich.console import ConsoleRenderable, Group
+from rich.console import Group
 from rich.style import Style
 from rich.text import Text
 from textual import events
@@ -685,7 +685,7 @@ def _collect_skills() -> list[tuple[str, str]]:
         built_in_dir = Path(talkops.__file__).parent / "built_in_skills"
         user_skills_dir = settings.get_user_skills_dir()
         project_skills_dir = settings.get_project_skills_dir()
-        project_root = settings.project_root
+        project_root = settings.effective_project_root or settings.effective_cwd
 
         skills = list_skills(
             built_in_skills_dir=built_in_dir,
@@ -709,7 +709,7 @@ def _collect_subagents() -> list[tuple[str, str]]:
         from talkops.config.settings import settings
         from talkops.subagents import list_subagents
 
-        effective_root = settings.effective_project_root
+        effective_root = settings.effective_project_root or settings.effective_cwd
         user_dir = settings.get_user_agents_dir() if hasattr(settings, "get_user_agents_dir") else None
         proj_dir = settings.get_project_agents_dir() if hasattr(settings, "get_project_agents_dir") else None
 
@@ -731,7 +731,12 @@ def _project_display() -> str:
     try:
         from talkops.config.settings import settings
 
-        root = Path(getattr(settings, "project_root", None) or Path.cwd())
+        root = Path(
+            getattr(settings, "effective_project_root", None)
+            or getattr(settings, "project_root", None)
+            or getattr(settings, "effective_cwd", None)
+            or Path.cwd()
+        )
     except Exception:
         root = Path.cwd()
     text = str(root)
@@ -1394,7 +1399,8 @@ class WelcomeBanner(Widget):
         self._refresh_info()
 
     def refresh_capabilities(self) -> None:
-        """Re-discover skills and subagents and refresh the info panel."""
+        """Re-discover project, skills, and subagents and refresh the info panel."""
+        self._info.project = _project_display()
         self._info.skills = _collect_skills()
         self._info.subagents = _collect_subagents()
         self._refresh_info()

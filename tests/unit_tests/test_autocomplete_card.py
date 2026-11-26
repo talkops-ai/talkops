@@ -20,7 +20,6 @@ import importlib
 
 import pytest
 from rich.cells import cell_len
-from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.content import Content
 from textual.events import Key
@@ -483,4 +482,117 @@ def test_email_does_not_trigger_at_completion():
     assert FuzzyFileController.can_handle("user@example.com", len("user@example.com")) is False
     assert FuzzyFileController.can_handle("check @src/app.py", len("check @src/app.py")) is True
     assert FuzzyFileController.can_handle("@", 1) is True
+
+
+# ── Canonical command + inline alias `(alias)` UX ────────
+
+
+def test_get_all_entries_omits_duplicate_alias_rows():
+    """Autocomplete entries only contain canonical commands, with aliases attached."""
+    from talkops.ui.command_registry import get_all_entries
+
+    entries = get_all_entries()
+    names = {e.name for e in entries}
+
+    assert "/agent" in names
+    assert "/pool" in names
+    assert "/agents" not in names
+    assert "/agent-pool" not in names
+    assert "/agent_pool" not in names
+    assert not any(e.description.startswith("Alias for ") for e in entries)
+
+
+def test_slash_controller_shows_inline_alias_only_when_alias_matches():
+    """Typing canonical command shows `cmd`; typing alias shows `cmd (alias)`."""
+    from talkops.ui.command_registry import get_all_entries
+    from talkops.ui.widgets.autocomplete import CompletionResult, SlashCommandController
+
+    view = _RecordingCompletionView()
+    ctrl = SlashCommandController(get_all_entries(), view)
+
+    # Empty `/` query: no `(alias)` badges and no duplicate alias rows
+    ctrl.on_text_changed("/", 1)
+    assert all(" (" not in label for label, _ in view.suggestions)
+
+    # Canonical `/pool` query: shows `/pool` without `(agent-pool)`
+    ctrl.on_text_changed("/pool", 5)
+    assert view.suggestions[0][0] == "/pool"
+    assert not any(label.startswith("/pool (") for label, _ in view.suggestions)
+
+    # Partial alias `/agent-p`: shows `/pool (agent-pool)` first and Tab completes to `/pool `
+    view.text = "/agent-p"
+    view.cursor = len(view.text)
+    ctrl.on_text_changed(view.text, view.cursor)
+    assert view.suggestions[0] == (
+        "/pool (agent-pool)",
+        "Configure agent execution model pool (fast, standard, powerful tiers)",
+    )
+    assert not any(label in ("/agent-pool", "/agent_pool", "/pool") for label, _ in view.suggestions)
+    res = ctrl.on_key(Key("tab", "\t"), view.text, view.cursor)
+    assert res == CompletionResult.HANDLED
+    assert view.text == "/pool "
+
+    # Underscore alias `/agent_p`: shows `/pool (agent_pool)`
+    ctrl.on_text_changed("/agent_p", 8)
+    assert view.suggestions[0][0] == "/pool (agent_pool)"
+
+    # Exact alias `/aws` + Enter preserves `/aws` so provider-specific alias routing works
+    view.text = "/aws"
+    view.cursor = len(view.text)
+    ctrl.on_text_changed(view.text, view.cursor)
+    assert view.suggestions[0][0] == "/cloud (aws)"
+    res = ctrl.on_key(Key("enter", "\r"), view.text, view.cursor)
+    assert res == CompletionResult.SUBMIT
+    assert view.text == "/aws "
+
+
+def test_format_completion_row_styles_inline_alias_tag(unicode_glyphs):
+    """Inline `(alias)` tag dims non-matching wrapper while highlighting matched query chars."""
+    content = format_completion_row(
+        "/usage (quota)",
+        "View model quota usage",
+        query="quo",
+        label_width=18,
+        width=70,
+        selected=True,
+    )
+    styled = _styled(content)
+    assert content.plain.startswith("▌ usage (quota)")
+    assert styled["usage"] == "bold"
+    assert styled[" ("] == "dim"
+    assert styled["quo"] == "bold $primary"
+    assert styled["ta)"] == "dim"
+
+
+@pytest.mark.asyncio
+async def test_mounted_chat_input_alias_completion_and_hints():
+    """Mounted ChatInput renders `pool (agent-pool)` with hints and completes to `pool `."""
+    app = _ThemedApp()
+    async with app.run_test(size=(120, 20)) as pilot:
+        ci = app.query_one(ChatInput)
+        ci.focus()
+        await pilot.press("/", "a", "g", "e", "n", "t", "-", "p")
+        await pilot.pause()
+        await pilot.pause()
+
+        popup = ci._autocomplete
+        options = list(popup.query(CompletionOption))
+        assert options
+        rendered = options[0].render()
+        assert isinstance(rendered, Content)
+        assert rendered.plain.startswith("▌ pool (agent-pool)")
+        assert "Configure agent execution model pool" in rendered.plain
+
+        # Tab completes canonical command and populates inline ghost argument hint
+        await pilot.press("tab")
+        await pilot.pause()
+        assert ci.text == "pool "
+        assert ci._text_area.argument_hint == "[status | clear]"
+
+        # Typing an exact alias + space also resolves the canonical argument hint
+        ci.text = "/agent-pool "
+        await pilot.pause()
+        assert ci._text_area.argument_hint == "[status | clear]"
+
+
 

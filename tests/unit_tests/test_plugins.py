@@ -32,7 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -41,14 +41,12 @@ from talkops.plugins.adapters.agents import plugin_subagents
 from talkops.plugins.adapters.commands import plugin_commands
 from talkops.plugins.adapters.mcp import (
     _try_repair_mcp_json,
-    discover_plugin_mcp_configs,
 )
 from talkops.plugins.commands_cli import execute_plugin_command, setup_plugin_parser
 from talkops.plugins.manifest import build_inventory, load_manifest
 from talkops.plugins.marketplace import parse_marketplace_source
 from talkops.plugins.models import (
     ComponentInventory,
-    InstalledPluginEntry,
     LocalMarketplaceSource,
     PluginInstance,
     RepositoryMarketplaceSource,
@@ -60,7 +58,6 @@ from talkops.plugins.store import (
     _write_settings_enabled_plugins,
     add_installed_plugin,
     load_all_enabled_plugin_ids,
-    load_enabled_plugin_ids,
     load_installed_plugin_entries,
     load_installed_plugins,
     load_local_enabled_plugin_ids,
@@ -806,16 +803,16 @@ def test_workspace_plugin_isolation_and_agents_manifest_support(
     repo_a.mkdir()
     repo_b.mkdir()
 
-    # 1. Create a plugin in repo_a/.agents/plugins/agy-style-plugin using .agents-plugin/plugin.json
-    agy_plugin = repo_a / ".agents" / "plugins" / "agy-style-plugin"
-    (agy_plugin / ".agents-plugin").mkdir(parents=True)
-    (agy_plugin / ".agents-plugin" / "plugin.json").write_text(
-        json.dumps({"name": "agy-style-plugin", "version": "2.1.0"}),
+    # 1. Create a plugin in repo_a/.agents/plugins/agent-style-plugin using .agents-plugin/plugin.json
+    agent_plugin = repo_a / ".agents" / "plugins" / "agent-style-plugin"
+    (agent_plugin / ".agents-plugin").mkdir(parents=True)
+    (agent_plugin / ".agents-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "agent-style-plugin", "version": "2.1.0"}),
         encoding="utf-8",
     )
-    (agy_plugin / "skills" / "agy-skill").mkdir(parents=True)
-    (agy_plugin / "skills" / "agy-skill" / "SKILL.md").write_text(
-        "---\nname: agy-skill\ndescription: Agy skill\n---\nInstructions",
+    (agent_plugin / "skills" / "agent-skill").mkdir(parents=True)
+    (agent_plugin / "skills" / "agent-skill" / "SKILL.md").write_text(
+        "---\nname: agent-skill\ndescription: Agent skill\n---\nInstructions",
         encoding="utf-8",
     )
 
@@ -839,20 +836,20 @@ def test_workspace_plugin_isolation_and_agents_manifest_support(
 
     res_a = discover_plugins(project_root=repo_a)
     ids_a = {p.plugin_id for p in res_a.plugins}
-    assert "agy-style-plugin@project" in ids_a
+    assert "agent-style-plugin@project" in ids_a
     assert "declared-plugin@project" in ids_a
 
     # Verify Repo B cannot see Repo A's plugins
     res_b = discover_plugins(project_root=repo_b)
     assert len(res_b.plugins) == 0
 
-    # Verify disabling agy-style-plugin@project in repo_a suppresses it
+    # Verify disabling agent-style-plugin@project in repo_a suppresses it
     set_plugin_enabled_for_scope(
-        "agy-style-plugin@project", False, scope="project", project_root=repo_a
+        "agent-style-plugin@project", False, scope="project", project_root=repo_a
     )
     res_a_after = discover_plugins(project_root=repo_a)
     ids_a_after = {p.plugin_id for p in res_a_after.plugins}
-    assert "agy-style-plugin@project" not in ids_a_after
+    assert "agent-style-plugin@project" not in ids_a_after
     assert "declared-plugin@project" in ids_a_after
 
 
@@ -896,3 +893,264 @@ def test_load_installed_plugins_excludes_foreign_projects_when_requested(
         project_root=repo_b, include_foreign_projects=False
     )
     assert set(installed_b) == {"global-plugin@mp"}
+
+
+def test_install_plugin_from_local_path_and_workspace_shadowing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify installing from a local path (<name>@local) and workspace plugin shadowing."""
+    from talkops.config import paths
+    from talkops.plugins.discovery import discover_plugins, install_plugin
+
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("TALKOPS_PLUGIN_DIR", str(state_dir))
+    monkeypatch.setattr(
+        "talkops.plugins.store._installed_plugins_path",
+        lambda: state_dir / "installed_plugins.json",
+    )
+    monkeypatch.setattr(
+        "talkops.plugins.store._user_settings_path", lambda: state_dir / "settings.json"
+    )
+    monkeypatch.setattr(
+        paths, "project_settings_path", lambda pr: pr / ".talkops" / "settings.json"
+    )
+    monkeypatch.setattr(
+        paths,
+        "project_local_settings_path",
+        lambda pr: pr / ".talkops" / "settings.local.json",
+    )
+
+    # 1. Create a user-path plugin directory on disk and install via install_plugin("./...")
+    local_src = tmp_path / "my-local-bundle"
+    (local_src / ".claude-plugin").mkdir(parents=True)
+    (local_src / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "shared-tool", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    (local_src / "skills" / "s1").mkdir(parents=True)
+    (local_src / "skills" / "s1" / "SKILL.md").write_text(
+        "---\nname: s1\ndescription: User path skill\n---\nBody",
+        encoding="utf-8",
+    )
+
+    inst = install_plugin(str(local_src), scope="user")
+    assert inst.plugin_id == "shared-tool@local"
+    assert inst.scope == "user"
+    assert not inst.is_workspace_plugin
+
+    # 2. In repo_b (no workspace override), shared-tool@local is discovered
+    repo_b = tmp_path / "repo_b"
+    repo_b.mkdir()
+    res_b = discover_plugins(project_root=repo_b)
+    assert [p.plugin_id for p in res_b.plugins] == ["shared-tool@local"]
+
+    # 3. In repo_a, a workspace plugin named "shared-tool" shadows "shared-tool@local"
+    repo_a = tmp_path / "repo_a"
+    ws_plugin = repo_a / ".agents" / "plugins" / "shared-tool"
+    ws_plugin.mkdir(parents=True)
+    (ws_plugin / "plugin.json").write_text(
+        json.dumps({"name": "shared-tool", "version": "2.0.0-ws"}),
+        encoding="utf-8",
+    )
+    (ws_plugin / "skills" / "s1").mkdir(parents=True)
+    (ws_plugin / "skills" / "s1" / "SKILL.md").write_text(
+        "---\nname: s1\ndescription: Workspace skill\n---\nWS Body",
+        encoding="utf-8",
+    )
+
+    res_a = discover_plugins(project_root=repo_a)
+    assert [p.plugin_id for p in res_a.plugins] == ["shared-tool@project"]
+    assert res_a.plugins[0].is_workspace_plugin
+    assert res_a.plugins[0].scope == "workspace"
+    assert res_a.plugins[0].version == "2.0.0-ws"
+
+
+def test_agents_plugins_json_object_entries_with_include_only_and_exclude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify .agents/plugins.json object entries with include_only and exclude filters."""
+    from talkops.config import paths
+    from talkops.plugins.discovery import discover_plugins
+
+    monkeypatch.setattr(
+        "talkops.plugins.store._installed_plugins_path",
+        lambda: tmp_path / "state" / "installed_plugins.json",
+    )
+    monkeypatch.setattr(
+        "talkops.plugins.store._user_settings_path",
+        lambda: tmp_path / "state" / "settings.json",
+    )
+    monkeypatch.setattr(
+        paths, "project_settings_path", lambda pr: pr / ".talkops" / "settings.json"
+    )
+    monkeypatch.setattr(
+        paths,
+        "project_local_settings_path",
+        lambda pr: pr / ".talkops" / "settings.local.json",
+    )
+
+    repo = tmp_path / "repo"
+    (repo / ".agents").mkdir(parents=True)
+    shared_dir = tmp_path / "shared-plugins"
+    for p_name in ("alpha", "beta", "gamma"):
+        p_dir = shared_dir / p_name
+        (p_dir / "skills" / "sk").mkdir(parents=True)
+        (p_dir / "skills" / "sk" / "SKILL.md").write_text(
+            f"---\nname: {p_name}-sk\ndescription: Skill\n---\nBody",
+            encoding="utf-8",
+        )
+
+    (repo / ".agents" / "plugins.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "path": str(shared_dir),
+                        "include_only": ["alpha", "beta"],
+                        "exclude": ["beta"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    res = discover_plugins(project_root=repo)
+    assert [p.plugin_id for p in res.plugins] == ["alpha@project"]
+
+
+@pytest.mark.asyncio
+async def test_agent_plugin_subdir_agents_md_and_command_isolation(tmp_path: Path):
+    """Verify agents/<subagent>/AGENTS.md marks plugin as agent plugin and isolates commands/skills."""
+    from talkops.plugins.adapters.agents import plugin_subagents
+    from talkops.plugins.adapters.commands import plugin_commands
+    from talkops.plugins.adapters.skills import plugin_skill_sources
+
+    p_root = tmp_path / "subagent-pack"
+    sub_dir = p_root / "agents" / "sre-bot"
+    sub_dir.mkdir(parents=True)
+    (sub_dir / "AGENTS.md").write_text(
+        "---\nname: sre-bot\ndescription: SRE subagent\n---\nYou are an SRE subagent.",
+        encoding="utf-8",
+    )
+    cmd_dir = p_root / "commands"
+    cmd_dir.mkdir(parents=True)
+    (cmd_dir / "triage.md").write_text(
+        "---\ndescription: Triage command\n---\nRun $ARGUMENTS in ${TALKOPS_PLUGIN_ROOT}",
+        encoding="utf-8",
+    )
+    sk_dir = p_root / "skills" / "k8s-debug"
+    sk_dir.mkdir(parents=True)
+    (sk_dir / "SKILL.md").write_text(
+        "---\nname: k8s-debug\ndescription: K8s debug\n---\nBody",
+        encoding="utf-8",
+    )
+
+    manifest, _, warnings = load_manifest(p_root, fallback_name="subagent-pack")
+    inventory = build_inventory(p_root, manifest, tuple(warnings))
+    plugin = PluginInstance(
+        plugin_id="subagent-pack@official",
+        name="subagent-pack",
+        marketplace="official",
+        version="1.0.0",
+        root=p_root,
+        data_dir=tmp_path / "data",
+        manifest=manifest,
+        inventory=inventory,
+    )
+
+    assert plugin.is_agent_plugin is True
+    assert not plugin.is_vertical_plugin
+
+    # Main agent adapters exclude agent plugin skills and commands by default
+    assert plugin_skill_sources((plugin,), include_subagent_skills=False) == []
+    assert plugin_commands((plugin,), include_subagents=False) == []
+
+    # Subagent adapter extracts the subagent with wildcard skill binding
+    subs = plugin_subagents((plugin,))
+    assert len(subs) == 1
+    assert subs[0]["name"] == "subagent-pack@official:sre-bot"
+    assert subs[0]["skills"] == ["subagent-pack@official:*"]
+
+    # When included explicitly, PluginCommandHandler substitutes $ARGUMENTS and ${TALKOPS_PLUGIN_ROOT}
+    cmds = plugin_commands((plugin,), include_subagents=True)
+    assert len(cmds) == 1
+    ctx = CommandContext(app=None, settings=MagicMock(), raw_command="/triage", args="pod-123")
+    res = await cmds[0].execute(ctx)
+    assert res.success
+    assert f"Run pod-123 in {p_root}" in (res.message or "")
+    assert "**User Input / Target Arguments**" not in (res.message or "")
+
+
+def test_workspace_plugin_cli_tui_and_subagent_inline_mcp_substitution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify bare workspace plugin enable/disable, TUI state inclusion, and subagent inline MCP variable substitution."""
+    from talkops.config import paths
+    from talkops.plugins.adapters.agents import plugin_subagents
+    from talkops.plugins.adapters.mcp import collect_subagent_mcp_configs
+    from talkops.plugins.discovery import discover_plugins, set_installed_plugin_enabled
+    from talkops.ui.widgets.plugin_manager import _load_manager_state
+
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("TALKOPS_PLUGIN_DIR", str(state_dir))
+    monkeypatch.setattr(
+        "talkops.plugins.store._installed_plugins_path",
+        lambda: state_dir / "installed_plugins.json",
+    )
+    monkeypatch.setattr(
+        "talkops.plugins.store._user_settings_path",
+        lambda: state_dir / "settings.json",
+    )
+    monkeypatch.setattr(
+        paths, "project_settings_path", lambda pr: pr / ".talkops" / "settings.json"
+    )
+    monkeypatch.setattr(
+        paths,
+        "project_local_settings_path",
+        lambda pr: pr / ".talkops" / "settings.local.json",
+    )
+
+    repo = tmp_path / "repo"
+    ws_plugin = repo / ".agents" / "plugins" / "agent-mcp-bundle"
+    (ws_plugin / "agents" / "ops-bot").mkdir(parents=True)
+    (ws_plugin / "agents" / "ops-bot" / "AGENTS.md").write_text(
+        "---\nname: ops-bot\ndescription: Ops subagent\n---\nPrompt",
+        encoding="utf-8",
+    )
+    (ws_plugin / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "agent-mcp-bundle",
+                "version": "1.2.0",
+                "mcpServers": {
+                    "inline-srv": {
+                        "command": "${TALKOPS_PLUGIN_ROOT}/bin/server",
+                        "args": ["--data", "${TALKOPS_PLUGIN_DATA}"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # 1. TUI _load_manager_state includes workspace plugin with scope="workspace"
+    tui_state = _load_manager_state(project_root=repo)
+    ws_rows = [r for r in tui_state.installed_plugins if r.plugin_id == "agent-mcp-bundle@project"]
+    assert len(ws_rows) == 1
+    assert ws_rows[0].scope == "workspace"
+    assert ws_rows[0].enabled is True
+
+    # 2. Subagent inline MCP config substitutes ${TALKOPS_PLUGIN_ROOT} and ${TALKOPS_PLUGIN_DATA}
+    plugins = discover_plugins(project_root=repo).plugins
+    subs = plugin_subagents(plugins)
+    assert len(subs) == 1
+    mcp_cfgs = collect_subagent_mcp_configs(subs[0]["name"], subs[0], project_root=repo)
+    assert len(mcp_cfgs) == 1
+    srv_cfg = next(iter(mcp_cfgs.values()))
+    assert srv_cfg["command"] == f"{ws_plugin}/bin/server"
+    assert srv_cfg["args"] == ["--data", str(plugins[0].data_dir)]
+
+    # 3. Disabling by bare name ("agent-mcp-bundle") resolves to @project and writes to project settings
+    set_installed_plugin_enabled("agent-mcp-bundle", enabled=False, project_root=repo)
+    assert discover_plugins(project_root=repo).plugins == ()

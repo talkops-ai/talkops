@@ -640,18 +640,18 @@ class PlaceholderTokenAuthProvider:
                             raise
             return jwt_user
 
-        # 6. If external Control Plane URL is configured, verify the API key / token with Control Plane
-        if cp_url:
-            if not raw_token:
-                raise Auth.exceptions.HTTPException(
-                    status_code=401,
-                    detail="Missing Authorization Bearer token or X-API-Key header",
-                )
-            return await verify_token_with_control_plane(raw_token, control_plane_url=cp_url)
+        # Public discovery endpoints remain accessible without a token for readiness & client handshake
+        if not raw_token and req_path in {"/api/v1/server/info", "/api/v1/addons"}:
+            return {
+                "identity": explicit_user if (explicit_user and _SAFE_USER_RE.match(explicit_user)) else "default",
+                "permissions": ["server:info"],
+                "role": "anonymous",
+                "is_webhook": False,
+            }
 
         configured_keys = _parse_configured_api_keys()
 
-        # 7. If static API keys are configured in TALKOPS_SERVER_API_KEYS, enforce them
+        # 6. Check locally configured TALKOPS_SERVER_API_KEYS first (takes precedence or falls back to Control Plane)
         if configured_keys:
             if not raw_token:
                 raise Auth.exceptions.HTTPException(
@@ -663,18 +663,28 @@ class PlaceholderTokenAuthProvider:
                 if hmac.compare_digest(raw_token, candidate_token):
                     matched_user = mapped_user
                     break
-            if not matched_user:
+            if matched_user:
+                user_id = explicit_user or matched_user
+                return {
+                    "identity": user_id,
+                    "permissions": ["*"],
+                    "role": "operator",
+                    "is_webhook": False,
+                }
+            if not cp_url:
                 raise Auth.exceptions.HTTPException(
                     status_code=401,
                     detail="Invalid API key or Bearer token",
                 )
-            user_id = explicit_user or matched_user
-            return {
-                "identity": user_id,
-                "permissions": ["*"],
-                "role": "operator",
-                "is_webhook": False,
-            }
+
+        # 7. If external Control Plane URL is configured, verify the API key / token with Control Plane
+        if cp_url:
+            if not raw_token:
+                raise Auth.exceptions.HTTPException(
+                    status_code=401,
+                    detail="Missing Authorization Bearer token or X-API-Key header",
+                )
+            return await verify_token_with_control_plane(raw_token, control_plane_url=cp_url)
 
         # 8. Token mode (when neither Control Plane nor static key list is set yet):
         #    a non-empty Bearer token or X-API-Key is still strictly mandatory
@@ -843,10 +853,17 @@ async def on_thread_search(
     ctx: Auth.types.AuthContext,
     value: Any,
 ) -> dict[str, str] | None:
-    """Filter `client.threads.search()` results to the authenticated user's threads."""
+    """Filter `client.threads.search()` results to the authenticated user's threads (or requested webhook threads)."""
     user_id = ctx.user.identity if ctx.user else "default"
     if user_id in ("default", "local", "webhook"):
         return None
+    if isinstance(value, dict):
+        req_meta = value.get("metadata")
+        if isinstance(req_meta, dict):
+            if req_meta.get("owner") == "webhook":
+                return {"owner": "webhook"}
+            if req_meta.get("source") == "webhook":
+                return None
     return {"owner": user_id}
 
 

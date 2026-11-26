@@ -290,6 +290,37 @@ class SmartApprovalHandler(BaseCommandHandler):
         return CommandResult(success=False, message="Approval mode toggle requires active TUI application.")
 
 
+class YoloApprovalHandler(BaseCommandHandler):
+    """Handler for /yolo command to switch to YOLO approval mode (no review)."""
+
+    @property
+    def name(self) -> str:
+        """Return the primary slash command name."""
+        return "/yolo"
+
+    @property
+    def category(self) -> CommandCategory:
+        """Return the command category classification."""
+        return CommandCategory.CORE
+
+    @property
+    def safety_level(self) -> SafetyLevel:
+        """Return the safety level required for this command."""
+        return SafetyLevel.READ_ONLY
+
+    @property
+    def bypass_tier(self) -> BypassTier:
+        """Return the execution queue bypass tier for this command."""
+        return BypassTier.SIDE_EFFECT_FREE
+
+    async def execute(self, ctx: CommandContext) -> CommandResult:
+        """Execute the command handler with the provided command context."""
+        if ctx.app is not None and hasattr(ctx.app, "_set_approval_mode"):
+            await ctx.app._set_approval_mode(ApprovalMode.YOLO)
+            return CommandResult(success=True, mount_as_app_message=False)
+        return CommandResult(success=False, message="Approval mode toggle requires active TUI application.")
+
+
 __all__ = [
     "AutoApprovalHandler",
     "ManualApprovalHandler",
@@ -298,4 +329,5 @@ __all__ = [
     "SmartApprovalHandler",
     "ThemeHandler",
     "TimestampsHandler",
+    "YoloApprovalHandler",
 ]

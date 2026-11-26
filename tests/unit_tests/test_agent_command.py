@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -28,13 +27,9 @@ from langgraph.errors import GraphInterrupt
 from talkops.commands._base import CommandContext
 from talkops.commands.power.agents import (
     AgentInvokeHandler,
-    AgentSessionState,
     AgentsHandler,
-    activate_agent_session,
-    clear_agent_session,
     get_agent_session_state,
     resolve_plugin_agent,
-    sync_agent_session_status_label,
 )
 from talkops.middleware.agent_session import (
     AGENT_SESSION_NODE_PREFIX,
@@ -505,12 +500,25 @@ def test_agent_autocomplete_prioritization_and_space() -> None:
     assert "/agent:aws-compute" in top_names
     assert "/agent:k8s-operator" in top_names
 
-    # 2. Typing /agent shows /agent then plugin agents
+    # 2. Typing /agent shows /agent then plugin agents without duplicate /agents, /agent-pool, /agent_pool rows
     ctrl.on_text_changed("/agent", 6)
     assert ctrl._suggestions[0][0] == "/agent"
+    all_suggested_labels = [name for name, _ in ctrl._suggestions]
+    assert "/agents" not in all_suggested_labels
+    assert "/agent-pool" not in all_suggested_labels
+    assert "/agent_pool" not in all_suggested_labels
+    assert "/pool" not in all_suggested_labels
+    assert "/pool (agent-pool)" in all_suggested_labels
     agent_names = [name for name, _ in ctrl._suggestions[1:3]]
     assert "/agent:aws-compute" in agent_names
     assert "/agent:k8s-operator" in agent_names
+
+    # 2b. Typing /agents shows canonical /agent (agents) instead of a separate Alias entry
+    ctrl.on_text_changed("/agents", 7)
+    assert ctrl._suggestions[0] == (
+        "/agent (agents)",
+        "Activate a plugin agent session or manage active agent",
+    )
 
     # 3. Typing /agent  (with space) shows all plugin agents
     ctrl.on_text_changed("/agent ", 7)

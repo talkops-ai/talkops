@@ -98,7 +98,11 @@ def _server_map(raw: object) -> dict[str, Any]:
     if not isinstance(target, dict):
         target = raw.get("mcp_servers")
     if not isinstance(target, dict):
-        target = raw
+        target = {
+            k: v
+            for k, v in raw.items()
+            if not str(k).startswith("$") and isinstance(v, dict)
+        }
     return {
         str(k): v
         for k, v in target.items()
@@ -252,6 +256,7 @@ def subagent_mcp_configs(
     mcp_files: Sequence[str | Path] | None = None,
     *,
     project_dir: Path | None = None,
+    data_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Build MCP configs for a built-in or custom subagent."""
     if mcp_files is None:
@@ -266,7 +271,7 @@ def subagent_mcp_configs(
         ]
 
     normalized: dict[str, Any] = {}
-    data_dir = bundle_dir / ".data"
+    effective_data_dir = data_dir if data_dir is not None else (bundle_dir / ".data")
 
     for file_path in target_files:
         raw_servers = _load_mcp_server_map(file_path)
@@ -274,7 +279,7 @@ def subagent_mcp_configs(
             norm_srv = _normalize_server(
                 server,
                 root=bundle_dir,
-                data_dir=data_dir,
+                data_dir=effective_data_dir,
                 project_dir=project_dir,
             )
             normalized[scoped_subagent_mcp_server_name(subagent_name, name)] = norm_srv
@@ -320,9 +325,16 @@ def collect_subagent_mcp_configs(
 ) -> dict[str, Any]:
     """Collect a subagent's MCP configs without opening any connections."""
     from talkops.plugins.adapters.agents import get_subagent_bundle_dir
+    from talkops.plugins.store import plugin_data_dir
 
     servers: dict[str, Any] = {}
     bundle_dir = get_subagent_bundle_dir(subagent_meta)
+    plugin_id = subagent_meta.get("plugin_id")
+    data_dir = (
+        plugin_data_dir(str(plugin_id))
+        if isinstance(plugin_id, str) and plugin_id
+        else (bundle_dir / ".data" if bundle_dir else None)
+    )
     mcp_files_raw = subagent_meta.get("mcp_files")
     mcp_files = list(mcp_files_raw) if mcp_files_raw is not None else None
     if bundle_dir and bundle_dir.is_dir():
@@ -332,6 +344,7 @@ def collect_subagent_mcp_configs(
                 bundle_dir,
                 mcp_files,
                 project_dir=project_root,
+                data_dir=data_dir,
             )
         )
 
@@ -347,7 +360,15 @@ def collect_subagent_mcp_configs(
                     if name.startswith(prefix)
                     else scoped_subagent_mcp_server_name(subagent_name, name)
                 )
-                servers[scoped_name] = config
+                if bundle_dir and isinstance(config, dict):
+                    servers[scoped_name] = _normalize_server(
+                        config,
+                        root=bundle_dir,
+                        data_dir=data_dir,
+                        project_dir=project_root,
+                    )
+                else:
+                    servers[scoped_name] = config
     return servers
 
 
@@ -376,9 +397,15 @@ def discover_all_subagents_mcp_configs(
     """Discover all subagents and collect their scoped MCP configurations without probing."""
     try:
         from talkops.config import paths
+        from talkops.config.settings import settings
         from talkops.subagents import list_subagents
 
-        effective_root = project_root or Path.cwd()
+        effective_root = (
+            project_root
+            or settings.effective_project_root
+            or settings.effective_cwd
+            or Path.cwd()
+        )
         user_agents_dir = paths.user_agents_dir(assistant_id)
         project_agents_dir = paths.project_agents_dir(effective_root)
         if not project_agents_dir.is_dir() and (effective_root / "agents").is_dir():

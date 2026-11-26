@@ -13,7 +13,6 @@
 # limitations under the License.
 
 """Unit tests for tool catalog and goal tools."""
-import json
 import sys
 from typing import Any
 

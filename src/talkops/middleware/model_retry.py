@@ -26,13 +26,9 @@ Emits real-time stream events so the terminal status bar updates with countdown/
 from __future__ import annotations
 
 import asyncio
-import logging
-import math
 import random
 import time
-import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -52,6 +48,7 @@ MODEL_RETRY_EVENT_TYPE = "model_retry"
 _INITIAL_DELAY_SECONDS = 0.5
 _BACKOFF_FACTOR = 2.0
 _MAX_DELAY_SECONDS = 10.0
+_MAX_INTERACTIVE_TOTAL_DELAY_SECONDS = 60.0
 _JITTER_FRACTION = 0.15
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
 
@@ -93,25 +90,35 @@ def _extract_status_code(exc: Exception) -> int | None:
     return None
 
 
-def is_transient_error(exc: Exception) -> bool:
-    """Return whether the exception represents a transient, retryable failure."""
+def _is_single_exc_transient(exc: BaseException, *, is_root: bool = False) -> bool | None:
+    """Classify a single exception node in the causal/group tree."""
     if isinstance(exc, (KeyboardInterrupt, SystemExit, GraphBubbleUp)):
         return False
 
+    try:
+        import httpx
+
+        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
+            return True
+    except ImportError:
+        pass
+
+    if not isinstance(exc, Exception):
+        return None
+
     code = _extract_status_code(exc)
-    if code is not None and code in _RETRYABLE_STATUS_CODES:
+    if code is not None:
+        return code in _RETRYABLE_STATUS_CODES or (500 <= code < 600)
+
+    for base in type(exc).__mro__:
+        base_mod = base.__module__.split(".")[0].lower()
+        for pkg, name in _TRANSIENT_SDK_EXC_NAMES:
+            if (pkg == base_mod or pkg in base.__module__.lower()) and base.__name__ == name:
+                return True
+
+    if is_root and isinstance(exc, (TimeoutError, ConnectionError)):
         return True
 
-    # Check known exception class names
-    exc_cls = type(exc)
-    exc_name = exc_cls.__name__
-    module_root = exc_cls.__module__.split(".")[0].lower()
-
-    for pkg, name in _TRANSIENT_SDK_EXC_NAMES:
-        if (pkg == module_root or pkg in exc_cls.__module__.lower()) and exc_name == name:
-            return True
-
-    # Common string signals
     exc_str = str(exc).lower()
     transient_signals = (
         "rate limit",
@@ -124,7 +131,34 @@ def is_transient_error(exc: Exception) -> bool:
         "service unavailable",
         "throttling",
     )
-    return any(sig in exc_str for sig in transient_signals)
+    if any(sig in exc_str for sig in transient_signals):
+        return True
+    return None
+
+
+def is_transient_error(exc: Exception) -> bool:
+    """Return whether the exception (or its cause/group tree) represents a transient, retryable failure."""
+    if isinstance(exc, (KeyboardInterrupt, SystemExit, GraphBubbleUp)):
+        return False
+
+    pending: list[tuple[BaseException, bool]] = [(exc, True)]
+    seen: set[int] = set()
+    while pending:
+        current, is_root = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        verdict = _is_single_exc_transient(current, is_root=is_root)
+        if verdict is not None:
+            if verdict:
+                return True
+            continue
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend((member, False) for member in current.exceptions)
+        cause = current.__cause__ or current.__context__
+        if cause is not None:
+            pending.append((cause, False))
+    return False
 
 
 def compute_delay(attempt: int) -> float:
@@ -151,7 +185,6 @@ class CodeModelRetryMiddleware(AgentMiddleware):
         delay: float,
         exc: Exception,
     ) -> None:
-        state = getattr(request, "state", {}) or {}
         runtime = getattr(request, "runtime", None)
         writer = getattr(runtime, "stream_writer", None) if runtime else None
         code = _extract_status_code(exc)
@@ -183,14 +216,21 @@ class CodeModelRetryMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """Intercept and wrap synchronous model invocation."""
         attempt = 0
+        total_delay = 0.0
         while True:
             try:
                 return handler(request)
             except Exception as exc:
-                if attempt >= self.max_retries or not is_transient_error(exc):
+                if (
+                    attempt >= self.max_retries
+                    or total_delay >= _MAX_INTERACTIVE_TOTAL_DELAY_SECONDS
+                    or not is_transient_error(exc)
+                ):
                     raise
                 attempt += 1
-                delay = compute_delay(attempt)
+                remaining = _MAX_INTERACTIVE_TOTAL_DELAY_SECONDS - total_delay
+                delay = min(compute_delay(attempt), remaining)
+                total_delay += delay
                 self._emit_retry_event(request, attempt, delay, exc)
                 time.sleep(delay)
 
@@ -201,14 +241,21 @@ class CodeModelRetryMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """Intercept and wrap asynchronous model invocation."""
         attempt = 0
+        total_delay = 0.0
         while True:
             try:
                 return await handler(request)
             except Exception as exc:
-                if attempt >= self.max_retries or not is_transient_error(exc):
+                if (
+                    attempt >= self.max_retries
+                    or total_delay >= _MAX_INTERACTIVE_TOTAL_DELAY_SECONDS
+                    or not is_transient_error(exc)
+                ):
                     raise
                 attempt += 1
-                delay = compute_delay(attempt)
+                remaining = _MAX_INTERACTIVE_TOTAL_DELAY_SECONDS - total_delay
+                delay = min(compute_delay(attempt), remaining)
+                total_delay += delay
                 self._emit_retry_event(request, attempt, delay, exc)
                 await asyncio.sleep(delay)
 

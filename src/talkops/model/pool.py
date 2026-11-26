@@ -275,7 +275,7 @@ class DynamicModelPoolManager:
         elif not specs:
             specs = ["google_genai:gemini-3.7-flash"]
 
-        pro_tokens = {"pro", "opus", "o3", "astra", "sol", "reasoner", "r1", "argon"}
+        pro_tokens = {"pro", "opus", "o3", "astra", "sol", "reasoner", "r1", "argon", "carbon"}
         fast_tokens = {"flash", "mini", "haiku", "lite", "micro", "scout", "small"}
 
         def _spec_tokens(s: str) -> set[str]:

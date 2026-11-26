@@ -41,6 +41,8 @@ class PluginCommandHandler(BaseCommandHandler):
         instructions: str,
         plugin_id: str,
         aliases: tuple[str, ...] = (),
+        plugin_root: Path | None = None,
+        plugin_data_dir: Path | None = None,
     ) -> None:
         """Initialize PluginCommandHandler."""
         self._name = command_name if command_name.startswith("/") else f"/{command_name}"
@@ -48,6 +50,8 @@ class PluginCommandHandler(BaseCommandHandler):
         self._instructions = instructions
         self._plugin_id = plugin_id
         self._aliases = aliases
+        self._plugin_root = plugin_root
+        self._plugin_data_dir = plugin_data_dir
 
     @property
     def name(self) -> str:
@@ -83,11 +87,23 @@ class PluginCommandHandler(BaseCommandHandler):
         # Build prompt message combining plugin command instructions and user arguments
         """Execute the command handler with the provided command context."""
         user_input = ctx.args.strip()
+        rendered_instructions = self._instructions
+        has_arg_placeholder = "$ARGUMENTS" in rendered_instructions
+        if has_arg_placeholder:
+            rendered_instructions = rendered_instructions.replace("$ARGUMENTS", user_input)
+        if self._plugin_root is not None and self._plugin_data_dir is not None:
+            from talkops.plugins.substitution import substitute_string
+
+            rendered_instructions = substitute_string(
+                rendered_instructions,
+                plugin_root=self._plugin_root,
+                plugin_data=self._plugin_data_dir,
+            )
         combined_prompt = (
             f"### Plugin Command Execution: {self._name} (from {self._plugin_id})\n\n"
-            f"{self._instructions}"
+            f"{rendered_instructions}"
         )
-        if user_input:
+        if user_input and not has_arg_placeholder:
             combined_prompt += f"\n\n**User Input / Target Arguments**:\n{user_input}"
 
         return CommandResult(
@@ -128,11 +144,15 @@ def _parse_command_file(path: Path) -> tuple[str, str] | None:
 
 def plugin_commands(
     plugins: tuple[PluginInstance, ...] | list[PluginInstance],
+    *,
+    include_subagents: bool = False,
 ) -> list[BaseCommandHandler]:
     """Discover and instantiate command handlers for enabled plugins."""
     handlers: list[BaseCommandHandler] = []
 
     for plugin in plugins:
+        if not include_subagents and getattr(plugin, "is_agent_plugin", False):
+            continue
         p_id = plugin.plugin_id
         p_name = plugin.name
         for cmd_path in plugin.inventory.commands:
@@ -161,6 +181,8 @@ def plugin_commands(
                     instructions=instructions,
                     plugin_id=p_id,
                     aliases=(namespaced_alias, full_scoped_alias),
+                    plugin_root=plugin.root,
+                    plugin_data_dir=plugin.data_dir,
                 )
                 handlers.append(handler)
 
@@ -169,6 +191,8 @@ def plugin_commands(
 
 def discover_plugin_commands(
     project_root: Path | None = None,
+    *,
+    include_subagents: bool = False,
 ) -> list[BaseCommandHandler]:
     """Discover command handlers across all enabled marketplace and project plugins."""
     try:
@@ -179,7 +203,7 @@ def discover_plugin_commands(
 
         # 1. Enabled marketplace plugins
         plugins = discover_plugins(project_root=project_root).plugins
-        handlers.extend(plugin_commands(plugins))
+        handlers.extend(plugin_commands(plugins, include_subagents=include_subagents))
 
         # 2. Project-local marketplace plugins
         if project_root is not None:

@@ -19,7 +19,10 @@ from __future__ import annotations
 from talkops.middleware.memory_guard import (
     ONBOARDING_NAME_MEMORY_END,
     ONBOARDING_NAME_MEMORY_START,
+    OPENWIKI_MEMORY_END,
+    OPENWIKI_MEMORY_START,
     ManagedMemoryGuardMiddleware,
+    extract_managed_blocks,
     extract_onboarding_name_block,
     strip_onboarding_name_markers,
 )
@@ -28,6 +31,9 @@ __all__ = [
     "ManagedMemoryGuardMiddleware",
     "ONBOARDING_NAME_MEMORY_START",
     "ONBOARDING_NAME_MEMORY_END",
+    "OPENWIKI_MEMORY_START",
+    "OPENWIKI_MEMORY_END",
+    "extract_managed_blocks",
     "extract_onboarding_name_block",
     "strip_onboarding_name_markers",
 ]

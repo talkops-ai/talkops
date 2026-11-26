@@ -16,11 +16,8 @@
 
 from pathlib import Path
 
-import pytest
-
 from talkops.utils.cost_estimation import TokenCostEstimator
 from talkops.utils.git import (
-    RepositoryMetadata,
     find_git_root,
     parse_repository_metadata,
     resolve_git_branch,
@@ -73,3 +70,36 @@ def test_session_stats():
 def test_token_cost_estimator():
     """Verify token cost estimator."""
     assert isinstance(TokenCostEstimator.is_available(), bool)
+
+
+def test_estimate_turn_cost_usd_without_genai_prices_usage_warnings():
+    """estimate_cost must map cache/reasoning fields to genai-prices Usage without UserWarning."""
+    import warnings
+
+    from talkops.utils.cost_estimation import estimate_cost
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cost = estimate_cost(
+            model_name="claude-3-5-sonnet-20241022",
+            provider="anthropic",
+            input_tokens=1000,
+            output_tokens=200,
+            input_token_details={
+                "cache_read": 500,
+                "cache_creation": 100,
+                "ephemeral_5m_input_tokens": 50,
+                "ephemeral_1h_input_tokens": 50,
+            },
+            output_token_details={
+                "reasoning": 50,
+            },
+        )
+
+    unsupported_key_warnings = [
+        w for w in caught if "Unsupported usage key" in str(w.message)
+    ]
+    assert unsupported_key_warnings == []
+    if TokenCostEstimator.is_available():
+        assert cost is not None
+        assert cost > 0.0

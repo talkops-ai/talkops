@@ -49,31 +49,24 @@ except ImportError:
     pass
 
 import asyncio
-import inspect
-import math
 import os
-import sys
 import time
-import uuid
 from collections import deque
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Literal, cast
+from typing import Any, ClassVar
 
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Container
 from textual.css.query import NoMatches
 from textual.message import Message
-from textual.theme import Theme
 from textual.worker import Worker
 
 from talkops.approval_mode import ApprovalMode, coerce_approval_mode
 from talkops.input import MediaSnapshot, MediaTracker
-from talkops.mcp.mcp_info import MCPServerInfo
 from talkops.ui.command_registry import (
     ALWAYS_IMMEDIATE,
     IMMEDIATE_CMDS,
@@ -91,52 +84,47 @@ from talkops.ui.controllers import (
     ThreadController,
 )
 from talkops.ui.controllers.server_controller import (
-    _format_mcp_server_changes,
-    _McpRefreshStatus,
+    _format_mcp_server_changes as _format_mcp_server_changes,
+)
+from talkops.ui.controllers.server_controller import (
+    _McpRefreshStatus as _McpRefreshStatus,
+)
+from talkops.ui.controllers.server_controller import (
     _ServerRespawnResult,
 )
 from talkops.ui.permission_store import PermissionStore, load_permission_store
 from talkops.ui.textual_adapter import TextualAdapter
 from talkops.ui.theme import (
-    DARK_COLORS,
-    LIGHT_COLORS,
     get_css_variable_defaults,
     get_registry,
     load_theme_preference,
     register_app_themes,
-    save_theme_preference,
 )
 from talkops.ui.widgets.approval import (
     ApprovalDecided,
     ApprovalMenu,
-    ApprovalModalScreen,
-    assess_tool_risk,
 )
 from talkops.ui.widgets.ask_user import AskUserMenu
 from talkops.ui.widgets.autocomplete import AutocompletePopup
-from talkops.ui.widgets.btw_card import BtwCardPanel, BtwExchange
+from talkops.ui.widgets.btw_card import BtwExchange
 from talkops.ui.widgets.chat_input import ChatInput, InputMode
 from talkops.ui.widgets.goal_review import GoalReviewMenu
-from talkops.ui.widgets.infra_panel import InfraStatePanel
 from talkops.ui.widgets.messages import (
-    AssistantMessage,
     ErrorMessage,
     MessageList,
     QueuedUserMessage,
     SystemMessage,
     UserMessage,
 )
-from talkops.ui.widgets.notification_center import NotificationCenter
 from talkops.ui.widgets.status import StatusBar
 from talkops.ui.widgets.subagent_panel import SubagentPanel
-from talkops.ui.widgets.theme_selector import ThemeSelectorScreen
 from talkops.ui.widgets.toast import show_toast
 from talkops.ui.widgets.welcome import WelcomeBanner
 from talkops.utils.git import (
     read_git_branch_from_filesystem,
     read_git_branch_via_subprocess,
 )
-from talkops.utils.logger import bind_logging_to_thread, get_logger
+from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -378,7 +366,7 @@ class TalkOpsApp(App):
             try:
                 self._approval_mode = coerce_approval_mode(
                     approval_mode,
-                    allow_yolo=False,
+                    allow_yolo=True,
                 )
             except Exception:
                 self._approval_mode = ApprovalMode.MANUAL
@@ -387,7 +375,7 @@ class TalkOpsApp(App):
         else:
             self._approval_mode = ApprovalMode.MANUAL
 
-        self._auto_approve = False
+        self._auto_approve = self._approval_mode is ApprovalMode.YOLO
         raw_sb = (
             extra_kwargs.get("sandbox_type")
             or (server_kwargs.get("sandbox_type") if isinstance(server_kwargs, dict) else None)
@@ -409,6 +397,7 @@ class TalkOpsApp(App):
         self._previous_thread_id: str | None = None
         self._message_timestamps_visible: bool = False
         self._auto_mode_notice_pending: bool = False
+        self._yolo_mode_notice_pending: bool = False
         self._active_goal: str | None = goal
         self._goal_status: str | None = "active" if goal else None
         self._active_rubric: str | None = None
@@ -450,6 +439,7 @@ class TalkOpsApp(App):
 
         # ── State Flags ──────────────────────────────────
         self._agent_running = False
+        self._compact_in_flight = False
         self._shell_running = False
         self._connecting = server_kwargs is not None and not self._server_startup_deferred and client is None
         self._startup_sequence_running = False
@@ -1034,12 +1024,17 @@ class TalkOpsApp(App):
     async def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
         """Handle submitted input from ChatInput widget.
 
-        This is the SINGLE entry point for user input.  It feeds into
-        ``_submit_input`` which handles queueing, bypass tiers, and
-        routing — never spawns a worker directly.
+        Interactive slash commands run inside a tracked Textual worker so
+        checkpoint/SQLite/HTTP I/O and modal `push_screen_wait` calls never
+        block `TalkOpsApp`'s message pump.
         """
         value = event.value
         mode: InputMode = event.mode  # type: ignore[assignment]
+        if mode == "command" and getattr(self, "is_running", False):
+            cmd_head = value.strip().lower().split(maxsplit=1)[0] if value.strip() else ""
+            if cmd_head not in {"/quit", "/exit", "/q"}:
+                self.run_worker(self._submit_input(value, mode), exclusive=False)
+                return
         await self._submit_input(value, mode)
 
     def _can_bypass_queue(self, value: str) -> bool:
@@ -1383,6 +1378,7 @@ class TalkOpsApp(App):
                 context["aws_region"] = active_aws_reg
             context["approval_mode"] = mode_val
             context["smart"] = is_smart
+            context["yolo"] = mode_val.lower() == "yolo"
             panel = self._get_subagent_panel()
             if panel is not None:
                 spec = self._model or ""
@@ -1486,16 +1482,51 @@ class TalkOpsApp(App):
                     except (asyncio.CancelledError, Exception):
                         pass
 
+                cleanup_state: dict[str, Any] | None = None
+                if self._agent_thread_id and (
+                    getattr(self, "_client", None) is not None
+                    or getattr(self, "_agent", None) is not None
+                ):
+                    try:
+                        cleanup_state = await self._get_thread_state_values(
+                            self._agent_thread_id
+                        )
+                    except (asyncio.CancelledError, Exception):
+                        cleanup_state = None
+
                 # ── Goal state synchronization from checkpoint ──
-                await self._sync_goal_state_from_checkpoint(
-                    force=force_goal_sync,
-                    proposal_request_id=goal_criteria_request_id,
-                    allow_pending_proposal=goal_criteria_succeeded,
-                )
+                if cleanup_state is not None:
+                    try:
+                        await self._sync_goal_state_from_checkpoint(
+                            force=force_goal_sync,
+                            proposal_request_id=goal_criteria_request_id,
+                            allow_pending_proposal=goal_criteria_succeeded,
+                            state_values=cleanup_state,
+                        )
+                    except TypeError:
+                        await self._sync_goal_state_from_checkpoint(
+                            force=force_goal_sync,
+                            proposal_request_id=goal_criteria_request_id,
+                            allow_pending_proposal=goal_criteria_succeeded,
+                        )
+                else:
+                    await self._sync_goal_state_from_checkpoint(
+                        force=force_goal_sync,
+                        proposal_request_id=goal_criteria_request_id,
+                        allow_pending_proposal=goal_criteria_succeeded,
+                    )
 
                 # ── Session cost & token state synchronization from checkpoint ──
                 try:
-                    await self._sync_session_cost_from_checkpoint()
+                    if cleanup_state is not None:
+                        try:
+                            await self._sync_session_cost_from_checkpoint(
+                                state_values=cleanup_state
+                            )
+                        except TypeError:
+                            await self._sync_session_cost_from_checkpoint()
+                    else:
+                        await self._sync_session_cost_from_checkpoint()
                 except (asyncio.CancelledError, Exception):
                     logger.debug("Error during agent cleanup session cost sync", exc_info=True)
 
@@ -1523,6 +1554,13 @@ class TalkOpsApp(App):
         finally:
             self._agent_reconciling = False
             self._focus_chat_input_after_refresh()
+            # A background task may have completed after this turn's final model call
+            # (so `abefore_model` never drained it); wake the agent once idle so the
+            # result is never stranded.
+            task_watcher = getattr(self, "_task_watcher", None)
+            if task_watcher is not None and not self._exit:
+                with suppress(Exception):
+                    task_watcher.check_pending_notifications()
 
     # ── Turn Summary Footer ──────────────────────────────
 
@@ -1679,15 +1717,23 @@ class TalkOpsApp(App):
         force: bool = False,
         proposal_request_id: str | None = None,
         allow_pending_proposal: bool = True,
+        state_values: dict[str, Any] | None = None,
     ) -> bool:
         return await _goals_ctrl(self).sync_goal_state_from_checkpoint(
             force=force,
             proposal_request_id=proposal_request_id,
             allow_pending_proposal=allow_pending_proposal,
+            state_values=state_values,
         )
 
-    async def _sync_session_cost_from_checkpoint(self) -> None:
-        await _goals_ctrl(self).sync_session_cost_from_checkpoint()
+    async def _sync_session_cost_from_checkpoint(
+        self,
+        *,
+        state_values: dict[str, Any] | None = None,
+    ) -> None:
+        await _goals_ctrl(self).sync_session_cost_from_checkpoint(
+            state_values=state_values
+        )
 
     async def _run_goal_criteria_request(
         self,
@@ -1859,16 +1905,30 @@ class TalkOpsApp(App):
 
             from talkops.commands import CommandContext
             from talkops.config.settings import settings as global_settings
+            active_agent = (
+                getattr(self, "_client", None)
+                or getattr(self, "_agent", None)
+                or (getattr(self._adapter, "_client", None) if getattr(self, "_adapter", None) else None)
+            )
             ctx = CommandContext(
                 app=self,
                 session=getattr(self, "_session_state", None),
-                agent=getattr(self, "_agent", None),
+                agent=active_agent,
                 settings=getattr(self, "_settings", None) or global_settings,
                 raw_command=text,
                 args=resolved_arg,
                 thread_id=self._agent_thread_id,
                 model_spec=self._model,
             )
+            if resolved_cmd_name in {"/compact", "/offload"} and getattr(self, "is_running", False):
+                self._compact_in_flight = True
+                self._agent_running = True
+                await self._set_spinner("Compacting conversation...")
+                self._agent_worker = self.run_worker(
+                    self._run_compact_command_task(text, resolved_cmd_name, ctx),
+                    exclusive=False,
+                )
+                return
             res = await self._command_router.dispatch(text, ctx)
             if res.mount_as_app_message and res.message:
                 from talkops.ui.widgets.messages import CommandOutputMessage
@@ -1926,7 +1986,7 @@ class TalkOpsApp(App):
                 from talkops.ui.widgets.messages import CommandOutputMessage
                 await self._mount_message(CommandOutputMessage(res.message, command=cmd_name))
 
-        elif cmd_name in {"/manual", "/auto", "/smart"}:
+        elif cmd_name in {"/manual", "/auto", "/smart", "/yolo"}:
             target_mode = ApprovalMode(cmd_name.lstrip("/"))
             await self._set_approval_mode(target_mode)
 
@@ -1940,6 +2000,46 @@ class TalkOpsApp(App):
                 await self._mount_message(
                     SystemMessage(f"Current Goal: `{self._goal or 'None'}`")
                 )
+
+    async def _run_compact_command_task(
+        self,
+        text: str,
+        resolved_cmd_name: str,
+        ctx: Any,
+    ) -> None:
+        """Execute /compact or /offload in a cancellable worker without blocking the UI loop."""
+        try:
+            res = await self._command_router.dispatch(text, ctx)
+            if res.mount_as_app_message and res.message:
+                from talkops.ui.widgets.messages import CommandOutputMessage
+
+                await self._mount_message(
+                    CommandOutputMessage(res.message, command=resolved_cmd_name)
+                )
+            elif not res.success and res.message:
+                await self._mount_message(SystemMessage(res.message))
+            if res.notify:
+                self.notify(res.notify, severity=res.notify_severity)
+            if res.push_screen:
+                self.push_screen(res.push_screen)
+        except asyncio.CancelledError:
+            with suppress(Exception):
+                await self._mount_message(SystemMessage("Compaction cancelled."))
+            raise
+        except Exception as exc:
+            logger.exception("Failed running %s command task", resolved_cmd_name)
+            await self._mount_message(
+                ErrorMessage(f"Compaction failed: {exc}")
+            )
+        finally:
+            self._compact_in_flight = False
+            self._agent_running = False
+            self._agent_worker = None
+            with suppress(Exception):
+                await self._set_spinner(None)
+            if not self._exit:
+                with suppress(Exception):
+                    await self._process_next_from_queue()
 
 
 
@@ -2144,8 +2244,15 @@ class TalkOpsApp(App):
     def _restore_goal_rubric_state(self, payload: dict[str, Any]) -> None:
         _goals_ctrl(self).restore_goal_rubric_state(payload)
 
-    async def _load_thread_history(self, thread_id: str) -> None:
-        await _threads_ctrl(self).load_thread_history(thread_id)
+    async def _load_thread_history(
+        self,
+        thread_id: str,
+        *,
+        state_values: dict[str, Any] | None = None,
+    ) -> None:
+        await _threads_ctrl(self).load_thread_history(
+            thread_id, state_values=state_values
+        )
 
     def _close_active_tool_group(self) -> None:
         _threads_ctrl(self).close_active_tool_group()
@@ -2215,24 +2322,27 @@ class TalkOpsApp(App):
                 pass
         return servers
 
-    def get_discovered_skills(self) -> list[dict[str, Any]]:
+    def get_discovered_skills(self, *, refresh: bool = False) -> list[dict[str, Any]]:
         """Get list of discovered skills (project, user, plugin, built-in)."""
+        ws_trusted = getattr(self, "_workspace_trusted", True)
+        cache_key = (
+            ws_trusted,
+            str(getattr(self._settings, "project_root", None) if getattr(self, "_settings", None) else ""),
+        )
+        if (
+            not refresh
+            and self._discovered_skills
+            and getattr(self, "_discovered_skills_cache_key", None) == cache_key
+        ):
+            return [dict(s) for s in self._discovered_skills]
+
         from talkops.config.settings import settings
         from talkops.skills.loader import list_skills
 
         built_in_dir = Path(__file__).parent.parent / "built_in_skills"
         user_skills_dir = settings.get_user_skills_dir("talkops")
-        ws_trusted = getattr(self, "_workspace_trusted", True)
         project_skills_dir = settings.get_project_skills_dir() if ws_trusted else None
-        project_root = (
-            (
-                getattr(self._settings, "project_root", None)
-                if hasattr(self, "_settings") and self._settings
-                else settings.project_root
-            )
-            if ws_trusted
-            else None
-        )
+        project_root = self._effective_workspace_root() if ws_trusted else None
 
         skills = list_skills(
             built_in_skills_dir=built_in_dir,
@@ -2241,25 +2351,36 @@ class TalkOpsApp(App):
             include_plugins=True,
             project_root=project_root,
         )
-        return [dict(s) for s in skills]
+        resolved = [dict(s) for s in skills]
+        self._discovered_skills = resolved
+        self._discovered_skills_cache_key = cache_key
+        return [dict(s) for s in resolved]
+
+    def _effective_workspace_root(self) -> Path | None:
+        """Resolve active project root, falling back to the current working directory."""
+        from talkops.config.settings import settings
+
+        app_settings = getattr(self, "_settings", None)
+        for candidate in (
+            getattr(app_settings, "effective_project_root", None) if app_settings else None,
+            getattr(app_settings, "project_root", None) if app_settings else None,
+            settings.effective_project_root,
+            getattr(self, "_cwd", None),
+            settings.effective_cwd,
+        ):
+            if isinstance(candidate, Path):
+                return candidate
+            if isinstance(candidate, str) and candidate.strip():
+                return Path(candidate)
+        return None
 
     def get_discovered_plugin_agents(self) -> list[dict[str, Any]]:
         """Get list of discovered user, project, and plugin subagents."""
         from talkops.config import paths
-        from talkops.config.settings import settings
         from talkops.subagents.loader import list_subagents
 
         ws_trusted = getattr(self, "_workspace_trusted", True)
-        project_root = (
-            (
-                getattr(self._settings, "project_root", None)
-                if hasattr(self, "_settings") and self._settings
-                else settings.project_root
-            )
-            if ws_trusted
-            else None
-        )
-        root_path = Path(project_root) if project_root else None
+        root_path = self._effective_workspace_root() if ws_trusted else None
         user_agents_dir = paths.user_agents_dir("talkops")
         project_agents_dir = paths.project_agents_dir(root_path) if root_path else None
         if (
@@ -2297,6 +2418,10 @@ class TalkOpsApp(App):
                 skill_commands.extend(build_agent_commands(plugin_agents or []))
                 skill_commands.extend(build_custom_commands())
                 self._chat_input.update_slash_commands(get_all_entries(skill_commands))
+            try:
+                self.query_one(WelcomeBanner).refresh_capabilities()
+            except Exception:
+                pass
         except Exception as exc:
             logger.debug("Failed startup skill discovery: %s", exc)
 
@@ -2927,6 +3052,13 @@ class TalkOpsApp(App):
     def _notify_auto_mode_enabled_once(self) -> None:
         _modals_ctrl(self).notify_auto_mode_enabled_once()
 
+    def _notify_yolo_mode_enabled_once(
+        self,
+        *,
+        previous_mode: ApprovalMode = ApprovalMode.MANUAL,
+    ) -> None:
+        _modals_ctrl(self).notify_yolo_mode_enabled_once(previous_mode=previous_mode)
+
     def action_toggle_tool_output(self) -> None:
         """Execute the toggle tool output action."""
         _modals_ctrl(self).action_toggle_tool_output()
@@ -3128,8 +3260,14 @@ class TalkOpsApp(App):
     def _reset_ephemeral_mode_states(self) -> None:
         _modals_ctrl(self).reset_ephemeral_mode_states()
 
-    async def _sync_agent_session_state_from_checkpoint(self) -> None:
-        await _modals_ctrl(self).sync_agent_session_state_from_checkpoint()
+    async def _sync_agent_session_state_from_checkpoint(
+        self,
+        *,
+        state_values: dict[str, Any] | None = None,
+    ) -> None:
+        await _modals_ctrl(self).sync_agent_session_state_from_checkpoint(
+            state_values=state_values
+        )
 
     async def _run_agent_session_request(self, request: dict[str, Any]) -> None:
         await _modals_ctrl(self).run_agent_session_request(request)
@@ -3181,6 +3319,12 @@ class TalkOpsApp(App):
             except Exception:
                 logger.debug("Failed to stop server process during exit", exc_info=True)
         try:
+            from talkops.storage.factory import close_operational_store
+
+            close_operational_store()
+        except Exception:
+            pass
+        try:
             from talkops.state.session import release_all_thread_presence
 
             release_all_thread_presence()
@@ -3219,7 +3363,7 @@ class TalkOpsApp(App):
             except Exception:
                 pass
 
-        # 4. Stop server process
+        # 4. Stop server process and close any active MCP sessions
         if self._server_proc is not None:
             try:
                 if hasattr(self._server_proc, "astop"):
@@ -3228,6 +3372,19 @@ class TalkOpsApp(App):
                     self._server_proc.stop()
             except Exception:
                 pass
+        try:
+            from talkops.mcp.session_manager import MCPSessionManager
+
+            if MCPSessionManager._instance is not None:
+                await MCPSessionManager._instance.close_all()
+        except Exception:
+            pass
+        try:
+            from talkops.storage.factory import aclose_operational_store
+
+            await aclose_operational_store()
+        except Exception:
+            pass
         try:
             from talkops.state.session import release_all_thread_presence
 

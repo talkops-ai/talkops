@@ -20,7 +20,6 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import OptionList, Static

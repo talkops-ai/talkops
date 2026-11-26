@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import fnmatch
 import os as _os
 from collections.abc import Callable, Mapping, Sequence
@@ -158,6 +159,13 @@ def _format_description(tool_call: Any = None, *args: Any, **kwargs: Any) -> str
             if first_line
             else "Evaluate script / dispatch subagents"
         )
+    if name == "list_resources":
+        srv = str(tool_args.get("server_name") or tool_args.get("ServerName") or tool_args.get("server") or "mcp")
+        return f"List MCP resources from {srv}"
+    if name == "read_resource":
+        srv = str(tool_args.get("server_name") or tool_args.get("ServerName") or tool_args.get("server") or "mcp")
+        uri = str(tool_args.get("uri") or tool_args.get("Uri") or "resource")
+        return f"Read MCP resource '{uri}' from {srv}"
     if name == "call_mcp_tool":
         from talkops.middleware.headless_mcp_guard import extract_call_mcp_tool_target
 
@@ -237,11 +245,30 @@ def _should_interrupt_tool_call(
     if mode in (ApprovalMode.AUTO, ApprovalMode.SMART, "auto", "smart"):
         return not auto_mode_enabled
 
-    # Never interrupt internal memory file writes (e.g. AGENTS.md) or read-only tools
+    # Never interrupt internal memory file writes (e.g. AGENTS.md), OpenWiki tools, or read-only tools
+    from talkops.middleware.openwiki import LIFECYCLE_TOOL_NAMES, RETRIEVAL_TOOL_NAMES
+
     tool_name = str(tool_call.get("name") or tool_call.get("action") or "") if isinstance(tool_call, dict) else getattr(tool_call, "name", "")
     tool_args = tool_call.get("args") or tool_call.get("parameters") or {} if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
     path_str = str(tool_args.get("path") or tool_args.get("TargetFile") or tool_args.get("file_path") or "")
-    if tool_name in READONLY_FS_TOOLS or "AGENTS.md" in path_str:
+    if (
+        tool_name in READONLY_FS_TOOLS
+        or tool_name in RETRIEVAL_TOOL_NAMES
+        or tool_name in LIFECYCLE_TOOL_NAMES
+        or tool_name in {
+            "list_resources",
+            "read_resource",
+            "write_todos",
+            "read_todos",
+            "think",
+            "query_service_blast_radius",
+            "list_recent_infrastructure_changes",
+            "search_incident_memory",
+            "record_operational_memory_rule",
+            "record_hypothesis_verdict",
+        }
+        or "AGENTS.md" in path_str
+    ):
         return False
     if tool_name == "call_mcp_tool" and is_call_mcp_tool_read_only(tool_args):
         return False
@@ -300,6 +327,10 @@ def _resolve_ptc_option(
     if ptc is False or ptc is None or ptc == []:
         return None
 
+    from talkops.middleware.openwiki import LIFECYCLE_TOOL_NAMES, RETRIEVAL_TOOL_NAMES
+
+    excluded_openwiki_names = LIFECYCLE_TOOL_NAMES | RETRIEVAL_TOOL_NAMES
+
     live_names: list[str] = []
     for candidate in tools:
         if isinstance(candidate, BaseTool):
@@ -314,7 +345,7 @@ def _resolve_ptc_option(
             attr = getattr(candidate, "name", None)
             if isinstance(attr, str):
                 live_names.append(attr)
-    live_set: set[str] = set(live_names)
+    live_set: set[str] = set(live_names) - excluded_openwiki_names
 
     if isinstance(ptc, str):
         normalized = ptc.strip().lower()
@@ -345,7 +376,7 @@ def _resolve_ptc_option(
             if not isinstance(item, str):
                 msg = "interpreter_ptc list must contain only strings."
                 raise TypeError(msg)
-        configured_set = set(ptc)
+        configured_set = set(ptc) - excluded_openwiki_names
         unacknowledged = configured_set & _INTERPRETER_WRITE_TOOLS
         if unacknowledged and not auto_approve and not acknowledge_unsafe:
             unack_str = ", ".join(sorted(unacknowledged))
@@ -420,8 +451,24 @@ def _subagent_cli_middleware(
     )
 
     if backend is not None and model is not None:
+        effective_subagent_model: str | BaseChatModel = model
+        if isinstance(subagent_meta, dict):
+            sub_model_spec = subagent_meta.get("model")
+            if (
+                isinstance(sub_model_spec, str)
+                and sub_model_spec.strip()
+                and sub_model_spec.strip() not in {"inherit", "auto", "dynamic"}
+            ):
+                with contextlib.suppress(Exception):
+                    effective_subagent_model = create_model(sub_model_spec.strip()).model
         try:
-            middleware.append(_create_cli_compaction_middleware(model, backend))
+            middleware.append(
+                _create_cli_compaction_middleware(
+                    effective_subagent_model,
+                    backend,
+                    subagent_name=subagent_name,
+                )
+            )
         except Exception as exc:
             logger.warning(
                 "Failed to initialize compaction middleware for subagent %s: %s",
@@ -440,6 +487,27 @@ def _subagent_cli_middleware(
     if shell_allow_list:
         middleware.append(ShellAllowListMiddleware(shell_allow_list))
 
+    if not interactive and not auto_approve and mcp_tools:
+        gated_sub_names = gated_mcp_tool_names(mcp_tools)
+        if gated_sub_names:
+            middleware.append(HeadlessMCPGuardMiddleware(gated_sub_names))
+
+    from talkops.addons.config import is_sre_profile_active
+    from talkops.middleware.policy_guard import ExecutionProfileGuardMiddleware
+    from talkops.middleware.tnr_safety import TransactionalNonRegressionMiddleware
+    from talkops.security.redaction import build_talkops_pii_middlewares
+
+    middleware.extend(build_talkops_pii_middlewares())
+    middleware.append(ExecutionProfileGuardMiddleware())
+    if is_sre_profile_active():
+        from talkops.middleware.payload_shaper import (
+            ToolPayloadShaperMiddleware,
+            build_sre_context_editing_middleware,
+        )
+
+        middleware.append(ToolPayloadShaperMiddleware())
+        middleware.append(build_sre_context_editing_middleware())
+
     middleware.append(
         ServerHooksMiddleware(
             cwd=subagent_cwd,
@@ -447,6 +515,37 @@ def _subagent_cli_middleware(
             mcp_tools=mcp_tools or (),
         )
     )
+
+    from talkops.middleware.plugin_hooks import (
+        PluginHooksMiddleware,
+        load_plugin_hooks_spec,
+    )
+    from talkops.plugins.adapters.agents import get_subagent_bundle_dir
+
+    meta_for_hooks: dict[str, Any] = (
+        dict(subagent_meta)
+        if isinstance(subagent_meta, dict)
+        else ({"path": subagent_path, "name": subagent_name} if subagent_path else {})
+    )
+    bundle_dir = get_subagent_bundle_dir(meta_for_hooks) if meta_for_hooks else None
+    if bundle_dir is not None and bundle_dir.is_dir():
+        raw_plugin_id = str(meta_for_hooks.get("plugin_id") or "")
+        sub_plugin_name = raw_plugin_id.split("@", 1)[0] if raw_plugin_id else bundle_dir.name
+        sub_hooks_spec = load_plugin_hooks_spec(
+            bundle_dir,
+            plugin_name=sub_plugin_name,
+            project_dir=subagent_cwd,
+        )
+        if not sub_hooks_spec.is_empty:
+            middleware.append(
+                PluginHooksMiddleware(
+                    spec=sub_hooks_spec,
+                    cwd=subagent_cwd,
+                    agent_type=subagent_name,
+                    plugin_name=sub_plugin_name,
+                    mcp_tools=mcp_tools or (),
+                )
+            )
 
     # MCP Context Middleware — injects MCP server inventory into system prompt
     if mcp_server_info or mcp_config:
@@ -523,13 +622,21 @@ def _subagent_cli_middleware(
         backend_fs = FilesystemBackend(virtual_mode=False)
         for src in global_sources:
             src_path = src[0]
+            src_ns = src[2] if len(src) > 2 else None
             try:
                 found_dirs = discover_skill_dirs(backend_fs, src_path)
                 for dir_path, _ in found_dirs:
                     skill_name = Path(dir_path).name
+                    candidates = [skill_name]
+                    if src_ns:
+                        candidates.append(f"{src_ns}:{skill_name}")
+                        short_ns = str(src_ns).split("@", 1)[0]
+                        if short_ns != src_ns:
+                            candidates.append(f"{short_ns}:{skill_name}")
                     if any(
-                        fnmatch.fnmatch(skill_name, pat) or fnmatch.fnmatch(skill_name.lower(), pat.lower())
+                        fnmatch.fnmatch(cand, pat) or fnmatch.fnmatch(cand.lower(), pat.lower())
                         for pat in allowed_skills
+                        for cand in candidates
                     ):
                         if not any(s[0] == src[0] for s in skill_sources):
                             skill_sources.append(src)
@@ -567,6 +674,7 @@ def _subagent_cli_middleware(
 
     from talkops.config.langsmith import get_langsmith_project_name
     from talkops.middleware.local_context import LocalContextMiddleware
+    from talkops.middleware.openwiki import OpenWikiContextMiddleware
 
     tracing_project_name = get_langsmith_project_name()
     current_settings = get_settings()
@@ -578,10 +686,43 @@ def _subagent_cli_middleware(
             user_tracing_project=getattr(current_settings, "user_langchain_project", tracing_project_name),
         )
     )
+    middleware.append(
+        OpenWikiContextMiddleware(
+            repo_root=worktree_root or subagent_cwd,
+            is_subagent=True,
+        )
+    )
+
+    from deepagents.middleware.unsupported_content import UnsupportedContentMiddleware
+
+    middleware.append(
+        TransactionalNonRegressionMiddleware(
+            working_dir=subagent_cwd,
+            enabled_by_default=_os.environ.get("TALKOPS_SERVER_TNR", "").lower() == "true",
+        )
+    )
+    if model is not None:
+        try:
+            sub_rubric_tools = _create_rubric_grader_tools(
+                effective_backend,
+                repository_root=str(subagent_cwd),
+            )
+            middleware.append(
+                ReliableRubricMiddleware(
+                    model=model,
+                    system_prompt=_RUBRIC_GRADER_SYSTEM_PROMPT,
+                    tools=sub_rubric_tools,
+                    grader_middleware=[_WebSearchBudgetMiddleware()],
+                    grader_context_schema=CLIContextSchema,
+                )
+            )
+        except Exception as exc:
+            logger.debug("Skipping ReliableRubricMiddleware on subagent %s: %s", subagent_name, exc)
 
     middleware.append(ManagedMemoryGuardMiddleware())
     middleware.append(SubagentArtifactsMiddleware())
     middleware.append(UnifiedSystemMessageMiddleware())
+    middleware.append(UnsupportedContentMiddleware())
     return middleware
 
 
@@ -681,14 +822,39 @@ def create_talkops_agent(
         model_res = create_model(model, extra_kwargs=merged_kwargs if merged_kwargs else None)
         model_res.apply_to_settings()
         active_model = model_res.model
-        model_name = getattr(active_model, "model_name", model or "default-model")
+        raw_name = (
+            model_res.model_name
+            or getattr(active_model, "model_name", None)
+            or getattr(active_model, "model", None)
+            or (model or "default-model")
+        )
+        model_name = str(raw_name).removeprefix("models/")
         model_provider = model_res.provider
         model_context_limit = model_res.context_limit
         model_unsupported_modalities = model_res.unsupported_modalities
     else:
         active_model = model
-        model_name = getattr(active_model, "model_name", "custom-model")
-        model_provider = getattr(active_model, "_llm_type", None)
+        raw_name = (
+            getattr(active_model, "model_name", None)
+            or getattr(active_model, "model", None)
+            or getattr(settings, "model_name", None)
+        )
+        if isinstance(raw_name, str) and raw_name.strip():
+            model_name = raw_name.strip().removeprefix("models/")
+        else:
+            model_name = "custom-model"
+        model_provider = (
+            getattr(settings, "model_provider", None)
+            or getattr(active_model, "_llm_type", None)
+        )
+        prof = getattr(active_model, "profile", None)
+        if isinstance(prof, Mapping) and isinstance(prof.get("max_input_tokens"), int):
+            model_context_limit = prof["max_input_tokens"]
+        else:
+            model_context_limit = getattr(settings, "model_context_limit", None)
+        model_unsupported_modalities = (
+            getattr(settings, "model_unsupported_modalities", frozenset()) or frozenset()
+        )
 
     # 4. Register catalog tools and build tool list
     register_all_tools()
@@ -846,8 +1012,16 @@ def create_talkops_agent(
 
     from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT, SubAgent
 
+    from talkops.middleware.openwiki import LIFECYCLE_TOOL_NAMES, RETRIEVAL_TOOL_NAMES
+
+    _openwiki_tool_names = LIFECYCLE_TOOL_NAMES | RETRIEVAL_TOOL_NAMES
     compiled_subagents: list[SubAgent] = []
-    base_subagent_tools = [t for t in all_tools if t not in mcp_tools_list]
+    base_subagent_tools = [
+        t
+        for t in all_tools
+        if t not in mcp_tools_list
+        and getattr(t, "name", "") not in _openwiki_tool_names
+    ]
 
     # Collect every subagent's MCP config first, then probe all unique servers in
     # one globally bounded batch. This avoids one blocking async bridge per agent.
@@ -900,6 +1074,8 @@ def create_talkops_agent(
             subagent_name,
             ({}, [], []),
         )
+        if isinstance(servers, Mapping) and servers and not subagent_meta.get("mcp_servers"):
+            subagent_meta["mcp_servers"] = [str(k) for k in servers if str(k).strip()]
 
         if subagent_mcp_tools:
             subagent_dict["tools"] = [*base_subagent_tools, *subagent_mcp_tools]
@@ -987,6 +1163,93 @@ def create_talkops_agent(
             extra={"subagent": gp_name},
         )
 
+    browser_on_main_agent_flag = bool(kwargs.pop("browser_on_main_agent", False)) or (
+        _os.environ.get("TALKOPS_BROWSER_ON_MAIN_AGENT", "").strip().lower() in {"1", "true", "yes"}
+    )
+
+    if not browser_on_main_agent_flag and not any(
+        sub.get("name") == "browser" for sub in compiled_subagents
+    ):
+        from talkops.middleware.browser import (
+            BROWSER_SUBAGENT_SYSTEM_PROMPT,
+            TalkOpsBrowserMiddleware,
+        )
+
+        browser_name = "browser"
+        browser_description = (
+            "DevOps, SRE, and general web automation subagent that drives a Chrome browser "
+            "(reusing the user's live Chrome SSO sessions via DevToolsActivePort or a persistent "
+            "TalkOps profile) using Stagehand `snapshot`, `run`, `screenshot`, and `browser_handoff`. "
+            "Preferred for inspecting observability/SRE dashboards (Grafana, Datadog, Kibana, "
+            "Alertmanager, Jaeger, PagerDuty), cloud consoles (AWS, GCP, Azure, Cloudflare), "
+            "GitOps/CI-CD portals (Argo CD, GitHub, GitLab), `localhost`/port-forwarded services, "
+            "and any other SaaS or web UI."
+        )
+        browser_system_prompt = (
+            f"{BROWSER_SUBAGENT_SYSTEM_PROMPT}{_subagent_execution_guardrail}"
+            if "Anti-Recursion Discipline" not in BROWSER_SUBAGENT_SYSTEM_PROMPT
+            else BROWSER_SUBAGENT_SYSTEM_PROMPT
+        )
+        browser_mw_instance = TalkOpsBrowserMiddleware()
+        browser_allowed_tools = [
+            "snapshot",
+            "run",
+            "screenshot",
+            "browser_handoff",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "ls",
+            "glob",
+            "grep",
+            "ask_user",
+        ]
+        browser_sub_meta: SubagentMetadata = cast(
+            SubagentMetadata,
+            {
+                "name": browser_name,
+                "description": browser_description,
+                "system_prompt": browser_system_prompt,
+                "tools": browser_allowed_tools,
+                "skills": [],
+                "is_plugin": False,
+            },
+        )
+        browser_middleware = _subagent_cli_middleware(
+            has_explicit_model=False,
+            assistant_id=assistant_id,
+            subagent_name=browser_name,
+            subagent_meta=browser_sub_meta,
+            allowed_tools=browser_allowed_tools,
+            allowed_skills=[],
+            skill_sources_override=(),
+            interactive=interactive,
+            auto_approve=auto_approve,
+            shell_allow_list=allow_list,
+            interrupt_on=interrupt_on,
+            worktree_root=effective_cwd,
+            custom_middleware=[browser_mw_instance],
+            backend=composite_backend,
+            model=active_model,
+        )
+        browser_subagent: dict[str, Any] = {
+            "name": browser_name,
+            "description": browser_description,
+            "system_prompt": browser_system_prompt,
+            "tools": [],
+            "skills": [],
+            "middleware": browser_middleware,
+        }
+        if interrupt_on is not None:
+            browser_subagent["interrupt_on"] = {}
+        compiled_subagents.append(cast(SubAgent, browser_subagent))
+        subagent_by_name[browser_name] = browser_sub_meta
+        logger.info(
+            "Registered built-in subagent '%s'",
+            browser_name,
+            extra={"subagent": browser_name},
+        )
+
 
     # 9. Build system prompt
     prompt_cwd = (
@@ -1011,23 +1274,35 @@ def create_talkops_agent(
     # 10. Build ordered middleware stack (matching TalkOps execution order)
     agent_middleware: list[AgentMiddleware[Any, Any]] = []
 
-    # 10.0 WebhookSREMiddleware — dynamically swaps the base system prompt to
-    # Autonomous SRE & Incident RCA mode on webhook / incident channel runs while
-    # keeping all downstream middlewares, skills, and subagent delegation intact.
-    agent_middleware.append(
-        WebhookSREMiddleware(
-            assistant_id=assistant_id,
-            cwd=prompt_cwd,
-            fs_tools=fs_tools,
-            model_name=model_name,
-            model_provider=model_provider,
-            model_context_limit=model_context_limit,
-            model_unsupported_modalities=model_unsupported_modalities,
-            cloud_provider=cloud_provider or getattr(settings, "cloud_provider", "aws"),
-            sandbox_type=str(effective_sandbox_type),
-            has_search=any(getattr(t, "name", None) == "web_search" for t in all_tools),
+    # 10.0 SRE & Central Webhook Server Middlewares — regular interactive TUI
+    # sessions exclude all SRE tools and middlewares; headless/central-server graphs
+    # attach `WebhookSREMiddleware` (with SRE tools gated strictly on `sre_workflow_active`).
+    from talkops.addons.config import is_sre_profile_active, is_webhook_server_active
+
+    sre_workflow_active = is_sre_profile_active()
+    webhook_server_active = is_webhook_server_active()
+    if webhook_server_active or not interactive:
+        agent_middleware.append(
+            WebhookSREMiddleware(
+                assistant_id=assistant_id,
+                cwd=prompt_cwd,
+                fs_tools=fs_tools,
+                model_name=model_name,
+                model_provider=model_provider,
+                model_context_limit=model_context_limit,
+                model_unsupported_modalities=model_unsupported_modalities,
+                cloud_provider=cloud_provider or getattr(settings, "cloud_provider", "aws"),
+                sandbox_type=str(effective_sandbox_type),
+                has_search=any(getattr(t, "name", None) == "web_search" for t in all_tools),
+                enable_hypothesis_tool=sre_workflow_active,
+            )
         )
-    )
+    if sre_workflow_active:
+        from talkops.middleware.context_authority import ContextAuthorityMiddleware
+        from talkops.middleware.storm_drain import AlertStormDrainMiddleware
+
+        agent_middleware.append(AlertStormDrainMiddleware())
+        agent_middleware.append(ContextAuthorityMiddleware(enable_tools=True))
 
     # 10.1 ConfigurableModelMiddleware, Jev Dynamic Model Router & Model Retry
     agent_middleware.append(ConfigurableModelMiddleware())
@@ -1047,8 +1322,15 @@ def create_talkops_agent(
     if enable_ask_user and interactive:
         agent_middleware.append(AskUserMiddleware())
 
+    # 10.4b Optional main-agent BrowserMiddleware (direct main-agent browser tool binding)
+    if browser_on_main_agent_flag:
+        from talkops.middleware.browser import TalkOpsBrowserMiddleware
+
+        agent_middleware.append(TalkOpsBrowserMiddleware())
+
     # 10.5 MCP tool arguments and error handling
     coord_server_info: list[Any] | None = None
+    mcp_cfg_for_mw: dict[str, Any] | None = None
     if mcp_tools_list or cached_infos or mcp_configs:
         mcp_cfg_for_mw = mcp_configs
         if not mcp_cfg_for_mw and not cached_infos and mcp_tools_list:
@@ -1072,12 +1354,6 @@ def create_talkops_agent(
                     if not str(getattr(info, "name", info)).startswith("subagent__")
                 ]
 
-        if coord_server_info or mcp_cfg_for_mw:
-            from talkops.middleware.mcp_context import MCPContextMiddleware
-
-            agent_middleware.append(
-                MCPContextMiddleware(mcp_server_info=coord_server_info, mcp_config=mcp_cfg_for_mw)
-            )
         agent_middleware.append(MCPToolMiddleware(mcp_config=mcp_cfg_for_mw))
 
     # 10.5 MemoryMiddleware & ManagedMemoryGuardMiddleware
@@ -1149,7 +1425,30 @@ def create_talkops_agent(
 
                 class _TalkOpsCodeInterpreterMiddleware(CodeInterpreterMiddleware):
                     def _prepare_for_call(self, request: Any) -> str:
-                        return compact_interpreter_prompt(super()._prepare_for_call(request))
+                        req_tools = list(getattr(request, "tools", []) or [])
+                        filtered_req_tools = [
+                            t
+                            for t in req_tools
+                            if (
+                                t.get("name", "")
+                                if isinstance(t, dict)
+                                else getattr(t, "name", "")
+                            )
+                            not in _openwiki_tool_names
+                        ]
+                        if len(filtered_req_tools) != len(req_tools) and hasattr(
+                            request, "override"
+                        ):
+                            request = request.override(tools=filtered_req_tools)
+                        compacted_interp = compact_interpreter_prompt(
+                            super()._prepare_for_call(request)
+                        )
+                        if compacted_interp.startswith("### Interpreter"):
+                            return (
+                                "## Code Execution & Programmatic Tool Calling\n\n"
+                                f"{compacted_interp}"
+                            )
+                        return compacted_interp
 
                 agent_middleware.append(
                     _TalkOpsCodeInterpreterMiddleware(
@@ -1165,8 +1464,9 @@ def create_talkops_agent(
         except ImportError:
             logger.warning("langchain-quickjs is not installed. CodeInterpreterMiddleware disabled.")
 
-    # 10.8 LocalContextMiddleware
+    # 10.8 LocalContextMiddleware, MCPContextMiddleware & OpenWikiContextMiddleware
     from talkops.config.langsmith import get_langsmith_project_name
+    from talkops.middleware.openwiki import OpenWikiContextMiddleware
 
     tracing_project_name = get_langsmith_project_name()
     agent_middleware.append(
@@ -1175,6 +1475,17 @@ def create_talkops_agent(
             working_dir=effective_cwd,
             tracing_project=tracing_project_name,
             user_tracing_project=getattr(settings, "user_langchain_project", tracing_project_name),
+        )
+    )
+    if coord_server_info or mcp_cfg_for_mw:
+        from talkops.middleware.mcp_context import MCPContextMiddleware
+
+        agent_middleware.append(
+            MCPContextMiddleware(mcp_server_info=coord_server_info, mcp_config=mcp_cfg_for_mw)
+        )
+    agent_middleware.append(
+        OpenWikiContextMiddleware(
+            repo_root=project_scope_root,
         )
     )
 
@@ -1199,9 +1510,62 @@ def create_talkops_agent(
     elif interrupt_on is not None:
         agent_middleware.append(AsyncApprovalHITLMiddleware(interrupt_on))
 
-    # 10.11 ServerHooksMiddleware & TransactionalNonRegressionMiddleware
+    # 10.11 ServerHooksMiddleware, ExecutionProfileGuard, PayloadShaper & TransactionalNonRegressionMiddleware
     hooks_cwd = Path(effective_cwd) if effective_cwd else Path.cwd()
+    from talkops.middleware.policy_guard import ExecutionProfileGuardMiddleware
+    from talkops.security.redaction import build_talkops_pii_middlewares
+
+    explicit_execution_profile = kwargs.pop("execution_profile", None)
+    agent_middleware.extend(build_talkops_pii_middlewares())
+    agent_middleware.append(
+        ExecutionProfileGuardMiddleware(
+            default_profile=explicit_execution_profile,
+        )
+    )
+    if sre_workflow_active:
+        from talkops.middleware.payload_shaper import (
+            ToolPayloadShaperMiddleware,
+            build_sre_context_editing_middleware,
+        )
+
+        agent_middleware.append(ToolPayloadShaperMiddleware())
+        agent_middleware.append(build_sre_context_editing_middleware())
+
     agent_middleware.append(ServerHooksMiddleware(cwd=hooks_cwd, mcp_tools=mcp_tools_list))
+    try:
+        from talkops.middleware.plugin_hooks import (
+            PluginHooksMiddleware,
+            load_plugin_hooks_spec,
+            merge_plugin_hooks_specs,
+        )
+        from talkops.plugins.discovery import discover_plugins
+
+        discovered_for_hooks = discover_plugins(
+            project_root=project_scope_root,
+            store=config_store or store,
+        ).plugins
+        main_hook_specs = [
+            load_plugin_hooks_spec(
+                p.root,
+                plugin_name=p.name,
+                plugin_data_dir=p.data_dir,
+                project_dir=hooks_cwd,
+                explicit_files=p.inventory.hooks_files,
+            )
+            for p in discovered_for_hooks
+            if not p.is_agent_plugin
+        ]
+        merged_main_hooks = merge_plugin_hooks_specs([s for s in main_hook_specs if not s.is_empty])
+        if not merged_main_hooks.is_empty:
+            agent_middleware.append(
+                PluginHooksMiddleware(
+                    spec=merged_main_hooks,
+                    cwd=hooks_cwd,
+                    mcp_tools=mcp_tools_list,
+                )
+            )
+    except Exception as exc:
+        logger.warning("Failed to initialize main-agent plugin hooks middleware: %s", exc)
     from talkops.middleware.tnr_safety import TransactionalNonRegressionMiddleware
 
     agent_middleware.append(
@@ -1280,6 +1644,7 @@ def create_talkops_agent(
     from talkops.middleware.agent_session import AgentSessionMiddleware
 
     plugin_agent_runnables: dict[str, Any] = {}
+    plugin_agent_mcp_configs: dict[str, dict[str, Any]] = {}
     for sub in compiled_subagents:
         s_name = sub.get("name")
         if not s_name:
@@ -1311,12 +1676,23 @@ def create_talkops_agent(
                 plugin_agent_runnables[short] = runnable
                 plugin_agent_runnables[s_name.lower()] = runnable
                 plugin_agent_runnables[short.lower()] = runnable
+                sub_servers = (
+                    prepared_subagent_mcp.get(s_name, ({}, [], []))[0]
+                    if isinstance(prepared_subagent_mcp, dict)
+                    else {}
+                )
+                if isinstance(sub_servers, dict) and sub_servers:
+                    plugin_agent_mcp_configs[s_name] = sub_servers
+                    plugin_agent_mcp_configs[short] = sub_servers
+                    plugin_agent_mcp_configs[s_name.lower()] = sub_servers
+                    plugin_agent_mcp_configs[short.lower()] = sub_servers
             except Exception as exc:
                 logger.warning("Failed to compile plugin agent runnable %s: %s", s_name, exc)
 
     agent_middleware.append(
         AgentSessionMiddleware(
             agent_runnables=plugin_agent_runnables,
+            agent_mcp_configs=plugin_agent_mcp_configs,
             model=active_model,
         )
     )

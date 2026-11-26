@@ -48,6 +48,8 @@ def plugin_environment(
         "CLAUDE_PLUGIN_DATA": data,
         "CODEX_PLUGIN_ROOT": root,
         "CODEX_PLUGIN_DATA": data,
+        "TALKOPS_PLUGIN_ROOT": root,
+        "TALKOPS_PLUGIN_DATA": data,
         "PLUGIN_ROOT": root,
         "PLUGIN_DATA": data,
     }
@@ -55,6 +57,7 @@ def plugin_environment(
         proj = str(project_dir)
         env["CLAUDE_PROJECT_DIR"] = proj
         env["CODEX_PROJECT_DIR"] = proj
+        env["TALKOPS_PROJECT_DIR"] = proj
         env["PROJECT_DIR"] = proj
     return env
 

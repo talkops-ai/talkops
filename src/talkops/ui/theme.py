@@ -26,7 +26,6 @@ are backed by these constants.
 from __future__ import annotations
 
 import contextlib
-import functools
 import os
 import re
 import tempfile

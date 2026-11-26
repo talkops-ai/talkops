@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -64,7 +63,7 @@ async def test_mcp_viewer_empty_state_mounts_scroll_and_help() -> None:
     screen = MCPViewerScreen(server_info=[])
     app = DummyViewerApp(screen)
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         # Title is mounted
         title = screen.query_one(".mcp-viewer-title")
         assert title is not None
@@ -110,7 +109,7 @@ async def test_mcp_viewer_populated_state_mounts_filter_and_tools() -> None:
     screen = MCPViewerScreen(server_info=[server])
     app = DummyViewerApp(screen)
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         title = screen.query_one(".mcp-viewer-title")
         assert "1 server, 1 tool" in str(title.render())
 
@@ -350,7 +349,7 @@ async def test_mcp_tool_detail_screen_content() -> None:
     modal = MCPToolDetailScreen(tool_info=tool_info, server_name="test-server")
     app = DummyViewerApp(modal)
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         content = modal.query_one("#mcp-tool-detail-content")
         assert content is not None
         rendered = " ".join(str(c.render()) for c in content.children)

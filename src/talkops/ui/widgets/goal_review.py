@@ -48,7 +48,7 @@ from talkops.ui.widgets.ask_user import AskUserTextArea, _QuestionWidget
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from talkops.ui.widgets._ask_user_types import Question
+    pass
 
 logger = get_logger(__name__)
 

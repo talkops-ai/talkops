@@ -15,7 +15,7 @@
 """Unit tests for AST evaluation, shell safety, unicode, and URL validation."""
 import pytest
 
-from talkops.security.cli_ast_evaluator import CliAstEvaluator, evaluate_command_safety
+from talkops.security.cli_ast_evaluator import CliAstEvaluator
 from talkops.security.shell_safety import (
     contains_dangerous_patterns,
     is_shell_command_allowed,

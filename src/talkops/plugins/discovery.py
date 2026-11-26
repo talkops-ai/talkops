@@ -206,12 +206,19 @@ def _normalize_plugin_id(plugin_id: str) -> str:
     return f"{plugin_id}@{get_primary_default_marketplace_name()}"
 
 
-def _resolve_installed_plugin_id(plugin_id: str) -> str:
-    """Resolve plugin id against currently installed plugins."""
+def _resolve_installed_plugin_id(
+    plugin_id: str, *, project_root: Path | None = None
+) -> str:
+    """Resolve plugin id against currently installed or workspace plugins."""
     if "@" in plugin_id:
         return plugin_id
 
-    installed = load_installed_plugins()
+    if isinstance(project_root, Path):
+        for ws_dir in _iter_workspace_plugin_dirs(project_root):
+            if ws_dir.name == plugin_id:
+                return f"{plugin_id}@project"
+
+    installed = load_installed_plugins(project_root=project_root)
     prefix = f"{plugin_id}@"
     matches = [pid for pid in installed if pid.startswith(prefix)]
     if len(matches) == 1:
@@ -230,7 +237,7 @@ def _resolve_installed_plugin_id(plugin_id: str) -> str:
 def _require_installed_plugin(
     plugin_id: str, *, project_root: Path | None = None
 ) -> None:
-    canonical_id = _resolve_installed_plugin_id(plugin_id)
+    canonical_id = _resolve_installed_plugin_id(plugin_id, project_root=project_root)
     if canonical_id in load_installed_plugins(strict=True, project_root=project_root):
         return
     if isinstance(project_root, Path):
@@ -238,10 +245,15 @@ def _require_installed_plugin(
         for cand in (
             project_root / ".talkops" / "plugins" / bare_name,
             project_root / ".agents" / "plugins" / bare_name,
+            project_root / ".agent" / "plugins" / bare_name,
+            project_root / "_agents" / "plugins" / bare_name,
+            project_root / "_agent" / "plugins" / bare_name,
             project_root / "plugins" / bare_name,
         ):
             if cand.is_dir():
                 return
+        if any(ws.name == bare_name for ws in _iter_workspace_plugin_dirs(project_root)):
+            return
     records = load_marketplace_records(project_root=project_root)
     for mp_name, rec in records.items():
         if getattr(rec, "is_project", False) and canonical_id.endswith(f"@{mp_name}"):
@@ -267,31 +279,35 @@ def set_installed_plugin_enabled(
     """Set the enabled state of an installed plugin at the given scope."""
     from talkops.config.settings import settings
 
-    canonical_id = _resolve_installed_plugin_id(plugin_id)
     effective_root = (
         project_root if isinstance(project_root, Path) else settings.effective_project_root
     )
+    canonical_id = _resolve_installed_plugin_id(plugin_id, project_root=effective_root)
     target_scope: InstallScope = scope
     target_root: Path | None = (
         project_root if isinstance(project_root, Path) else effective_root
     )
 
     if scope in {"user", "global"} and isinstance(effective_root, Path):
-        entries = load_installed_plugin_entries().get(canonical_id, [])
-        has_user_install = any(e.scope in {"user", "global"} for e in entries)
-        if not has_user_install:
-            if canonical_id in load_local_enabled_plugin_ids(effective_root) or any(
-                e.scope == "local" and e.project_path == str(effective_root)
-                for e in entries
-            ):
-                target_scope = "local"
-                target_root = effective_root
-            elif canonical_id in load_project_enabled_plugin_ids(effective_root) or any(
-                e.scope == "project" and e.project_path == str(effective_root)
-                for e in entries
-            ):
-                target_scope = "project"
-                target_root = effective_root
+        if canonical_id.endswith("@project"):
+            target_scope = "project"
+            target_root = effective_root
+        else:
+            entries = load_installed_plugin_entries().get(canonical_id, [])
+            has_user_install = any(e.scope in {"user", "global"} for e in entries)
+            if not has_user_install:
+                if canonical_id in load_local_enabled_plugin_ids(effective_root) or any(
+                    e.scope == "local" and e.project_path == str(effective_root)
+                    for e in entries
+                ):
+                    target_scope = "local"
+                    target_root = effective_root
+                elif canonical_id in load_project_enabled_plugin_ids(effective_root) or any(
+                    e.scope == "project" and e.project_path == str(effective_root)
+                    for e in entries
+                ):
+                    target_scope = "project"
+                    target_root = effective_root
 
     if target_scope != "project":
         _require_installed_plugin(canonical_id, project_root=target_root)
@@ -349,22 +365,107 @@ def _resolve_marketplace_and_entry(
     return marketplace, entry
 
 
+def is_path_like_install_target(target: str | Path) -> bool:
+    """Return True if ``target`` looks like a local filesystem path rather than ``name@marketplace``."""
+    if isinstance(target, Path):
+        return True
+    cleaned = target.strip().strip("'\"")
+    if not cleaned:
+        return False
+    if cleaned.startswith(("/", "./", "../", "~")) or "/" in cleaned or "\\" in cleaned:
+        return True
+    return False
+
+
 @plugin_mutation_lock()
-def install_plugin(
-    plugin_id: str,
+def install_plugin_from_path(
+    source_path: str | Path,
     *,
     scope: InstallScope = "user",
     project_root: Path | None = None,
 ) -> PluginInstance:
-    """Install a marketplace plugin into the versioned cache and enable it.
+    """Install a plugin directly from a local directory path into the versioned cache."""
+    load_installed_plugins(strict=True)
+    raw = str(source_path).strip().strip("'\"")
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute() and isinstance(project_root, Path):
+        proj_cand = (project_root / candidate).resolve()
+        if proj_cand.exists():
+            candidate = proj_cand
+    source_root = candidate.resolve()
+    if not source_root.is_dir() or not _is_likely_plugin_dir(source_root):
+        msg = f"Could not detect plugin structure at {source_root}"
+        raise MarketplaceError(msg)
+
+    try:
+        manifest, _manifest_path, manifest_warnings = load_manifest(
+            source_root, fallback_name=source_root.name
+        )
+    except PluginManifestError as exc:
+        msg = f"Cannot install {source_root}: {exc}"
+        raise MarketplaceError(msg) from exc
+
+    for warning in manifest_warnings:
+        logger.debug("Plugin install warning for %s: %s", source_root, warning)
+
+    plugin_name = manifest.name if manifest and manifest.name else source_root.name
+    canonical_id = f"{plugin_name}@local"
+    version = manifest.version if manifest is not None else None
+    cache_path = cache_and_register_plugin(
+        canonical_id,
+        source_root,
+        version=version,
+        scope=scope,
+        project_root=project_root,
+        validate=partial(
+            _validate_plugin_copy,
+            plugin_id=canonical_id,
+            fallback_name=plugin_name,
+        ),
+    )
+
+    set_plugin_enabled_for_scope(
+        canonical_id, True, scope=scope, project_root=project_root
+    )
+    ensure_plugin_data_dir(canonical_id)
+
+    instance, warnings = _plugin_from_install_path(
+        plugin_id=canonical_id,
+        root=cache_path,
+        marketplace_name="local",
+        fallback_name=plugin_name,
+        source=scope,
+    )
+    if instance is None:
+        detail = "; ".join(warnings)
+        uninstall_plugin_record(
+            canonical_id, scope=scope, project_root=project_root
+        )
+        msg = f"Installed {canonical_id} but failed to load from cache: {detail}"
+        raise MarketplaceError(msg)
+    return instance
+
+
+@plugin_mutation_lock()
+def install_plugin(
+    plugin_id: str | Path,
+    *,
+    scope: InstallScope = "user",
+    project_root: Path | None = None,
+) -> PluginInstance:
+    """Install a marketplace or local-path plugin into the versioned cache and enable it.
 
     Args:
-        plugin_id: Plugin id in ``name@marketplace`` form or shorthand ``name``.
+        plugin_id: Plugin id in ``name@marketplace`` form, shorthand ``name``, or a local directory path.
         scope: Installation scope — ``"user"``, ``"project"``, or ``"local"``.
         project_root: Required when ``scope`` is ``"project"`` or ``"local"``.
     """
+    if is_path_like_install_target(plugin_id):
+        return install_plugin_from_path(
+            plugin_id, scope=scope, project_root=project_root
+        )
     load_installed_plugins(strict=True)
-    canonical_id = _normalize_plugin_id(plugin_id)
+    canonical_id = _normalize_plugin_id(str(plugin_id))
     marketplace, entry = _resolve_marketplace_and_entry(canonical_id)
     source_root = materialize_plugin_source(marketplace, entry)
     if source_root is None:
@@ -410,6 +511,7 @@ def install_plugin(
         root=cache_path,
         marketplace_name=marketplace.name,
         fallback_name=entry.name,
+        source=scope,
     )
     if instance is None:
         detail = "; ".join(warnings)
@@ -443,6 +545,7 @@ def _plugin_from_install_path(
     root: Path,
     marketplace_name: str,
     fallback_name: str,
+    source: InstallScope = "global",
 ) -> tuple[PluginInstance | None, tuple[str, ...]]:
     warnings: list[str] = []
     try:
@@ -464,6 +567,7 @@ def _plugin_from_install_path(
             data_dir=plugin_data_dir(plugin_id),
             manifest=manifest,
             inventory=inventory,
+            source=source,
         )
     except ValueError as exc:
         return None, (f"Skipping plugin {plugin_id}: {exc}",)
@@ -474,12 +578,26 @@ def _is_likely_plugin_dir(path: Path) -> bool:
     """Return True if ``path`` contains a plugin manifest or standard plugin components."""
     if find_manifest_path(path) is not None:
         return True
-    for marker in ("skills", "agents", "commands", ".mcp.json", "SKILL.md"):
+    for marker in ("skills", "agents", "commands", ".mcp.json", "mcp.json", "SKILL.md"):
         try:
             if (path / marker).exists():
                 return True
         except OSError:
             continue
+    return False
+
+
+def _matches_any_pattern(name: str, patterns: list[str]) -> bool:
+    """Match a plugin directory name against glob or regex patterns."""
+    import fnmatch
+    import re
+
+    for pat in patterns:
+        if fnmatch.fnmatch(name, pat):
+            return True
+        with suppress(re.error):
+            if re.search(f"^(?:{pat})$", name):
+                return True
     return False
 
 
@@ -493,6 +611,9 @@ def _iter_workspace_plugin_dirs(root: Path) -> list[Path]:
     for cand_parent in (
         root / ".talkops" / "plugins",
         root / ".agents" / "plugins",
+        root / ".agent" / "plugins",
+        root / "_agents" / "plugins",
+        root / "_agent" / "plugins",
         root / "plugins",
     ):
         if not cand_parent.is_dir():
@@ -514,7 +635,7 @@ def _iter_workspace_plugin_dirs(root: Path) -> list[Path]:
                 seen_paths.add(resolved)
                 discovered.append(child)
 
-    for dot_dir in (".talkops", ".agents"):
+    for dot_dir in (".talkops", ".agents", ".agent", "_agents", "_agent"):
         manifest_file = root / dot_dir / "plugins.json"
         if not manifest_file.is_file():
             continue
@@ -528,21 +649,74 @@ def _iter_workspace_plugin_dirs(root: Path) -> list[Path]:
         if not isinstance(entries, list):
             continue
         for raw_entry in entries:
-            if not isinstance(raw_entry, str) or not raw_entry.strip():
+            include_only: list[str] = []
+            entry_exclude: list[str] = []
+            if isinstance(raw_entry, str) and raw_entry.strip():
+                rel = raw_entry.strip()
+            elif isinstance(raw_entry, dict) and isinstance(raw_entry.get("path"), str) and raw_entry["path"].strip():
+                rel = raw_entry["path"].strip()
+                raw_inc = raw_entry.get("include_only")
+                if isinstance(raw_inc, list):
+                    include_only = [str(x).strip() for x in raw_inc if isinstance(x, str) and x.strip()]
+                raw_exc = raw_entry.get("exclude")
+                if isinstance(raw_exc, list):
+                    entry_exclude = [str(x).strip() for x in raw_exc if isinstance(x, str) and x.strip()]
+            else:
                 continue
-            rel = raw_entry.strip()
-            for base in (manifest_file.parent, root):
-                cand = base / rel
-                if cand.is_dir() and _is_likely_plugin_dir(cand):
-                    try:
-                        resolved = cand.resolve()
-                        if not resolved.is_relative_to(root.resolve()):
-                            continue
-                    except OSError:
+
+            candidate_targets: list[tuple[Path, bool]] = []
+            if rel.startswith("~/"):
+                candidate_targets.append((Path(rel).expanduser(), False))
+            elif Path(rel).is_absolute():
+                candidate_targets.append((Path(rel), False))
+            else:
+                candidate_targets.append((manifest_file.parent / rel, True))
+                candidate_targets.append((root / rel, True))
+
+            for cand, require_workspace_confined in candidate_targets:
+                if not cand.is_dir():
+                    continue
+                try:
+                    resolved = cand.resolve()
+                    if require_workspace_confined and not resolved.is_relative_to(root.resolve()):
                         continue
+                except OSError:
+                    continue
+
+                if _is_likely_plugin_dir(cand) and not include_only:
+                    if entry_exclude and _matches_any_pattern(cand.name, entry_exclude):
+                        break
                     if resolved not in seen_paths:
                         seen_paths.add(resolved)
                         discovered.append(cand)
+                    break
+
+                # Manifest bundle convention: scan entry directory one level deep
+                matched_children = False
+                try:
+                    children = sorted(cand.iterdir())
+                except OSError:
+                    children = []
+                for child in children:
+                    if not child.is_dir() or child.name.startswith("."):
+                        continue
+                    if include_only and not _matches_any_pattern(child.name, include_only):
+                        continue
+                    if entry_exclude and _matches_any_pattern(child.name, entry_exclude):
+                        continue
+                    if not _is_likely_plugin_dir(child):
+                        continue
+                    try:
+                        child_resolved = child.resolve()
+                        if require_workspace_confined and not child_resolved.is_relative_to(root.resolve()):
+                            continue
+                    except OSError:
+                        continue
+                    matched_children = True
+                    if child_resolved not in seen_paths:
+                        seen_paths.add(child_resolved)
+                        discovered.append(child)
+                if matched_children:
                     break
 
     return discovered
@@ -555,12 +729,15 @@ def discover_plugins(
     """Discover enabled marketplace and workspace-local plugins.
 
     Uses merged enablement across user + project + local scopes.
+    Workspace plugins take highest precedence and shadow global/user marketplace
+    plugins of the same name.
     """
     enabled = load_all_enabled_plugin_ids(project_root=project_root)
     disabled = load_all_disabled_plugin_ids(project_root=project_root)
     plugins: list[PluginInstance] = []
     warnings: list[str] = []
     seen_plugin_ids: set[str] = set()
+    seen_workspace_names: set[str] = set()
 
     # 1. Local workspace discovery (.talkops/plugins, .agents/plugins, plugins, plugins.json)
     if project_root:
@@ -574,15 +751,24 @@ def discover_plugins(
                 root=p,
                 marketplace_name="project",
                 fallback_name=p.name,
+                source="workspace",
             )
             warnings.extend(p_warns)
             if inst:
                 if f"{inst.name}@project" in disabled or inst.name in disabled:
                     continue
+                if (
+                    inst.manifest
+                    and inst.manifest.disabled
+                    and p_id not in enabled
+                    and f"{inst.name}@project" not in enabled
+                    and inst.name not in enabled
+                ):
+                    continue
                 plugins.append(inst)
                 seen_plugin_ids.add(p_id)
-
-    enabled = load_all_enabled_plugin_ids(project_root=project_root)
+                seen_workspace_names.add(p.name)
+                seen_workspace_names.add(inst.name)
 
     for plugin_id in sorted(enabled):
         if plugin_id in seen_plugin_ids:
@@ -592,7 +778,13 @@ def discover_plugins(
         except ValueError:
             warnings.append(f"Ignoring invalid plugin id {plugin_id!r}")
             continue
-        entry = get_primary_install_entry(plugin_id)
+        if plugin_name in seen_workspace_names:
+            continue
+        entry = get_primary_install_entry(
+            plugin_id,
+            project_root=project_root,
+            include_foreign_projects=project_root is None,
+        )
         needs_install = entry is None
         if entry is not None:
             root = Path(entry.install_path)
@@ -630,6 +822,7 @@ def discover_plugins(
                 root=root,
                 marketplace_name=marketplace_name,
                 fallback_name=plugin_name,
+                source=entry.scope,
             )
         except (OSError, RuntimeError) as exc:
             warnings.append(f"Skipping plugin {plugin_id}: {exc}")

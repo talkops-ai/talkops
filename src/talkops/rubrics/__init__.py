@@ -59,6 +59,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "BLOCKER_DISPATCH": ("talkops.rubrics.jev_grader", "BLOCKER_DISPATCH"),
     "JevHybridRubricGrader": ("talkops.rubrics.jev_grader", "JevHybridRubricGrader"),
     "build_criteria_evaluations": ("talkops.rubrics.jev_grader", "build_criteria_evaluations"),
+    "StratifiedAutoQAEvaluator": ("talkops.rubrics.stratified_autoqa", "StratifiedAutoQAEvaluator"),
+    "Stage0VerificationResult": ("talkops.rubrics.stratified_autoqa", "Stage0VerificationResult"),
 }
 
 

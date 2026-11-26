@@ -74,6 +74,8 @@ def _build_mcp_context_from_infos(
     auto_lazy = total_active_tools > _AUTO_LAZY_MCP_TOOL_THRESHOLD
     lines = [f"**MCP Servers** ({len(servers)} servers, {total_tools} tools):"]
     has_active_tools = False
+    has_resource_servers = False
+    has_server_instructions = False
 
     for server in servers:
         name = getattr(server, "name", str(server))
@@ -81,6 +83,8 @@ def _build_mcp_context_from_infos(
         tools = getattr(server, "tools", ())
         status = getattr(server, "status", "ok")
         error = getattr(server, "error", None)
+        supports_resources = bool(getattr(server, "supports_resources", False))
+        srv_has_instructions = bool(str(getattr(server, "instructions", "") or "").strip())
 
         if not tools:
             if status == "error":
@@ -93,11 +97,23 @@ def _build_mcp_context_from_infos(
                 )
             elif status == "disabled":
                 lines.append(f"- **{name}** ({transport}): (disabled by user)")
+            elif status == "ok" and supports_resources:
+                has_resource_servers = True
+                if srv_has_instructions:
+                    has_server_instructions = True
+                lines.append(
+                    f"- **{name}** ({transport}) [resources]: "
+                    "exposes MCP resources (use `list_resources` and `read_resource`)"
+                )
             else:
                 lines.append(f"- **{name}** ({transport}): (no tools registered)")
             continue
 
         has_active_tools = True
+        if supports_resources:
+            has_resource_servers = True
+        if srv_has_instructions:
+            has_server_instructions = True
         is_scoped_server = name.startswith(("subagent__", "plugin__"))
         srv_cfg = configs.get(name) if isinstance(configs, Mapping) else None
         eager_tools, lazy_tools = split_enabled_tools_by_eager_lazy(
@@ -128,27 +144,46 @@ def _build_mcp_context_from_infos(
             suffix = f", ... (+{extra_count} more in schema dir)" if extra_count > 0 else ""
             return f"{', '.join(shown)}{suffix}"
 
+        res_badge = " [resources]" if supports_resources else ""
+        lazy_badge = " [lazy, resources]" if supports_resources else " [lazy]"
         if eager_tools and lazy_tools:
             lines.append(
-                f"- **{name}** ({transport}): "
+                f"- **{name}** ({transport}){res_badge}: "
                 f"Eager: {_fmt_names(eager_tools)} | Lazy (via `call_mcp_tool`): {_fmt_names(lazy_tools, is_lazy=True)}"
             )
         elif lazy_tools:
-            lines.append(f"- **{name}** ({transport}) [lazy]: {_fmt_names(lazy_tools, is_lazy=True)}")
+            lines.append(f"- **{name}** ({transport}){lazy_badge}: {_fmt_names(lazy_tools, is_lazy=True)}")
         else:
-            lines.append(f"- **{name}** ({transport}): {_fmt_names(tools)}")
+            lines.append(f"- **{name}** ({transport}){res_badge}: {_fmt_names(tools)}")
 
-    if has_active_tools:
+    if has_active_tools or has_resource_servers:
         state_dir = get_mcp_server_state_dir()
-        lines.append(
-            f"\nEach MCP server has a directory `{state_dir}/<serverName>` containing tool schemas "
-            "(`<toolName>.json`). Eagerly loaded tools are registered directly (`<serverName>:<toolName>`). "
-            f"For lazy-loaded tools, call `read_file` directly on `{state_dir}/<serverName>/<toolName>.json` "
-            f"(skip `ls` unless the tool name is hidden behind `+N more in schema dir`), "
-            "then call `call_mcp_tool(server_name=<serverName>, tool_name=<toolName>, arguments={...})` "
-            "(pass `arguments={}` when the tool takes no arguments; always use `call_mcp_tool` for MCP tools "
-            "rather than falling back to `execute` shell workarounds)."
-        )
+        footer_parts: list[str] = []
+        if has_active_tools:
+            instr_note = " and optional `instructions.md`" if has_server_instructions else ""
+            footer_parts.append(
+                f"Each MCP server has a directory `{state_dir}/<serverName>` containing tool schemas "
+                f"(`<toolName>.json`){instr_note}. Eagerly loaded tools are registered directly "
+                "(`<serverName>:<toolName>`). "
+                f"For lazy-loaded tools, call `read_file` directly on `{state_dir}/<serverName>/<toolName>.json` "
+                "(skip `ls` unless the tool name is hidden behind `+N more in schema dir`), "
+                "then call `call_mcp_tool(server_name=<serverName>, tool_name=<toolName>, arguments={...})` "
+                "(pass `arguments={}` when the tool takes no arguments; always use `call_mcp_tool` for MCP tools "
+                "rather than falling back to `execute` shell workarounds)."
+            )
+        if has_resource_servers:
+            instr_read_hint = (
+                f" (and `{state_dir}/<serverName>/instructions.md` when present)"
+                if has_server_instructions
+                else ""
+            )
+            footer_parts.append(
+                "For servers marked `[resources]` or whenever an error/skill references an MCP resource URI "
+                "(`<scheme>://...`), call `list_resources(server_name=<serverName>)` to discover static URIs "
+                f"and `{{param}}` URI templates{instr_read_hint}, then call "
+                "`read_resource(server_name=<serverName>, uri=<concreteUri>)` instead of falling back to `execute`."
+            )
+        lines.append("\n" + " ".join(footer_parts))
 
     return "\n".join(lines)
 
@@ -161,6 +196,8 @@ def _build_mcp_context_from_config(
     if not isinstance(servers, dict) or not servers:
         return ""
 
+    from talkops.mcp.preload import get_mcp_server_state_dir
+
     lines = ["**MCP Servers**:"]
     for name, cfg in servers.items():
         if not isinstance(cfg, dict):
@@ -168,7 +205,19 @@ def _build_mcp_context_from_config(
         transport = cfg.get("type") or cfg.get("transport") or "stdio"
         lines.append(f"- **{name}** ({transport}): configured")
 
-    return "\n".join(lines) if len(lines) > 1 else ""
+    if len(lines) <= 1:
+        return ""
+
+    state_dir = get_mcp_server_state_dir()
+    lines.append(
+        "\n"
+        f"Each MCP server stores tool schemas in `{state_dir}/<serverName>/<toolName>.json` "
+        "(and optional `instructions.md`). Use `call_mcp_tool(server_name=<serverName>, "
+        "tool_name=<toolName>, arguments={...})` for MCP tools (pass the exact original "
+        "`toolName` such as `helm_list_releases`), and use `list_resources(server_name=<serverName>)` "
+        "+ `read_resource(server_name=<serverName>, uri=<concreteUri>)` for `<scheme>://...` MCP resources."
+    )
+    return "\n".join(lines)
 
 
 @register_middleware(name="mcp_context")
@@ -275,5 +324,18 @@ class MCPContextMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Wrap asynchronous model call to inject MCP server inventory into system message."""
+        raw_servers = (
+            (
+                self._config.get("mcpServers")
+                or self._config.get("mcp_servers")
+                or self._config
+            )
+            if isinstance(self._config, Mapping) and self._config
+            else None
+        )
+        if isinstance(raw_servers, Mapping) and raw_servers:
+            from talkops.mcp.preload import wait_for_inflight_mcp_probes
+
+            await wait_for_inflight_mcp_probes(raw_servers)
         modified_request = self._get_modified_request(request)
         return await handler(modified_request)

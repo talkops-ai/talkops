@@ -54,11 +54,12 @@ https://github.com/user-attachments/assets/a45d2675-6192-4ebe-b7a8-394470f7c655
 **Central Server, Two-Way ChatOps & 24/7 Incident Webhooks**
 - **[Shared Team Server (`talkops serve`)](docs/talkops-docs/central-server.md):** Centralize cloud access and save team threads in **PostgreSQL** or **SQLite**; teammates can attach to live investigations (`-r`) or branch threads (`/fork`) safely.
 - **[9 Built-In Incident Webhooks (`/webhooks/{provider}`)](docs/talkops-docs/webhooks.md):** Ingest alerts from **PagerDuty, Prometheus Alertmanager, Grafana, Datadog, AWS SNS/CloudWatch, ServiceNow, Jenkins, CloudEvents (Argo/Flux), and GitHub**, deduplicate alert storms into one thread, and write RCA reports back to tickets and PRs.
-- **[Slack, Microsoft Teams & Discord ChatOps (`channels` addon)](docs/talkops-docs/server-addons.md):** Install via `talkops addon install channels` for two-stage threaded incident cards and interactive button or 👍/👎 emoji tool approvals right in chat.
+- **[Slack, Microsoft Teams & Discord ChatOps (`channels` addon)](docs/talkops-docs/server-addons.md):** Built into `talkops serve` for two-stage threaded incident cards, interactive HITL tool approvals, and `Confirm RCA` / `Dispute Hypothesis` buttons or 👍/👎 reactions with in-place card locking and AutoQA persistence.
 
 **Subagents, Plugin Marketplace, Skills & MCP**
 - **[Specialist Subagents (`/agent`) & Open Plugin Marketplace (`/plugins`)](docs/talkops-docs/plugins.md):** Delegate parallel tasks to domain subagents ([Subagents Guide](docs/talkops-docs/subagents.md)), and install subagent, skill, command, and MCP bundles from the **TalkOps Plugin Marketplace** ([`talkops-ai/devops-plugins`](https://github.com/talkops-ai/devops-plugins)) or **any repository supporting the open plugin schema**.
-- **[Memory (`AGENTS.md`), `SKILL.md` Runbooks & Custom `/commands`](docs/talkops-docs/memory-and-skills.md):** Capture team conventions with `/remember`, build 3-stage progressive `SKILL.md` runbooks (`/skills`), and define parameterized [`.talkops/commands/*.md`](docs/talkops-docs/custom-commands.md) shortcuts with live `` !`shell` `` injection and [Lifecycle Hooks](docs/talkops-docs/hooks.md).
+- **[Memory (`AGENTS.md`), `SKILL.md` Runbooks, OpenWiki & Custom `/commands`](docs/talkops-docs/memory-and-skills.md):** Capture team conventions with `/remember`, compile Git-grounded codebase architecture docs with **[OpenWiki (`openwiki/` & `/openwiki`)](docs/talkops-docs/openwiki.md)**, build 3-stage progressive `SKILL.md` runbooks (`/skills`), and define parameterized [`.talkops/commands/*.md`](docs/talkops-docs/custom-commands.md) shortcuts with live `` !`shell` `` injection and [Lifecycle Hooks](docs/talkops-docs/hooks.md).
+- **[Browser Automation Agent (`/browser`)](docs/talkops-docs/browser-automation.md):** Drive Chrome via an isolated Stagehand subagent that reuses your live authenticated Chrome profile (`DevToolsActivePort`) or a persistent TalkOps profile—with 8 KB snapshot compaction, SSO/CAPTCHA human handoff (`browser_handoff`), and destructive-action HITL gates.
 - **[Model Context Protocol (`/mcp`, `talkops mcp`)](docs/talkops-docs/mcp-tools.md):** Connect any local or remote MCP server (`stdio`, `http`, `sse`)—across observability, GitOps, cloud providers, and internal tooling—with lazy tool loading and workspace trust verification.
 
 ## Getting Started
@@ -67,10 +68,22 @@ Full setup walkthroughs are in the **[Quickstart Guide](docs/talkops-docs/quicks
 
 ### 1. Install TalkOps
 
+**macOS, Linux, or Windows WSL2** *(run inside your Linux/WSL2 terminal — do not use `sudo` or run in `cmd.exe`)*:
+
 ```bash
 curl -LsSf https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.sh | bash
-# Or via uv / pipx:
-uv tool install talkops-ai
+```
+
+**Windows (PowerShell — no WSL required):**
+
+```powershell
+irm https://raw.githubusercontent.com/talkops-ai/talkops/main/scripts/install.ps1 | iex
+```
+
+**Or via `uv` / `pipx` (any OS):**
+
+```bash
+uv tool install --python 3.12 talkops-ai
 ```
 
 ### 2. Sign In & Configure Your Model (Local, Self-Hosted URL, or Cloud API Key)
@@ -135,7 +148,7 @@ Enforce Kubernetes, Terraform, IAM, and FinOps rubrics on every Pull Request usi
 ## Documentation & Contributing
 
 - **Getting Started:** [Overview](docs/talkops-docs/overview.md) · [Quickstart](docs/talkops-docs/quickstart.md) · [CLI & `/slash` Reference](docs/talkops-docs/cli-reference.md)
-- **Operations & Server:** [Approval Modes & Smart Routing](docs/talkops-docs/approval-mode.md) · [Goals & Rubrics](docs/talkops-docs/goal-and-rubrics.md) · [Central Server](docs/talkops-docs/central-server.md) · [Server Addons & ChatOps](docs/talkops-docs/server-addons.md) · [Webhooks & RCA](docs/talkops-docs/webhooks.md) · [Remote Sandboxes](docs/talkops-docs/remote-sandboxes.md)
+- **Operations & Server:** [Approval Modes & Smart Routing](docs/talkops-docs/approval-mode.md) · [Goals & Rubrics](docs/talkops-docs/goal-and-rubrics.md) · [Central Server](docs/talkops-docs/central-server.md) · [Server Addons & ChatOps](docs/talkops-docs/server-addons.md) ([Slack](docs/talkops-docs/slack-portal-setup.md) · [Discord](docs/talkops-docs/discord-portal-setup.md) · [Teams](docs/talkops-docs/teams-portal-setup.md)) · [Webhooks & RCA](docs/talkops-docs/webhooks.md) · [Remote Sandboxes](docs/talkops-docs/remote-sandboxes.md)
 - **Configuration & Auth:** [Configuration Guide](docs/talkops-docs/Configuration.md) · [`config.toml` Reference](docs/talkops-docs/config.toml.md) · [Credentials & Cloud Contexts](docs/talkops-docs/credentials.md) · [Model Providers](docs/talkops-docs/model-providers.md)
-- **Extensibility:** [Specialist Subagents](docs/talkops-docs/subagents.md) · [Plugins & Marketplaces](docs/talkops-docs/plugins.md) · [Memory & Skills](docs/talkops-docs/memory-and-skills.md) · [Custom Commands](docs/talkops-docs/custom-commands.md) · [MCP Tools](docs/talkops-docs/mcp-tools.md) · [Hooks](docs/talkops-docs/hooks.md)
+- **Extensibility:** [Specialist Subagents](docs/talkops-docs/subagents.md) · [Plugins & Marketplaces](docs/talkops-docs/plugins.md) · [Memory & Skills](docs/talkops-docs/memory-and-skills.md) · [OpenWiki Knowledge Base](docs/talkops-docs/openwiki.md) · [Browser Automation (`/browser`)](docs/talkops-docs/browser-automation.md) · [Custom Commands](docs/talkops-docs/custom-commands.md) · [MCP Tools](docs/talkops-docs/mcp-tools.md) · [Hooks](docs/talkops-docs/hooks.md)
 - **Community & Security:** [CONTRIBUTING.md](CONTRIBUTING.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) · [SECURITY.md](SECURITY.md) · [Apache-2.0 License](LICENSE)

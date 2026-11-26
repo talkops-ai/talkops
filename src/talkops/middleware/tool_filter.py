@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import fnmatch
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -45,12 +46,18 @@ TOOL_ALIAS_MAP: dict[str, tuple[str, ...]] = {
     "list_dir": ("ls", "list_dir", "dir_list"),
     "bash": ("run_command", "execute"),
     "execute": ("run_command", "execute"),
+    "listmcpresourcestool": ("list_resources",),
+    "list_resources": ("list_resources", "listmcpresourcestool"),
+    "readmcpresourcetool": ("read_resource",),
+    "read_resource": ("read_resource", "readmcpresourcetool"),
 }
 
 ALWAYS_ALLOWED_SYSTEM_TOOLS: frozenset[str] = frozenset({
     "compact_conversation",
     "ask_user",
     "call_mcp_tool",
+    "list_resources",
+    "read_resource",
 })
 
 
@@ -439,6 +446,17 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
                         self._tool_to_orig_name[name] = orig
                     if owner:
                         self._tool_to_subagent_owner[name] = owner
+                    meta = getattr(tool, "metadata", None)
+                    if isinstance(meta, Mapping):
+                        allowed_srvs = meta.get("_mcp_allowed_servers")
+                        if isinstance(allowed_srvs, (list, tuple, set, frozenset)):
+                            for allowed_srv in allowed_srvs:
+                                if isinstance(allowed_srv, str) and allowed_srv:
+                                    self._known_mcp_servers.add(allowed_srv)
+                                    if "__" in allowed_srv:
+                                        base_allowed = allowed_srv.rsplit("__", 1)[-1]
+                                        if base_allowed:
+                                            self._known_mcp_servers.add(base_allowed)
 
         patterns: list[str] = []
 
@@ -648,6 +666,54 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
 
         return False
 
+    def is_mcp_server_allowed(self, srv: str) -> bool:
+        """Check whether an MCP server (by full or base name) is permitted by allowed patterns."""
+        if not self._allowed_patterns:
+            return True
+        srv_clean = srv.strip()
+        if not srv_clean:
+            return False
+
+        srv_lower = srv_clean.lower()
+        base_srv = srv_clean.rsplit("__", 1)[-1] if "__" in srv_clean else srv_clean
+        base_lower = base_srv.lower()
+        base_alnum = re.sub(r"[^a-z0-9]", "", base_lower)
+
+        check_servers: list[str] = [srv_clean]
+        if base_srv not in check_servers:
+            check_servers.append(base_srv)
+        for known_srv in self._known_mcp_servers:
+            known_lower = known_srv.lower()
+            known_base = known_lower.rsplit("__", 1)[-1] if "__" in known_lower else known_lower
+            known_alnum = re.sub(r"[^a-z0-9]", "", known_base)
+            if (
+                known_lower == srv_lower
+                or known_lower.endswith(f"__{srv_lower}")
+                or known_lower.endswith(f"_{srv_lower}")
+                or known_lower.endswith(f"__{base_lower}")
+                or (base_alnum and known_alnum == base_alnum)
+            ) and known_srv not in check_servers:
+                check_servers.append(known_srv)
+
+        for cand_srv in check_servers:
+            if self.is_tool_allowed(f"{cand_srv}:__mcp_resource__"):
+                return True
+
+        # Also permit if any explicit tool on this MCP server is allowed in _allowed_patterns
+        for pat in self._allowed_patterns:
+            pat_lower = pat.lower()
+            for cand_srv in (srv_lower, base_lower):
+                if not cand_srv:
+                    continue
+                if (
+                    pat_lower.startswith(f"{cand_srv}:")
+                    or pat_lower.startswith(f"mcp__{cand_srv}__")
+                    or f"_{cand_srv}__" in pat_lower
+                    or f"__{cand_srv}__" in pat_lower
+                ):
+                    return True
+        return False
+
     def _validate_tool_call(self, request: ToolCallRequest) -> ToolMessage | None:
         tool_name = (
             request.tool_call.get("name", "")
@@ -655,6 +721,70 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
             else ""
         )
         tool_obj = getattr(request, "tool", None)
+        if tool_name in {"list_resources", "read_resource"} and self._allowed_patterns:
+            args = (
+                request.tool_call.get("args")
+                if getattr(request, "tool_call", None) and isinstance(request.tool_call, dict)
+                else None
+            )
+            srv = ""
+            uri_val = ""
+            if isinstance(args, Mapping):
+                srv = str(
+                    args.get("server_name")
+                    or args.get("ServerName")
+                    or args.get("server")
+                    or ""
+                ).strip()
+                uri_val = str(
+                    args.get("uri")
+                    or args.get("Uri")
+                    or args.get("resource_uri")
+                    or ""
+                ).strip()
+            if srv:
+                if self.is_mcp_server_allowed(srv):
+                    return None
+                if tool_name == "read_resource" and "://" in uri_val:
+                    uri_scheme = uri_val.split("://", 1)[0].strip().lower()
+                    if srv.lower() == uri_scheme and any(
+                        self.is_mcp_server_allowed(ks) for ks in self._known_mcp_servers
+                    ):
+                        return None
+                allowed_str = ", ".join(self._allowed_patterns)
+                logger.warning(
+                    "MCP resource tool call %s(%r) blocked for subagent (not in allowed list: %s)",
+                    tool_name,
+                    srv,
+                    allowed_str,
+                )
+                return ToolMessage(
+                    content=(
+                        f"Tool call rejected: MCP server `{srv}` is restricted for `{tool_name}` on this subagent. "
+                        f"Allowed tool patterns: [{allowed_str}]."
+                    ),
+                    name=tool_name,
+                    tool_call_id=request.tool_call.get("id", ""),
+                    status="error",
+                )
+            has_any_mcp_allowance = any(
+                self.is_mcp_server_allowed(ks) for ks in self._known_mcp_servers
+            ) or any(
+                ("mcp__" in pat.lower() or ":" in pat) for pat in self._allowed_patterns
+            )
+            if has_any_mcp_allowance:
+                return None
+            allowed_str = ", ".join(self._allowed_patterns)
+            return ToolMessage(
+                content=(
+                    f"Tool call rejected: tool `{tool_name}` is restricted for this subagent. "
+                    f"Allowed tool patterns: [{allowed_str}]."
+                ),
+                name=tool_name,
+                tool_call_id=request.tool_call.get("id", "") if isinstance(getattr(request, "tool_call", None), dict) else "",
+                status="error",
+            )
+
         if tool_name == "call_mcp_tool" and self._allowed_patterns:
             args = (
                 request.tool_call.get("args")
@@ -681,7 +811,15 @@ class ToolFilterMiddleware(AgentMiddleware[Any, Any]):
                     if self.is_tool_allowed(qualified) or self.is_tool_allowed(t_name):
                         return None
                     for known_srv in self._known_mcp_servers:
-                        if known_srv.endswith(f"__{srv}") and self.is_tool_allowed(f"{known_srv}:{t_name}"):
+                        known_base = known_srv.rsplit("__", 1)[-1] if "__" in known_srv else known_srv
+                        if (
+                            known_srv.endswith(f"__{srv}")
+                            or (
+                                re.sub(r"[^a-z0-9]", "", known_base.lower())
+                                == re.sub(r"[^a-z0-9]", "", srv.lower())
+                                and bool(re.sub(r"[^a-z0-9]", "", srv.lower()))
+                            )
+                        ) and self.is_tool_allowed(f"{known_srv}:{t_name}"):
                             return None
                     allowed_str = ", ".join(self._allowed_patterns)
                     logger.warning(

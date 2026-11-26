@@ -16,24 +16,20 @@
 
 from typing import Any
 
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from talkops.middleware.goal_state_notice import (
-    GOAL_CONTROL_MESSAGE_SOURCE,
     GOAL_MESSAGE_SCHEMA_VERSION,
     GOAL_STATE_MESSAGE_SOURCE,
     SUPERSEDED_GOAL_STATE_SOURCE,
     build_goal_continuation,
     build_goal_state_notice,
     goal_state_fingerprint,
-    goal_state_notice_info,
     is_conversation_control_message,
     is_goal_internal_message,
     is_goal_state_message,
     is_human_message,
     is_internal_message,
-    is_oversized_goal_state_message,
     latest_goal_state_message_index,
     latest_goal_state_notice,
     latest_human_is_unsaved_goal_continuation,

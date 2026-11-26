@@ -24,11 +24,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import logging
 import os
-import sqlite3
 import sys
-import time
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterable, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
@@ -148,7 +145,7 @@ _HELD_PRESENCE_LOCKS: dict[str, Any] = {}
 
 
 def _presence_dir(db_path: Path | None = None) -> Path:
-    """Return the directory storing per-conversation presence lock files (modeled on agy presence/)."""
+    """Return the directory storing per-conversation presence lock files (`presence/`)."""
     target = db_path or get_db_path()
     pdir = target.parent / "presence"
     with contextlib.suppress(OSError):
@@ -829,6 +826,10 @@ async def set_thread_title(
 async def _ensure_threads_list_index(conn: Any) -> None:
     try:
         await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_talkops_checkpoints_latest "
+            "ON checkpoints(thread_id, checkpoint_ns, checkpoint_id DESC)"
+        )
+        await conn.execute(
             f"CREATE INDEX IF NOT EXISTS {_THREADS_LIST_INDEX} ON checkpoints("
             "thread_id, "
             "json_extract(metadata, '$.updated_at'), "
@@ -1348,20 +1349,33 @@ async def list_threads(
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
+        updated_at_expr = (
+            f"COALESCE(MAX(json_extract(CAST(metadata AS TEXT), '$.updated_at')), "
+            f"(SELECT ts.updated_at FROM {_THREAD_SUMMARIES_TABLE} ts WHERE ts.thread_id = checkpoints.thread_id))"
+            if has_summaries
+            else "MAX(json_extract(CAST(metadata AS TEXT), '$.updated_at'))"
+        )
+        created_at_expr = (
+            f"COALESCE(MIN(json_extract(CAST(metadata AS TEXT), '$.updated_at')), "
+            f"(SELECT ts.created_at FROM {_THREAD_SUMMARIES_TABLE} ts WHERE ts.thread_id = checkpoints.thread_id))"
+            if has_summaries
+            else "MIN(json_extract(CAST(metadata AS TEXT), '$.updated_at'))"
+        )
+
         query = f"""
             SELECT thread_id,
-                   json_extract(metadata, '$.agent_name') as agent_name,
-                   MAX(json_extract(metadata, '$.updated_at')) as updated_at,
+                   json_extract(CAST(metadata AS TEXT), '$.agent_name') as agent_name,
+                   {updated_at_expr} as updated_at,
                    MAX(checkpoint_id) as latest_checkpoint_id,
-                   MIN(json_extract(metadata, '$.updated_at')) as created_at,
-                   MAX(json_extract(metadata, '$.git_branch')) as git_branch,
-                   MAX(json_extract(metadata, '$.cwd')) as cwd,
+                   {created_at_expr} as created_at,
+                   MAX(json_extract(CAST(metadata AS TEXT), '$.git_branch')) as git_branch,
+                   MAX(json_extract(CAST(metadata AS TEXT), '$.cwd')) as cwd,
                    MAX(json_extract(CAST(metadata AS TEXT), '$.owner')) as owner,
                    MAX(json_extract(CAST(metadata AS TEXT), '$.title')) as meta_title
             FROM checkpoints
             {where_sql}
             GROUP BY thread_id
-            ORDER BY {order_col} DESC
+            ORDER BY COALESCE({order_col}, '') DESC, latest_checkpoint_id DESC
             LIMIT ?
         """
         params: tuple = (*params_list, limit)
@@ -1712,6 +1726,105 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
             await _ensure_thread_summaries_table(self.conn)
             await _ensure_threads_list_index(self.conn)
 
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        """Load a checkpoint tuple, offloading large blob deserialization from the UI event loop."""
+        from langgraph.checkpoint.base import (
+            CheckpointMetadata,
+            CheckpointTuple,
+            get_checkpoint_id,
+        )
+
+        await self.setup()
+        configurable = config.get("configurable") or {}
+        checkpoint_ns = str(configurable.get("checkpoint_ns") or "")
+        req_thread_id = str(configurable.get("thread_id") or "")
+        req_checkpoint_id = get_checkpoint_id(config)
+
+        async with self.lock, self.conn.cursor() as cur:
+            if req_checkpoint_id:
+                await cur.execute(
+                    "SELECT thread_id, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata "
+                    "FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ?",
+                    (req_thread_id, checkpoint_ns, req_checkpoint_id),
+                )
+            else:
+                await cur.execute(
+                    "SELECT thread_id, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata "
+                    "FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? "
+                    "ORDER BY checkpoint_id DESC LIMIT 1",
+                    (req_thread_id, checkpoint_ns),
+                )
+            value = await cur.fetchone()
+            if not value:
+                return None
+
+            (
+                thread_id,
+                checkpoint_id,
+                parent_checkpoint_id,
+                cp_type,
+                checkpoint_blob,
+                metadata_blob,
+            ) = value
+            if not req_checkpoint_id:
+                config = {
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_ns": checkpoint_ns,
+                        "checkpoint_id": checkpoint_id,
+                    }
+                }
+            await cur.execute(
+                "SELECT task_id, channel, type, value FROM writes "
+                "WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? "
+                "ORDER BY task_id, idx",
+                (
+                    str(config["configurable"]["thread_id"]),
+                    checkpoint_ns,
+                    str(config["configurable"]["checkpoint_id"]),
+                ),
+            )
+            write_rows = list(await cur.fetchall())
+
+        serde = self.serde
+
+        def _decode() -> tuple[Any, CheckpointMetadata, list[tuple[Any, Any, Any]]]:
+            cp_obj = serde.loads_typed((cp_type, checkpoint_blob))
+            meta_obj = cast(
+                CheckpointMetadata,
+                json.loads(metadata_blob) if metadata_blob is not None else {},
+            )
+            writes_decoded = [
+                (t_id, ch, serde.loads_typed((w_type, w_val)))
+                for t_id, ch, w_type, w_val in write_rows
+            ]
+            return cp_obj, meta_obj, writes_decoded
+
+        blob_len = len(checkpoint_blob) if checkpoint_blob else 0
+        if blob_len > 32768 or len(write_rows) > 8:
+            cp_obj, meta_obj, writes_decoded = await asyncio.to_thread(_decode)
+        else:
+            cp_obj, meta_obj, writes_decoded = _decode()
+
+        parent_cfg = (
+            {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": checkpoint_ns,
+                    "checkpoint_id": parent_checkpoint_id,
+                }
+            }
+            if parent_checkpoint_id
+            else None
+        )
+        return CheckpointTuple(
+            config,
+            cp_obj,
+            meta_obj,
+            parent_cfg,
+            writes_decoded,
+        )
+
     async def aput(
         self,
         config: RunnableConfig,
@@ -1719,28 +1832,69 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
         metadata: Any,
         new_versions: Any,
     ) -> RunnableConfig:
-        """Save a checkpoint and synchronously update the indexed ``thread_summaries`` row."""
-        saved_config = await super().aput(config, checkpoint, metadata, new_versions)
-        configurable = config.get("configurable") if isinstance(config, dict) else None
-        if isinstance(configurable, dict):
-            checkpoint_ns = str(configurable.get("checkpoint_ns") or "")
-            thread_id = str(configurable.get("thread_id") or "")
-            if thread_id and checkpoint_ns == "":
+        """Save a checkpoint and update ``thread_summaries`` in one commit, offloading large serialization."""
+        from langgraph.checkpoint.base import get_checkpoint_metadata
+
+        await self.setup()
+        configurable = config.get("configurable") if isinstance(config, dict) else {}
+        if not isinstance(configurable, dict):
+            configurable = {}
+        thread_id = configurable.get("thread_id")
+        checkpoint_ns = configurable.get("checkpoint_ns", "")
+        str_thread_id = str(thread_id or "")
+        str_ns = str(checkpoint_ns or "")
+        cp_id_val = checkpoint["id"]
+        parent_cp_id = configurable.get("checkpoint_id")
+
+        ch_vals = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
+        raw_msgs = ch_vals.get("messages") if isinstance(ch_vals, dict) else None
+        is_large = isinstance(raw_msgs, list) and len(raw_msgs) > 20
+        need_summary = bool(str_thread_id and str_ns == "")
+        serde = self.serde
+
+        def _encode_and_summarize() -> tuple[str, bytes, bytes, _CheckpointSummary | None]:
+            t_str, ser_cp = serde.dumps_typed(checkpoint)
+            ser_meta = json.dumps(
+                get_checkpoint_metadata(config, metadata), ensure_ascii=False
+            ).encode("utf-8", "ignore")
+            summ = _summarize_checkpoint(checkpoint) if need_summary else None
+            return t_str, ser_cp, ser_meta, summ
+
+        if is_large:
+            type_, serialized_checkpoint, serialized_metadata, summary = (
+                await asyncio.to_thread(_encode_and_summarize)
+            )
+        else:
+            type_, serialized_checkpoint, serialized_metadata, summary = (
+                _encode_and_summarize()
+            )
+
+        saved_config: RunnableConfig = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": cp_id_val,
+            }
+        }
+
+        async with self.lock:
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO checkpoints "
+                "(thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str_thread_id,
+                    checkpoint_ns,
+                    cp_id_val,
+                    parent_cp_id,
+                    type_,
+                    serialized_checkpoint,
+                    serialized_metadata,
+                ),
+            )
+            if need_summary and summary is not None:
                 with contextlib.suppress(Exception):
-                    saved_cfg_inner = (
-                        saved_config.get("configurable")
-                        if isinstance(saved_config, dict)
-                        else None
-                    )
-                    cp_id = (
-                        str(saved_cfg_inner.get("checkpoint_id"))
-                        if isinstance(saved_cfg_inner, dict) and saved_cfg_inner.get("checkpoint_id")
-                        else (
-                            str(checkpoint.get("id"))
-                            if isinstance(checkpoint, dict) and checkpoint.get("id")
-                            else None
-                        )
-                    )
+                    cp_id = str(cp_id_val) if cp_id_val else None
                     meta_dict = metadata if isinstance(metadata, dict) else {}
                     updated_at = str(
                         meta_dict.get("updated_at")
@@ -1756,8 +1910,6 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
                         or get_current_user_id()
                     )
                     meta_title = str(meta_dict["title"]) if meta_dict.get("title") else None
-
-                    summary = _summarize_checkpoint(checkpoint)
                     msg_cnt = (
                         summary.message_count
                         if (
@@ -1773,33 +1925,31 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
                     )
                     badge = summary.cloud_badge or channel_tag
 
-                    async with self.lock:
-                        await _upsert_thread_summary_on_conn(
-                            self.conn,
-                            thread_id,
-                            user_id=owner,
-                            title=meta_title,
-                            preview=summary.initial_prompt,
-                            agent_name=agent_name,
-                            cwd=cwd,
-                            git_branch=git_branch,
-                            created_at=updated_at,
-                            updated_at=updated_at,
-                            latest_checkpoint_id=cp_id,
-                            message_count=msg_cnt,
-                            cloud_provider=summary.cloud_provider,
-                            cloud_badge=badge,
-                            status="idle",
-                        )
-                        await self.conn.commit()
-
+                    await _upsert_thread_summary_on_conn(
+                        self.conn,
+                        str_thread_id,
+                        user_id=owner,
+                        title=meta_title,
+                        preview=summary.initial_prompt,
+                        agent_name=agent_name,
+                        cwd=cwd,
+                        git_branch=git_branch,
+                        created_at=updated_at,
+                        updated_at=updated_at,
+                        latest_checkpoint_id=cp_id,
+                        message_count=msg_cnt,
+                        cloud_provider=summary.cloud_provider,
+                        cloud_badge=badge,
+                        status="idle",
+                    )
                     freshness = cp_id or updated_at
                     if msg_cnt is not None:
-                        _cache_message_count(thread_id, freshness, msg_cnt)
+                        _cache_message_count(str_thread_id, freshness, msg_cnt)
                     if summary.initial_prompt:
-                        _cache_initial_prompt(thread_id, freshness, summary.initial_prompt)
-                    _cache_cloud_badge(thread_id, freshness, badge)
+                        _cache_initial_prompt(str_thread_id, freshness, summary.initial_prompt)
+                    _cache_cloud_badge(str_thread_id, freshness, badge)
                     _recent_threads_cache.clear()
+            await self.conn.commit()
         return saved_config
 
     async def aput_writes(
@@ -1915,22 +2065,41 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
                     )
             await self.conn.commit()
 
-    async def acopy_thread(self, source_thread_id: str, target_thread_id: str) -> None:
-        """Asynchronously copy all checkpoints and writes from one thread to another.
+    async def acopy_thread(
+        self,
+        source_thread_id: str,
+        target_thread_id: str,
+        *,
+        latest_only: bool = False,
+    ) -> None:
+        """Asynchronously copy checkpoints and writes from one thread to another.
 
-        Supports LangGraph API POST /threads/<id>/copy with fast SQLite bulk duplication.
+        Supports LangGraph API POST /threads/<id>/copy with fast SQLite duplication.
+        When `latest_only=True`, copies only the latest root checkpoint and its
+        associated pending writes so forking a long thread stays O(1) in supersteps.
         """
         source_id = source_thread_id
         target_id = target_thread_id
         await self.setup()
         async with self.lock, self.conn.cursor() as cur:
-            await cur.execute(
-                "SELECT checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata "
-                "FROM checkpoints WHERE thread_id = ?",
-                (source_id,),
-            )
+            if latest_only:
+                await cur.execute(
+                    "SELECT checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata "
+                    "FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = '' "
+                    "ORDER BY checkpoint_id DESC LIMIT 1",
+                    (source_id,),
+                )
+            else:
+                await cur.execute(
+                    "SELECT checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata "
+                    "FROM checkpoints WHERE thread_id = ?",
+                    (source_id,),
+                )
             rows = await cur.fetchall()
+            copied_cp_ids: list[str] = []
             for checkpoint_ns, checkpoint_id, parent_checkpoint_id, cp_type, checkpoint_blob, metadata_blob in rows:
+                copied_cp_ids.append(str(checkpoint_id))
+                eff_parent = None if latest_only else parent_checkpoint_id
                 updated_metadata_blob = metadata_blob
                 if metadata_blob:
                     try:
@@ -1944,14 +2113,24 @@ class TalkOpsCheckpointer(AsyncSqliteSaver):
                     "INSERT OR REPLACE INTO checkpoints "
                     "(thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (target_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, cp_type, checkpoint_blob, updated_metadata_blob),
+                    (target_id, checkpoint_ns, checkpoint_id, eff_parent, cp_type, checkpoint_blob, updated_metadata_blob),
                 )
-            await cur.execute(
-                "SELECT checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value "
-                "FROM writes WHERE thread_id = ?",
-                (source_id,),
-            )
-            write_rows = await cur.fetchall()
+            if latest_only and copied_cp_ids:
+                await cur.execute(
+                    "SELECT checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value "
+                    "FROM writes WHERE thread_id = ? AND checkpoint_ns = '' AND checkpoint_id = ?",
+                    (source_id, copied_cp_ids[0]),
+                )
+                write_rows = await cur.fetchall()
+            elif latest_only:
+                write_rows = []
+            else:
+                await cur.execute(
+                    "SELECT checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value "
+                    "FROM writes WHERE thread_id = ?",
+                    (source_id,),
+                )
+                write_rows = await cur.fetchall()
             for checkpoint_ns, checkpoint_id, task_id, idx, channel, w_type, value_blob in write_rows:
                 await cur.execute(
                     "INSERT OR REPLACE INTO writes "
@@ -2398,7 +2577,7 @@ class SessionManager:
                     with contextlib.suppress(Exception):
                         await saver.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
                     await saver.aprune(None, strategy="keep_latest", prune_subagents=True)
-                    if vacuum or size_mb >= 200.0:
+                    if vacuum or (checkpointer is None and size_mb >= 200.0):
                         await saver.avacuum()
                     with contextlib.suppress(Exception):
                         await saver.conn.execute("PRAGMA optimize")
@@ -2444,7 +2623,7 @@ class SessionManager:
         *,
         user_id: str | None = None,
     ) -> str:
-        """Fork a conversation thread by copying all checkpoints and writes into a new thread ID."""
+        """Fork a conversation thread by copying the latest checkpoint and writes into a new thread ID."""
         return await fork_thread(
             source_thread_id,
             target_thread_id=target_thread_id,
@@ -2458,7 +2637,7 @@ async def fork_thread(
     *,
     user_id: str | None = None,
 ) -> str:
-    """Copy all checkpoints and delta writes from ``source_thread_id`` into a new thread ID."""
+    """Copy the latest checkpoint and delta writes from ``source_thread_id`` into a new thread ID."""
     from talkops.state.remote_session import RemoteSessionBackend, is_remote_client_mode
 
     if is_remote_client_mode():
@@ -2469,7 +2648,7 @@ async def fork_thread(
     target_id = target_thread_id or generate_thread_id()
     try:
         async with get_checkpointer() as saver:
-            await saver.acopy_thread(source_thread_id, target_id)
+            await saver.acopy_thread(source_thread_id, target_id, latest_only=True)
         _recent_threads_cache.clear()
     except Exception:
         logger.debug(

@@ -22,7 +22,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TextIO
+from typing import Any, TextIO
 
 from colorama import Fore, Style
 from rich.console import Console
@@ -98,7 +98,7 @@ def setup_serve_parser(subparsers: Any) -> None:
         dest="profile",
         type=str,
         default=argparse.SUPPRESS,
-        help="Server addon profile preset ('default', 'api-only', 'webhook-worker', 'enterprise-full').",
+        help="Server addon profile preset ('default', 'api-only', 'webhook-worker', 'sre', 'enterprise-full').",
     )
     serve_parser.add_argument(
         "--addons",
@@ -202,7 +202,7 @@ def setup_serve_parser(subparsers: Any) -> None:
         type=str,
         choices=["manual", "smart", "auto", "yolo"],
         default=argparse.SUPPRESS,
-        help="Tool approval mode for webhook runs: 'smart' (default Jev gate), 'auto' (LLM classifier), 'yolo' (unrestricted), or 'manual'.",
+        help="Tool approval mode for webhook runs: 'auto' (default unattended classifier), 'smart' (Jev System One gate & model router), 'yolo' (unrestricted), or 'manual'.",
     )
     serve_approval_group.add_argument(
         "-y",
@@ -370,8 +370,9 @@ def _resolve_serve_approval_mode(args: argparse.Namespace, settings: Any) -> str
     if cfg_mode in {"yolo", "auto", "smart"}:
         return cfg_mode
 
-    # Unattended central webhook mode defaults to 'smart' (Jev safety gate)
-    return "smart"
+    # Unattended central server / webhook mode defaults to 'auto' (matching headless CLI & AddonGateway);
+    # 'smart' (Jev model router + safety gate) activates only when explicitly configured via --smart or settings.
+    return "auto"
 
 
 def _resolve_serve_log_level(args: argparse.Namespace) -> str:
@@ -529,7 +530,8 @@ def run_serve_command(args: argparse.Namespace) -> int:
         console.print()
         return 0
 
-    model = getattr(args, "model", None) or settings.model_name
+    explicit_cli_model = getattr(args, "model", None)
+    model = explicit_cli_model or settings.model_name
     if not model:
         try:
             from talkops.model.factory import _get_default_model_spec
@@ -550,6 +552,7 @@ def run_serve_command(args: argparse.Namespace) -> int:
     server_config = ServerConfig.from_cli_args(
         project_context=project_context,
         model=model,
+        explicit_model=bool(explicit_cli_model),
         interactive=False,
         auto_approve=(effective_approval == "auto"),
         approval_mode=effective_approval,
@@ -566,6 +569,7 @@ def run_serve_command(args: argparse.Namespace) -> int:
         webhook_port=webhook_port,
         webhook_host=webhook_host if webhook_port is not None else None,
         workspaces_dir=getattr(args, "workspaces_dir", None),
+        central_server=True,
         profile=raw_profile,
         addons=cli_addons,
         disable_addons=cli_disable,

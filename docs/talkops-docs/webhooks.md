@@ -55,10 +55,11 @@ flowchart LR
 
 ## What Your Team Sees in Slack, Discord, or Teams
 
-When you connect a chat channel (`TALKOPS_WEBHOOK_NOTIFY_CHANNELS`), your team gets a clean, two-step update without cluttering the main channel:
+When you connect a chat channel (`TALKOPS_WEBHOOK_NOTIFY_CHANNELS`—see the step-by-step setup guides for **[Slack](slack-portal-setup.md)**, **[Discord](discord-portal-setup.md)**, and **[Microsoft Teams](teams-portal-setup.md)**), your team gets a clean, two-step update without cluttering the main channel:
 
-1. **Stage 1 (Main Channel Card)**: As soon as the alert arrives, TalkOps posts an incident summary card showing `Status: Investigating...`. When the investigation finishes, TalkOps updates that same card in place to **`RCA Complete (in thread)`** and adds a **Root Cause Takeaway** summary.
-2. **Stage 2 (Detailed Thread Reply)**: Inside the message thread, TalkOps posts the complete **Automated RCA** report—including the executive summary, affected scope matrix, diagnostic evidence, and recommended fix.
+1. **Stage 1 (Main Channel Card)**: As soon as the alert arrives, TalkOps posts an incident summary card showing `Status: Investigating` (with a Red severity accent bar on Slack/Discord). When the investigation finishes, TalkOps updates that same card in place to **`RCA Complete (in thread)`** (flipping Slack's accent bar to Green), shows total **Triage Time**, and adds a concise **Root Cause Takeaway**.
+2. **Stage 2 (Detailed Thread Reply + Interactive Feedback)**: Inside the message thread, TalkOps posts the complete **Root Cause Analysis** report—including executive summary, native verification tables, and recommended fixes—automatically attaching a downloadable `.md` postmortem on long Slack/Discord reports (or clean thread overflow chunks below Microsoft Teams' 28 KB Adaptive Card limit).
+3. **One-Click Confirmation & Dispute Feedback**: Engineers can click **Confirm RCA** / **Dispute Hypothesis** (or react with **👍 / 👎**, including Teams `like`) directly on the RCA message. TalkOps locks the card in place with the responder's name, prevents conflicting double-clicks, and persists the confirmation or dispute to `OperationalStore` (`talkops_autoqa_scores` / AutoQA KPIs). Replying in the same thread continues the exact same investigation session.
 
 <p align="center">
   <img src="../assets/webhooks-slack-incident-card.png" alt="Slack parent incident card updated in-place to RCA Complete (in thread) with Alert Summary, Active Signals, Root Cause Takeaway, and Thread ID" width="100%">
@@ -406,6 +407,7 @@ callback_url = "https://internal-portal.company.com/api/talkops-rca"
 
 ## Next Steps
 
+- **[ChatOps Platform Setup Guides](server-addons.md)** — Step-by-step portal guides for **[Slack](slack-portal-setup.md)**, **[Discord](discord-portal-setup.md)**, and **[Microsoft Teams](teams-portal-setup.md)**
 - **[Central Server & Team Collaboration](central-server.md)** — Learn how multiple engineers share `talkops serve` with PostgreSQL and single sign-on
 - **[Approval Modes & Smart Mode](approval-mode.md)** — See how Smart Mode keeps automated investigations fast, affordable, and safe in production
 - **[Hooks](hooks.md)** — Run custom local scripts whenever `webhook.received` or `webhook.completed` fires

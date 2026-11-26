@@ -30,7 +30,7 @@ from rich.cells import cell_len
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.content import Content
 from textual.css.query import NoMatches
 from textual.message import Message
@@ -504,13 +504,82 @@ class ModalSearchInput(Widget):
                     target.highlighted = 0
 
 
-# ── Modal Dialog Container ──────────────────────────────────
+# ── Modal Dialog, Scrollable Body & Footer Containers ───────
 
 
 class ModalDialog(Vertical):
     """Floating dialog container with round border and native title/subtitle."""
 
     pass
+
+
+class ModalBodyScroll(VerticalScroll):
+    """Overflow-safe scrollable body container for OpsModalScreen.
+
+    By default ``can_focus`` is ``False`` so keyboard focus remains on interactive
+    controls (``OptionList``, ``Input``, ``Button``) while mouse-wheel scrolling
+    and ``OpsModalScreen``'s ``PageUp`` / ``PageDown`` bindings scroll overflowing
+    content cleanly.
+
+    Modes:
+    - Default (banner/adaptive): hugs short status text (``max-height: 6``) in
+      list views, and automatically expands to ``height: 1fr`` when the parent
+      screen activates ``set_detail_view(True)`` (``-split-detail``).
+    - ``fill=True``: always takes flexible ``height: 1fr`` above any pinned
+      ``ModalFooter`` or bottom controls.
+    - ``notice=True``: hugs prose/markdown notices up to ``55vh`` and scrolls on
+      short terminals instead of clipping.
+    """
+
+    def __init__(
+        self,
+        *children: Widget,
+        fill: bool = False,
+        notice: bool = False,
+        can_focus: bool = False,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        """Initialize ModalBodyScroll."""
+        extra_classes = ["ops-modal-body-scroll"]
+        if fill:
+            extra_classes.append("ops-modal-body--fill")
+        if notice:
+            extra_classes.append("ops-modal-body--notice")
+        if classes:
+            extra_classes.append(classes)
+        super().__init__(
+            *children,
+            name=name,
+            id=id,
+            classes=" ".join(extra_classes),
+            disabled=disabled,
+        )
+        self.can_focus = can_focus
+
+
+class ModalFooter(Vertical):
+    """Pinned bottom action/footer container inside OpsModalScreen."""
+
+    def __init__(
+        self,
+        *children: Widget,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        """Initialize ModalFooter."""
+        merged_classes = f"ops-modal-footer {classes}".strip() if classes else "ops-modal-footer"
+        super().__init__(
+            *children,
+            name=name,
+            id=id,
+            classes=merged_classes,
+            disabled=disabled,
+        )
 
 
 # ── OpsModalScreen ──────────────────────────────────────────
@@ -520,7 +589,8 @@ class OpsModalScreen(ModalScreen[T], Generic[T]):
     """Unified base screen for all TalkOps command modals.
 
     Provides centered dialog presentation, native border titles/subtitles,
-    clean Escape dismissal, tab switching shortcuts, and search focus bindings.
+    clean Escape dismissal, tab switching shortcuts, search focus bindings,
+    and overflow-safe split-detail / scrollable body management.
     """
 
     DIALOG_CLASSES: ClassVar[str] = ""
@@ -533,6 +603,8 @@ class OpsModalScreen(ModalScreen[T], Generic[T]):
         Binding("escape", "cancel", "Close", show=False, priority=True),
         Binding("ctrl+tab", "next_tab", "Next tab", show=False),
         Binding("ctrl+shift+tab", "previous_tab", "Previous tab", show=False),
+        Binding("pageup", "scroll_body_up", "Scroll up", show=False, priority=True),
+        Binding("pagedown", "scroll_body_down", "Scroll down", show=False, priority=True),
         Binding("slash", "focus_search", "Search", show=False),
     ]
 
@@ -620,12 +692,36 @@ class OpsModalScreen(ModalScreen[T], Generic[T]):
             return max(20, self.dialog.region.width - 6)
         return fallback
 
+    def set_detail_view(
+        self,
+        active: bool,
+        *,
+        reset_scroll: bool = True,
+    ) -> None:
+        """Toggle split-detail layout (scrollable ModalBodyScroll + pinned bottom actions)."""
+        self.set_class(active, "-split-detail")
+        if self.dialog is not None:
+            self.dialog.set_class(active, "-split-detail")
+        if active and reset_scroll:
+            for body in self.query(ModalBodyScroll):
+                body.scroll_home(animate=False)
+
+    def _scrollable_modal_body(self) -> ModalBodyScroll | None:
+        """Return the first visible ModalBodyScroll that currently has vertical overflow."""
+        with contextlib.suppress(Exception):
+            for body in self.query(ModalBodyScroll):
+                if body.display and body.max_scroll_y > 0:
+                    return body
+        return None
+
     def check_action(
         self,
         action: str,
         parameters: tuple[object, ...],
     ) -> bool | None:
-        """Prevent priority bindings from stealing keystrokes when typing in Input."""
+        """Prevent priority bindings from stealing keystrokes when typing or browsing."""
+        if action in {"scroll_body_up", "scroll_body_down"}:
+            return self._scrollable_modal_body() is not None
         focused = self.focused
         if isinstance(focused, Input):
             if action in {"previous_tab", "next_tab"} and bool(focused.value):
@@ -633,6 +729,18 @@ class OpsModalScreen(ModalScreen[T], Generic[T]):
             if action in {"focus_search", "focus_filter"}:
                 return False
         return True
+
+    def action_scroll_body_up(self) -> None:
+        """Scroll the active overflowing ModalBodyScroll up by one page."""
+        body = self._scrollable_modal_body()
+        if body is not None:
+            body.scroll_page_up(animate=False)
+
+    def action_scroll_body_down(self) -> None:
+        """Scroll the active overflowing ModalBodyScroll down by one page."""
+        body = self._scrollable_modal_body()
+        if body is not None:
+            body.scroll_page_down(animate=False)
 
     def action_cancel(self) -> None:
         """Dismiss the modal cleanly with None."""

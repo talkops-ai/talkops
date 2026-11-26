@@ -23,10 +23,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
 from typing import Any
@@ -62,10 +63,19 @@ _PROGRESS_CALLBACK: contextvars.ContextVar[Callable[[list[MCPServerInfo]], None]
 )
 
 
+def _try_resolve_config_env(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve `${VAR}` / `${VAR:-default}` references for fingerprinting without raising."""
+    try:
+        return resolve_mcp_server_env("__fp__", config)
+    except Exception:
+        return dict(config)
+
+
 def _config_fingerprint(config: Mapping[str, Any]) -> str:
-    """Return a stable digest so same-name config changes invalidate metadata."""
+    """Return a stable digest so same-name config or `${VAR}` changes invalidate metadata."""
+    resolved = _try_resolve_config_env(config)
     payload = json.dumps(
-        dict(config),
+        resolved,
         sort_keys=True,
         separators=(",", ":"),
         default=str,
@@ -81,11 +91,12 @@ def _connection_fingerprint(config: Mapping[str, Any]) -> str:
     `timeout`, `trusted`) so identical MCP servers declared across multiple plugins
     and subagents share one probe and cache entry.
     """
-    transport = _resolve_transport(config)
-    enabled = bool(config.get("enabled", True))
-    if "disabled" in config:
-        enabled = not bool(config.get("disabled"))
-    raw_env = config.get("env")
+    resolved = _try_resolve_config_env(config)
+    transport = _resolve_transport(resolved)
+    enabled = bool(resolved.get("enabled", True))
+    if "disabled" in resolved:
+        enabled = not bool(resolved.get("disabled"))
+    raw_env = resolved.get("env")
     clean_env = (
         {
             str(k): str(v)
@@ -95,24 +106,24 @@ def _connection_fingerprint(config: Mapping[str, Any]) -> str:
         if isinstance(raw_env, Mapping)
         else {}
     )
-    raw_headers = config.get("headers")
+    raw_headers = resolved.get("headers")
     clean_headers = (
         {str(k): str(v) for k, v in raw_headers.items()}
         if isinstance(raw_headers, Mapping)
         else {}
     )
-    raw_args = config.get("args")
+    raw_args = resolved.get("args")
     clean_args = [str(x) for x in raw_args] if isinstance(raw_args, (list, tuple)) else []
-    raw_disabled = config.get("disabled_tools") or config.get("disabledTools") or ()
-    raw_allowed = config.get("allowed_tools") or config.get("allowedTools") or ()
+    raw_disabled = resolved.get("disabled_tools") or resolved.get("disabledTools") or ()
+    raw_allowed = resolved.get("allowed_tools") or resolved.get("allowedTools") or ()
     canonical = {
         "enabled": enabled,
         "transport": transport,
-        "command": str(config.get("command") or ""),
+        "command": str(resolved.get("command") or ""),
         "args": clean_args,
-        "url": str(config.get("url") or config.get("serverUrl") or ""),
+        "url": str(resolved.get("url") or resolved.get("serverUrl") or ""),
         "headers": clean_headers,
-        "cwd": str(config.get("cwd") or ""),
+        "cwd": str(resolved.get("cwd") or ""),
         "env": clean_env,
         "disabled_tools": [str(x) for x in raw_disabled] if isinstance(raw_disabled, (list, tuple)) else [],
         "allowed_tools": [str(x) for x in raw_allowed] if isinstance(raw_allowed, (list, tuple)) else [],
@@ -475,6 +486,35 @@ def write_mcp_server_state(
                     existing.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+        # Materialize or prune <server_dir>/instructions.md from InitializeResult.instructions
+        instructions_path = server_dir / "instructions.md"
+        instructions_text = str(getattr(info, "instructions", "") or "").strip()
+        if instructions_text:
+            temp_instr: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=server_dir,
+                    prefix=".instructions.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as handle:
+                    handle.write(instructions_text + "\n")
+                    temp_instr = Path(handle.name)
+                os.replace(temp_instr, instructions_path)
+            except OSError:
+                if temp_instr is not None:
+                    try:
+                        temp_instr.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+        else:
+            try:
+                instructions_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         return server_dir
     except OSError as exc:
         logger.debug("Could not write MCP server state for %s: %s", info.name, exc)
@@ -511,6 +551,10 @@ def read_mcp_tool_schema(
                 stripped = safe_tool[len(prefix) :]
                 if stripped not in tool_candidates:
                     tool_candidates.append(stripped)
+        if base_srv and not safe_tool.startswith(f"{base_srv}_"):
+            prefixed = f"{base_srv}_{safe_tool}"
+            if prefixed not in tool_candidates:
+                tool_candidates.append(prefixed)
         for t_cand in tool_candidates:
             schema_file = srv_dir / f"{t_cand}.json"
             if schema_file.is_file():
@@ -523,10 +567,39 @@ def read_mcp_tool_schema(
     return None
 
 
+def _extract_init_metadata(init_result: Any = None, session: Any = None) -> tuple[bool, str]:
+    """Extract ``(supports_resources, sanitized_instructions)`` from MCP initialization."""
+    supports_resources = False
+    if init_result is not None:
+        caps = getattr(init_result, "capabilities", None)
+        if caps is not None and getattr(caps, "resources", None) is not None:
+            supports_resources = True
+    if not supports_resources and session is not None:
+        get_caps = getattr(session, "get_server_capabilities", None)
+        if callable(get_caps):
+            try:
+                caps = get_caps()
+                if caps is not None and getattr(caps, "resources", None) is not None:
+                    supports_resources = True
+            except Exception:
+                pass
+
+    raw_instructions = str(getattr(init_result, "instructions", "") or "").strip() if init_result is not None else ""
+    if not raw_instructions:
+        return supports_resources, ""
+    from talkops.mcp.lockfile import sanitize_mcp_descriptor
+
+    cleaned_instructions, _ = sanitize_mcp_descriptor(raw_instructions)
+    return supports_resources, cleaned_instructions
+
+
 def build_mcp_server_info_from_raw_tools(
     name: str,
     srv_config: Mapping[str, Any],
     raw_tools: Any,
+    *,
+    supports_resources: bool = False,
+    instructions: str = "",
 ) -> MCPServerInfo:
     """Construct an ``MCPServerInfo`` from raw MCP ``list_tools()`` items."""
     transport = _resolve_transport(srv_config)
@@ -557,6 +630,12 @@ def build_mcp_server_info_from_raw_tools(
             )
         )
 
+    cleaned_instructions = ""
+    if instructions:
+        from talkops.mcp.lockfile import sanitize_mcp_descriptor
+
+        cleaned_instructions, _ = sanitize_mcp_descriptor(str(instructions))
+
     return MCPServerInfo(
         name=name,
         transport=transport,
@@ -571,6 +650,8 @@ def build_mcp_server_info_from_raw_tools(
         disabled_tools=disabled_tools_tuple,
         allowed_tools=allowed_tools_tuple,
         source=source,
+        supports_resources=bool(supports_resources),
+        instructions=cleaned_instructions,
     )
 
 
@@ -623,6 +704,8 @@ def _project_server_info(
         disabled_tools=disabled_tools_tuple,
         allowed_tools=allowed_tools_tuple,
         source=str(srv_config.get("source", source_info.source or "project")),
+        supports_resources=source_info.supports_resources,
+        instructions=source_info.instructions,
     )
 
 
@@ -691,7 +774,17 @@ async def probe_one_mcp_server(
                 async with asyncio.timeout(_PROBE_TIMEOUT):
                     tools_result = await entry.session.list_tools()
                 raw_tools = getattr(tools_result, "tools", []) or []
-                info = build_mcp_server_info_from_raw_tools(name, srv_config, raw_tools)
+                supports_resources, instructions = _extract_init_metadata(
+                    getattr(entry, "init_result", None),
+                    entry.session,
+                )
+                info = build_mcp_server_info_from_raw_tools(
+                    name,
+                    srv_config,
+                    raw_tools,
+                    supports_resources=supports_resources,
+                    instructions=instructions,
+                )
                 write_mcp_server_state(info)
                 return info
     except Exception as exc:
@@ -732,7 +825,7 @@ async def probe_one_mcp_server(
                         session = await exit_stack.enter_async_context(
                             ClientSession(read_stream, write_stream)
                         )
-                        await session.initialize()
+                        init_result = await session.initialize()
                         tools_result = await session.list_tools()
                 except BaseException as exc:
                     primary_exc = exc
@@ -746,11 +839,18 @@ async def probe_one_mcp_server(
             conn = create_mcp_connection(resolved_config)
             async with asyncio.timeout(_PROBE_TIMEOUT):
                 session = await exit_stack.enter_async_context(create_session(conn))
-                await session.initialize()
+                init_result = await session.initialize()
                 tools_result = await session.list_tools()
 
         raw_tools = getattr(tools_result, "tools", []) or []
-        info = build_mcp_server_info_from_raw_tools(name, srv_config, raw_tools)
+        supports_resources, instructions = _extract_init_metadata(init_result, session)
+        info = build_mcp_server_info_from_raw_tools(
+            name,
+            srv_config,
+            raw_tools,
+            supports_resources=supports_resources,
+            instructions=instructions,
+        )
         write_mcp_server_state(info)
         return info
     except (KeyboardInterrupt, SystemExit):
@@ -763,6 +863,12 @@ async def probe_one_mcp_server(
                 await exit_stack.aclose()
         except BaseException as ce:
             close_exc = ce
+
+    curr_task = asyncio.current_task()
+    if curr_task is not None and curr_task.cancelling() > 0:
+        if isinstance(primary_exc, asyncio.CancelledError):
+            raise primary_exc
+        raise asyncio.CancelledError() from primary_exc
 
     status, err_msg = _extract_root_mcp_error(primary_exc, close_exc, captured_stderr)
     logger.warning("MCP server '%s' probe failed (%s): %s", name, status, err_msg)
@@ -788,9 +894,14 @@ _PROBED_CACHE: dict[str, MCPServerInfo] = {}
 _PROBED_CONFIG_FINGERPRINTS: dict[str, str] = {}
 _PROBED_CONN_FINGERPRINTS: dict[str, tuple[str, str]] = {}
 _PERSISTED_ENTRIES: dict[str, dict[str, Any]] = {}
+_EVICTED_PERSISTED_NAMES: set[str] = set()
+_INFLIGHT_PROBES: dict[tuple[int, str], asyncio.Future[MCPServerInfo]] = {}
 _PERSISTENT_CACHE_LOADED = False
+_PERSISTENT_CACHE_SUPPRESSED = False
+_PERSISTENT_CACHE_MTIME_NS: int | None = None
+_PERSISTENT_CACHE_PATH: str | None = None
 _CACHE_LOCK = threading.RLock()
-_PERSISTENT_CACHE_VERSION = 1
+_PERSISTENT_CACHE_VERSION = 2
 _DEFAULT_METADATA_CACHE_TTL = 24 * 60 * 60
 _DEFAULT_ERROR_CACHE_TTL = 10 * 60
 
@@ -821,28 +932,77 @@ def _persistent_file_lock() -> Any:
 
 
 def _ensure_persistent_cache_loaded() -> None:
-    """Load the schema cache once without ever loading credentials from disk."""
-    global _PERSISTENT_CACHE_LOADED
+    """Load or refresh the schema cache from disk without loading credentials.
+
+    Tracks the metadata cache file's ``st_mtime_ns`` so background MCP probes in a
+    peer process (e.g. TUI preloading while LangGraph server started with
+    ``defer_mcp_preload=True``) are automatically hydrated on subsequent checks.
+    """
+    global _PERSISTENT_CACHE_LOADED, _PERSISTENT_CACHE_SUPPRESSED
+    global _PERSISTENT_CACHE_MTIME_NS, _PERSISTENT_CACHE_PATH
     if not _persistent_cache_enabled():
         return
-    if _PERSISTENT_CACHE_LOADED:
+    if not _PERSISTENT_CACHE_LOADED:
+        _PERSISTENT_CACHE_SUPPRESSED = False
+    if _PERSISTENT_CACHE_LOADED and _PERSISTENT_CACHE_SUPPRESSED:
         return
+
+    path = _metadata_cache_path()
+    path_str = str(path)
+    try:
+        stat_mtime_ns: int | None = path.stat().st_mtime_ns
+    except OSError:
+        stat_mtime_ns = None
+
+    if (
+        _PERSISTENT_CACHE_LOADED
+        and _PERSISTENT_CACHE_PATH == path_str
+        and _PERSISTENT_CACHE_MTIME_NS == stat_mtime_ns
+    ):
+        return
+
     with _CACHE_LOCK:
-        if _PERSISTENT_CACHE_LOADED:
+        if not _PERSISTENT_CACHE_LOADED:
+            _PERSISTENT_CACHE_SUPPRESSED = False
+        if _PERSISTENT_CACHE_LOADED and _PERSISTENT_CACHE_SUPPRESSED:
             return
+        try:
+            stat_mtime_ns = path.stat().st_mtime_ns
+        except OSError:
+            stat_mtime_ns = None
+        if (
+            _PERSISTENT_CACHE_LOADED
+            and _PERSISTENT_CACHE_PATH == path_str
+            and _PERSISTENT_CACHE_MTIME_NS == stat_mtime_ns
+        ):
+            return
+
         _PERSISTENT_CACHE_LOADED = True
+        _PERSISTENT_CACHE_PATH = path_str
+        _PERSISTENT_CACHE_MTIME_NS = stat_mtime_ns
+        if stat_mtime_ns is None:
+            return
         try:
             with _persistent_file_lock():
-                payload = json.loads(_metadata_cache_path().read_text(encoding="utf-8"))
+                payload = json.loads(path.read_text(encoding="utf-8"))
                 if payload.get("version") != _PERSISTENT_CACHE_VERSION:
                     return
                 entries = payload.get("entries")
                 if isinstance(entries, dict):
-                    _PERSISTED_ENTRIES.update(
-                        (str(name), entry)
-                        for name, entry in entries.items()
-                        if isinstance(entry, dict)
-                    )
+                    for raw_name, entry in entries.items():
+                        if not isinstance(entry, dict):
+                            continue
+                        key = str(raw_name)
+                        if key in _EVICTED_PERSISTED_NAMES:
+                            continue
+                        existing = _PERSISTED_ENTRIES.get(key)
+                        if existing is not None:
+                            try:
+                                if float(existing.get("cached_at", 0.0)) > float(entry.get("cached_at", 0.0)):
+                                    continue
+                            except (TypeError, ValueError):
+                                pass
+                        _PERSISTED_ENTRIES[key] = entry
         except (OSError, ValueError, TypeError, TimeoutError):
             return
 
@@ -906,6 +1066,13 @@ def _server_info_from_persisted(
                 )
             )
 
+    supports_resources = bool(info.get("supports_resources", False)) if status == "ok" else False
+    raw_instructions = str(info.get("instructions") or "") if status == "ok" else ""
+    if raw_instructions:
+        from talkops.mcp.lockfile import sanitize_mcp_descriptor
+
+        raw_instructions, _ = sanitize_mcp_descriptor(raw_instructions)
+
     return MCPServerInfo(
         name=name,
         transport=_resolve_transport(config),
@@ -921,6 +1088,8 @@ def _server_info_from_persisted(
         env=dict(config.get("env") or {}),
         disabled_tools=disabled_tuple,
         allowed_tools=allowed_tuple,
+        supports_resources=supports_resources,
+        instructions=raw_instructions,
     )
 
 
@@ -935,6 +1104,10 @@ def _record_persisted_entry(
         "status": info.status,
         "tools": [tool.to_dict() for tool in info.tools] if info.status == "ok" else [],
     }
+    if info.status == "ok":
+        entry_info["supports_resources"] = bool(info.supports_resources)
+        if info.instructions:
+            entry_info["instructions"] = info.instructions
     if info.error:
         entry_info["error"] = info.error
     record: dict[str, Any] = {
@@ -944,6 +1117,7 @@ def _record_persisted_entry(
     }
     if connection_fingerprint:
         record["connection_fingerprint"] = connection_fingerprint
+    _EVICTED_PERSISTED_NAMES.discard(info.name)
     _PERSISTED_ENTRIES[info.name] = record
 
 
@@ -969,6 +1143,8 @@ def _write_persistent_cache() -> None:
                         }
                 except (OSError, ValueError, TypeError):
                     pass
+                for evicted_name in _EVICTED_PERSISTED_NAMES:
+                    disk_entries.pop(evicted_name, None)
                 # Entries generated by this process win over stale disk data,
                 # while unrelated entries from another process are preserved.
                 disk_entries.update(_PERSISTED_ENTRIES)
@@ -987,6 +1163,13 @@ def _write_persistent_cache() -> None:
                     json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
                     temp_path = Path(handle.name)
                 os.replace(temp_path, path)
+                _EVICTED_PERSISTED_NAMES.clear()
+                global _PERSISTENT_CACHE_MTIME_NS, _PERSISTENT_CACHE_PATH
+                _PERSISTENT_CACHE_PATH = str(path)
+                try:
+                    _PERSISTENT_CACHE_MTIME_NS = path.stat().st_mtime_ns
+                except OSError:
+                    pass
         except (OSError, TimeoutError) as exc:
             logger.debug("Could not persist MCP metadata cache: %s", exc)
             if temp_path is not None:
@@ -1100,24 +1283,155 @@ def set_cached_mcp_server_info(
 
 def evict_cached_mcp_server_info(name: str) -> None:
     """Evict a cached MCPServerInfo so it can be probed fresh."""
-    _PROBED_CACHE.pop(name, None)
-    _PROBED_CONFIG_FINGERPRINTS.pop(name, None)
-    _PERSISTED_ENTRIES.pop(name, None)
-    stale_conn_keys = [
-        k for k, (srv_name, _) in _PROBED_CONN_FINGERPRINTS.items() if srv_name == name
-    ]
-    for k in stale_conn_keys:
-        _PROBED_CONN_FINGERPRINTS.pop(k, None)
+    with _CACHE_LOCK:
+        _PROBED_CACHE.pop(name, None)
+        _PROBED_CONFIG_FINGERPRINTS.pop(name, None)
+        _PERSISTED_ENTRIES.pop(name, None)
+        _EVICTED_PERSISTED_NAMES.add(name)
+        stale_conn_keys = [
+            k for k, (srv_name, _) in _PROBED_CONN_FINGERPRINTS.items() if srv_name == name
+        ]
+        for k in stale_conn_keys:
+            _PROBED_CONN_FINGERPRINTS.pop(k, None)
+
+
+def evict_failed_mcp_server_infos() -> list[str]:
+    """Evict non-'ok' cached/persisted entries so explicit `/reload` or `/restart` re-probes them."""
+    _ensure_persistent_cache_loaded()
+    evicted: set[str] = set()
+    persisted_evicted = False
+    with _CACHE_LOCK:
+        for cached_name, info in list(_PROBED_CACHE.items()):
+            if getattr(info, "status", "ok") != "ok":
+                if cached_name in _PERSISTED_ENTRIES:
+                    persisted_evicted = True
+                evict_cached_mcp_server_info(cached_name)
+                evicted.add(cached_name)
+        for persisted_name, entry in list(_PERSISTED_ENTRIES.items()):
+            info_block = entry.get("info") if isinstance(entry, Mapping) else None
+            status = info_block.get("status") if isinstance(info_block, Mapping) else "ok"
+            if status != "ok":
+                evict_cached_mcp_server_info(persisted_name)
+                persisted_evicted = True
+                evicted.add(persisted_name)
+    if persisted_evicted:
+        _write_persistent_cache()
+    return sorted(evicted)
+
+
+def prune_stale_mcp_server_state(
+    active_names: Collection[str],
+    *,
+    prune_subagents: bool = True,
+    state_dir: Path | None = None,
+) -> list[str]:
+    """Evict cached/persisted metadata and schema dirs for removed MCP servers."""
+    _ensure_persistent_cache_loaded()
+    active_set = {str(n) for n in active_names}
+    pruned: set[str] = set()
+    persisted_evicted = False
+
+    with _CACHE_LOCK:
+        for cached_name in list(_PROBED_CACHE.keys()):
+            if not prune_subagents and cached_name.startswith("subagent__"):
+                continue
+            if cached_name not in active_set:
+                if cached_name in _PERSISTED_ENTRIES:
+                    persisted_evicted = True
+                evict_cached_mcp_server_info(cached_name)
+                pruned.add(cached_name)
+
+        scoped_prefixes: tuple[str, ...] = (
+            ("plugin__", "subagent__") if prune_subagents else ("plugin__",)
+        )
+        for persisted_name in list(_PERSISTED_ENTRIES.keys()):
+            if persisted_name in active_set:
+                continue
+            if persisted_name.startswith(scoped_prefixes):
+                evict_cached_mcp_server_info(persisted_name)
+                persisted_evicted = True
+                pruned.add(persisted_name)
+
+    if persisted_evicted:
+        _write_persistent_cache()
+
+    if state_dir is not None or _schema_state_write_enabled():
+        base_dir = state_dir if state_dir is not None else get_mcp_server_state_dir()
+        active_safe_dirs = {
+            re.sub(r"[/\\]+", "_", n.strip()) or "unnamed"
+            for n in active_set
+            if n.strip()
+        }
+        for stale_name in list(pruned):
+            safe_stale = re.sub(r"[/\\]+", "_", stale_name.strip()) or "unnamed"
+            if safe_stale not in active_safe_dirs:
+                stale_dir = base_dir / safe_stale
+                if stale_dir.is_dir():
+                    shutil.rmtree(stale_dir, ignore_errors=True)
+
+        scoped_dir_prefixes: tuple[str, ...] = (
+            ("plugin__", "subagent__") if prune_subagents else ("plugin__",)
+        )
+        if base_dir.is_dir():
+            try:
+                for entry in base_dir.iterdir():
+                    if (
+                        entry.is_dir()
+                        and entry.name.startswith(scoped_dir_prefixes)
+                        and entry.name not in active_safe_dirs
+                    ):
+                        shutil.rmtree(entry, ignore_errors=True)
+                        pruned.add(entry.name)
+            except OSError:
+                pass
+
+    return sorted(pruned)
 
 
 def clear_cached_mcp_server_infos() -> None:
     """Clear process metadata and prevent stale disk rehydration this run."""
-    global _PERSISTENT_CACHE_LOADED
-    _PROBED_CACHE.clear()
-    _PROBED_CONFIG_FINGERPRINTS.clear()
-    _PROBED_CONN_FINGERPRINTS.clear()
-    _PERSISTED_ENTRIES.clear()
-    _PERSISTENT_CACHE_LOADED = True
+    global _PERSISTENT_CACHE_LOADED, _PERSISTENT_CACHE_SUPPRESSED
+    global _PERSISTENT_CACHE_MTIME_NS, _PERSISTENT_CACHE_PATH
+    with _CACHE_LOCK:
+        _PROBED_CACHE.clear()
+        _PROBED_CONFIG_FINGERPRINTS.clear()
+        _PROBED_CONN_FINGERPRINTS.clear()
+        _PERSISTED_ENTRIES.clear()
+        _EVICTED_PERSISTED_NAMES.clear()
+        _PERSISTENT_CACHE_LOADED = True
+        _PERSISTENT_CACHE_SUPPRESSED = True
+        _PERSISTENT_CACHE_MTIME_NS = None
+        _PERSISTENT_CACHE_PATH = None
+
+
+async def wait_for_inflight_mcp_probes(
+    configs: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Await any currently in-flight MCP probes matching ``configs`` on this event loop."""
+    if not configs:
+        return
+    loop = asyncio.get_running_loop()
+    loop_id = id(loop)
+    pending: list[tuple[str, Mapping[str, Any], asyncio.Future[MCPServerInfo]]] = []
+    for name, conf in configs.items():
+        if not isinstance(conf, Mapping) or is_mcp_server_info_cached(name, conf):
+            continue
+        conn_fp = _connection_fingerprint(conf)
+        fut = _INFLIGHT_PROBES.get((loop_id, conn_fp))
+        if fut is not None and not fut.done():
+            pending.append((name, conf, fut))
+    for name, conf, fut in pending:
+        try:
+            source_info = await asyncio.shield(fut)
+            if not is_mcp_server_info_cached(name, conf):
+                projected = _project_server_info(source_info, name, conf)
+                set_cached_mcp_server_info(projected, conf)
+        except asyncio.CancelledError:
+            curr = asyncio.current_task()
+            if curr is not None and curr.cancelling() > 0:
+                raise
+        except Exception:
+            pass
 
 
 async def preload_mcp_metadata(
@@ -1126,11 +1440,13 @@ async def preload_mcp_metadata(
     """Probe all configured MCP servers concurrently and return their MCPServerInfo.
 
     Identical underlying MCP connections (shared across multiple plugin scopes or
-    subagents) are deduplicated by canonical connection fingerprint so each unique
-    server is spawned and probed at most once.
+    subagents) are deduplicated both within a batch and across concurrent callers by
+    canonical connection fingerprint so each unique server is spawned at most once.
     """
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PROBES)
     progress_cb = _PROGRESS_CALLBACK.get()
+    loop = asyncio.get_running_loop()
+    loop_id = id(loop)
 
     uncached_groups: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
     for name, conf in configs.items():
@@ -1139,17 +1455,60 @@ async def preload_mcp_metadata(
             uncached_groups.setdefault(conn_fp, []).append((name, conf))
 
     async def _bound_probe_group(
+        conn_fp: str,
         group: list[tuple[str, Mapping[str, Any]]],
     ) -> list[MCPServerInfo]:
         primary_name, primary_conf = group[0]
-        async with semaphore:
-            primary_info = await probe_one_mcp_server(primary_name, primary_conf)
-            set_cached_mcp_server_info(primary_info, primary_conf)
-            results = [primary_info]
-            for alias_name, alias_conf in group[1:]:
-                projected = _project_server_info(primary_info, alias_name, alias_conf)
-                set_cached_mcp_server_info(projected, alias_conf)
-                results.append(projected)
+        inflight_key = (loop_id, conn_fp)
+
+        while True:
+            if is_mcp_server_info_cached(primary_name, primary_conf):
+                primary_info = _PROBED_CACHE[primary_name]
+                break
+            existing_fut = _INFLIGHT_PROBES.get(inflight_key)
+            if existing_fut is not None and not existing_fut.done():
+                try:
+                    source_info = await asyncio.shield(existing_fut)
+                    primary_info = _project_server_info(source_info, primary_name, primary_conf)
+                    set_cached_mcp_server_info(primary_info, primary_conf)
+                    break
+                except asyncio.CancelledError:
+                    curr = asyncio.current_task()
+                    if curr is not None and curr.cancelling() > 0:
+                        raise
+                    continue
+
+            fut: asyncio.Future[MCPServerInfo] = loop.create_future()
+            _INFLIGHT_PROBES[inflight_key] = fut
+            try:
+                async with semaphore:
+                    if is_mcp_server_info_cached(primary_name, primary_conf):
+                        primary_info = _PROBED_CACHE[primary_name]
+                    else:
+                        primary_info = await probe_one_mcp_server(primary_name, primary_conf)
+                        set_cached_mcp_server_info(primary_info, primary_conf)
+                if not fut.done():
+                    fut.set_result(primary_info)
+                break
+            except BaseException as exc:
+                if not fut.done():
+                    if isinstance(exc, asyncio.CancelledError):
+                        fut.cancel()
+                    else:
+                        fut.set_exception(exc)
+                    fut.add_done_callback(
+                        lambda f: f.exception() if not f.cancelled() else None
+                    )
+                raise
+            finally:
+                if _INFLIGHT_PROBES.get(inflight_key) is fut:
+                    _INFLIGHT_PROBES.pop(inflight_key, None)
+
+        results = [primary_info]
+        for alias_name, alias_conf in group[1:]:
+            projected = _project_server_info(primary_info, alias_name, alias_conf)
+            set_cached_mcp_server_info(projected, alias_conf)
+            results.append(projected)
         if progress_cb is not None:
             try:
                 progress_cb(list(_PROBED_CACHE.values()))
@@ -1157,7 +1516,10 @@ async def preload_mcp_metadata(
                 pass
         return results
 
-    tasks = [_bound_probe_group(group) for group in uncached_groups.values()]
+    tasks = [
+        _bound_probe_group(conn_fp, group)
+        for conn_fp, group in uncached_groups.items()
+    ]
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=False)
         _write_persistent_cache()
@@ -1183,6 +1545,7 @@ async def preload_mcp_server_info(
     no_mcp: bool = False,
     trust_project_mcp: bool | None = None,
     include_subagents: bool | None = None,
+    project_root: Path | str | None = None,
 ) -> list[MCPServerInfo]:
     """Discover MCP servers, probe them concurrently, and cache metadata.
 
@@ -1193,6 +1556,7 @@ async def preload_mcp_server_info(
         include_subagents: Whether to also discover and preload subagent-scoped
             MCP servers in the same deduplicated batch. Defaults to True outside
             pytest runs.
+        project_root: Optional working directory or project root for discovery.
 
     Returns:
         List of MCPServerInfo entries for discovered servers.
@@ -1200,26 +1564,39 @@ async def preload_mcp_server_info(
     if no_mcp:
         return []
 
-    from talkops.mcp.discovery import MCPDiscovery
+    from talkops.mcp.discovery import (
+        MCPDiscovery,
+        _load_mcp_json,
+        _parse_server_config,
+    )
+    from talkops.project_utils import ProjectContext
+
+    resolved_project_root: Path | None = None
+    if project_root is not None:
+        try:
+            project_context = ProjectContext.from_user_cwd(Path(project_root))
+            resolved_project_root = (
+                project_context.project_root or project_context.user_cwd
+            )
+        except OSError:
+            resolved_project_root = Path(project_root)
 
     discovery = MCPDiscovery()
     try:
-        config: dict[str, Any] = dict(await discovery.discover_and_sync_async())
+        config: dict[str, Any] = dict(
+            await discovery.discover_and_sync_async(project_root=resolved_project_root)
+        )
     except Exception as exc:
         logger.debug("Async discovery failed, falling back to sync: %s", exc)
-        config = dict(discovery.discover())
+        config = dict(discovery.discover(project_root=resolved_project_root))
 
     if mcp_config_path:
         try:
             path = Path(mcp_config_path)
-            if path.is_file():
-                with open(path, encoding="utf-8") as f:
-                    data = json.load(f)
-                servers = data.get("mcpServers")
-                if isinstance(servers, dict):
-                    for name, srv_config in servers.items():
-                        if isinstance(srv_config, dict):
-                            config[name] = srv_config
+            servers = _load_mcp_json(path)
+            for name, srv_config in servers.items():
+                if isinstance(srv_config, dict):
+                    config[name] = _parse_server_config(name, srv_config, "cli")
         except Exception as e:
             logger.warning("Failed to load explicit MCP config %s: %s", mcp_config_path, e)
 
@@ -1230,17 +1607,38 @@ async def preload_mcp_server_info(
 
     if include_subagents:
         try:
-            from talkops.mcp.session_manager import MCPSessionManager
             from talkops.plugins.adapters.mcp import discover_all_subagents_mcp_configs
 
-            subagent_configs = discover_all_subagents_mcp_configs()
+            subagent_configs = discover_all_subagents_mcp_configs(
+                project_root=resolved_project_root,
+            )
             if subagent_configs:
-                mgr = MCPSessionManager.get_instance(subagent_configs)
-                mgr.register_servers(subagent_configs)
                 for s_name, s_cfg in subagent_configs.items():
                     config.setdefault(s_name, s_cfg)
         except Exception as exc:
             logger.debug("Subagent MCP config discovery during preload skipped: %s", exc)
+
+    try:
+        from talkops.mcp.session_manager import MCPSessionManager
+
+        mgr = (
+            MCPSessionManager.get_instance(config)
+            if config
+            else MCPSessionManager._instance
+        )
+        if mgr is not None:
+            await mgr.async_sync_active_configs(
+                config,
+                purge_missing=True,
+                purge_subagents=bool(include_subagents),
+            )
+    except Exception as exc:
+        logger.debug("MCPSessionManager sync during preload skipped: %s", exc)
+
+    prune_stale_mcp_server_state(
+        config.keys(),
+        prune_subagents=bool(include_subagents),
+    )
 
     if not config:
         return []
@@ -1260,6 +1658,7 @@ __all__ = [
     "build_mcp_server_info_from_raw_tools",
     "clear_cached_mcp_server_infos",
     "evict_cached_mcp_server_info",
+    "evict_failed_mcp_server_infos",
     "format_mcp_status_response",
     "get_cached_mcp_server_infos",
     "get_mcp_server_state_dir",
@@ -1267,8 +1666,10 @@ __all__ = [
     "preload_mcp_metadata",
     "preload_mcp_server_info",
     "probe_one_mcp_server",
+    "prune_stale_mcp_server_state",
     "read_mcp_tool_schema",
     "set_cached_mcp_server_info",
+    "wait_for_inflight_mcp_probes",
     "write_mcp_server_state",
 ]
 

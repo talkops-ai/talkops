@@ -22,6 +22,10 @@ Coordinates background process monitoring and agent wakeup:
 - Automatically wakes the agent when a non-daemon background task completes or
   pauses at an interactive stdin prompt while the agent is idle, deferring
   politely if the user is actively typing.
+- If a task finishes while a turn is still running (e.g. during the turn's final
+  model call, after `abefore_model` already ran), the wakeup is deferred until the
+  turn ends and then re-verified against the pending notification queue, so the
+  completion is never silently dropped.
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ class TaskWatcherController:
         self._watched_thread_id: str | None = None
         self._woken_keys: set[tuple[str, str]] = set()
         self._pending_wake_tasks: set[asyncio.Task[None]] = set()
+        self._wake_lock = asyncio.Lock()
 
     def start(self, thread_id: str | None = None) -> None:
         """Start or restart the background watcher for ``thread_id``."""
@@ -106,24 +111,37 @@ class TaskWatcherController:
     async def _watch_local_manager(self, thread_id: str) -> None:
         """Subscribe directly to the in-process `BackgroundTaskManager`."""
         manager = get_background_task_manager()
-        queue = manager.subscribe(thread_id)
+        queue = manager.subscribe("*")
         try:
-            initial_tasks = manager.list_tasks(thread_id, include_completed=True)
+            active_tid = (getattr(self._app, "_agent_thread_id", None) or thread_id or "").strip()
+            initial_tasks = manager.list_tasks(active_tid or thread_id, include_completed=True)
             if initial_tasks:
                 self._handle_event(
                     {
                         "type": "task_snapshot",
-                        "thread_id": thread_id,
+                        "thread_id": active_tid or thread_id,
                         "tasks": initial_tasks,
                     }
                 )
             while not getattr(self._app, "_exit", False):
                 evt = await queue.get()
-                self._handle_event(evt)
+                if not isinstance(evt, dict):
+                    continue
+                evt_tid = str(evt.get("thread_id") or "").strip()
+                current_tid = (getattr(self._app, "_agent_thread_id", None) or thread_id or "").strip()
+                panel = getattr(self._app, "_get_background_task_panel", lambda: None)()
+                tracked_ids = getattr(panel, "_records", {}) if panel is not None else {}
+                task_id = str(evt.get("task_id") or "").strip()
+                if (
+                    not evt_tid
+                    or evt_tid in {current_tid, thread_id, "default"}
+                    or (task_id and task_id in tracked_ids)
+                ):
+                    self._handle_event(evt)
         except asyncio.CancelledError:
             raise
         finally:
-            manager.unsubscribe(thread_id, queue)
+            manager.unsubscribe("*", queue)
 
     async def _watch_remote_sse(self, thread_id: str) -> None:
         """Connect to `/api/v1/threads/{thread_id}/tasks/stream` when using a remote server."""
@@ -141,6 +159,23 @@ class TaskWatcherController:
                 timeout = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
                 async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
                     async with client.stream("GET", stream_url) as response:
+                        if response.status_code in {404, 405, 501}:
+                            logger.debug(
+                                "Remote server does not expose background task SSE stream (%d); stopping SSE watcher",
+                                response.status_code,
+                            )
+                            return
+                        if response.status_code == 401:
+                            client_obj = getattr(self._app, "_client", None)
+                            prep = getattr(client_obj, "_prepare_client_for_call", None)
+                            if callable(prep):
+                                try:
+                                    await prep(force_token_refresh=True)
+                                except Exception:
+                                    pass
+                            await asyncio.sleep(backoff)
+                            backoff = min(10.0, backoff * 1.5)
+                            continue
                         if response.status_code != 200:
                             await asyncio.sleep(backoff)
                             backoff = min(10.0, backoff * 1.5)
@@ -190,20 +225,23 @@ class TaskWatcherController:
         base_url = (
             getattr(client, "server_url", None)
             or getattr(client, "_server_url", None)
+            or getattr(client, "_url", None)
             or getattr(client, "base_url", None)
         )
         if not isinstance(base_url, str) or not base_url.strip() or base_url.strip().startswith("inprocess://"):
             return None, {}
 
         headers: dict[str, str] = {}
-        headers_fn = getattr(client, "_headers", None)
-        if callable(headers_fn):
+        raw_headers = getattr(client, "_headers", None)
+        if callable(raw_headers):
             try:
-                raw_h = headers_fn()
+                raw_h = raw_headers()
                 if isinstance(raw_h, dict):
                     headers.update({str(k): str(v) for k, v in raw_h.items()})
             except Exception:
                 pass
+        elif isinstance(raw_headers, dict):
+            headers.update({str(k): str(v) for k, v in raw_headers.items()})
         return base_url.strip(), headers
 
     def _handle_event(self, event: dict[str, Any]) -> None:
@@ -218,6 +256,10 @@ class TaskWatcherController:
         phase = str(event.get("phase") or "")
         should_wake = bool(event.get("should_wake_agent", False))
         task_id = str(event.get("task_id") or "").strip()
+        evt_tid = str(event.get("thread_id") or "").strip()
+        current_tid = (getattr(self._app, "_agent_thread_id", None) or self._watched_thread_id or "").strip()
+        if evt_tid and current_tid and evt_tid not in {current_tid, "default"}:
+            return
         if not should_wake or not task_id or phase not in {"complete", "waiting_for_input"}:
             return
 
@@ -228,7 +270,56 @@ class TaskWatcherController:
         if dedup_key in self._woken_keys:
             return
         self._woken_keys.add(dedup_key)
+        self._schedule_wake(event)
 
+    def check_pending_notifications(self) -> None:
+        """Schedule a wakeup for task notifications still undelivered at a turn boundary.
+
+        Called by ``TalkOpsApp`` after every agent turn cleanup. Covers completions whose
+        lifecycle event was missed (watcher restart, thread switch) or that raced the
+        final model call of the previous turn, so they are never stranded in the queue.
+        """
+        if getattr(self._app, "_exit", False):
+            return
+        if any(not t.done() for t in self._pending_wake_tasks):
+            # An in-flight wake task will re-verify delivery once the agent is idle.
+            return
+        thread_id = (
+            getattr(self._app, "_agent_thread_id", None) or self._watched_thread_id or ""
+        ).strip()
+        if not thread_id:
+            return
+        try:
+            pending = get_background_task_manager().peek_notifications(thread_id)
+        except Exception:
+            return
+        if not pending:
+            return
+        ntf = pending[0]
+        # At most one sweep-triggered wakeup per notification, so a failing wake turn
+        # (e.g. model/provider error before `abefore_model`) cannot loop forever.
+        sweep_key = (ntf.notification_id, "sweep")
+        if sweep_key in self._woken_keys:
+            return
+        self._woken_keys.add(sweep_key)
+        phase = "waiting_for_input" if ntf.kind == "waiting_for_input" else "complete"
+        event: dict[str, Any] = {
+            "type": "background_task",
+            "phase": phase,
+            "task_id": ntf.task_id,
+            "thread_id": ntf.thread_id,
+            "command": ntf.command,
+            "status": ntf.status,
+            "exit_code": ntf.exit_code,
+            "elapsed_seconds": round(ntf.duration_seconds, 2),
+            "log_path": ntf.log_path,
+            "updated_at": ntf.timestamp,
+            "should_wake_agent": True,
+        }
+        self._schedule_wake(event)
+
+    def _schedule_wake(self, event: dict[str, Any]) -> None:
+        task_id = str(event.get("task_id") or "")
         try:
             loop = asyncio.get_running_loop()
             wake_task = loop.create_task(
@@ -240,38 +331,91 @@ class TaskWatcherController:
         except RuntimeError:
             pass
 
+    def _app_busy(self) -> bool:
+        """Return True while an agent turn, turn cleanup, or interactive UI blocks a wakeup."""
+        app = self._app
+        if getattr(app, "_agent_running", False) or getattr(app, "_agent_reconciling", False):
+            return True
+        user_typing = app._is_user_typing() if hasattr(app, "_is_user_typing") else False
+        shell_busy = bool(getattr(app, "_shell_running", False))
+        approval_open = getattr(app, "_pending_approval_widget", None) is not None
+        ask_open = getattr(app, "_pending_ask_user_widget", None) is not None
+        return bool(user_typing or shell_busy or approval_open or ask_open)
+
+    async def _is_notification_pending(self, event: dict[str, Any]) -> bool:
+        """Return True if the task notification has not yet been delivered to the agent.
+
+        A completion can race an in-flight turn: if it lands after that turn's last
+        ``abefore_model`` hook, nothing drains it and the agent never hears about it.
+        Delivery is checked against the in-process manager queue when the task is
+        local, otherwise against the checkpointed ``background_tasks[...].notified``.
+        """
+        task_id = str(event.get("task_id") or "").strip()
+        evt_tid = str(event.get("thread_id") or "").strip()
+        thread_id = (
+            evt_tid
+            or getattr(self._app, "_agent_thread_id", None)
+            or self._watched_thread_id
+            or ""
+        ).strip()
+        if not task_id:
+            return False
+
+        try:
+            manager = get_background_task_manager()
+            handle = manager.get_task(task_id, thread_id=thread_id or None)
+            if handle is not None:
+                pending = manager.peek_notifications(handle.thread_id)
+                return any(n.task_id == task_id for n in pending)
+        except Exception:
+            logger.debug("Local notification check failed for %s", task_id, exc_info=True)
+
+        # Remote server: consult the persisted task record from the checkpoint.
+        get_state = getattr(self._app, "_get_thread_state_values", None)
+        if callable(get_state) and thread_id:
+            try:
+                values = await get_state(thread_id)
+                records = (values or {}).get("background_tasks") or {}
+                rec = records.get(task_id) if isinstance(records, dict) else None
+                if isinstance(rec, dict) and rec.get("notified"):
+                    return False
+            except Exception:
+                logger.debug("Checkpoint notification check failed for %s", task_id, exc_info=True)
+        # When delivery cannot be confirmed, prefer waking over stranding the result.
+        return True
+
     async def _maybe_wake_agent(self, event: dict[str, Any]) -> None:
-        """Trigger a reactive agent turn if the agent is idle once user typing settles."""
-        # Brief settle window so if the command completed during an active turn cleanup,
-        # or if abefore_model already consumed it in-flight, we don't double-trigger.
+        """Trigger a reactive agent turn once the agent is idle and user typing settles.
+
+        Never drops a wakeup just because a turn is running: the completion may have
+        landed after that turn's final ``abefore_model`` drain. Instead it waits for
+        the turn (and its cleanup/queue drain) to finish, then re-verifies delivery.
+        """
+        # Brief settle window so if abefore_model consumes it in-flight we don't double-trigger.
         await asyncio.sleep(0.35)
 
-        if getattr(self._app, "_exit", False):
-            return
-
-        # If an agent turn is currently running, abefore_model will deliver the notification
-        if getattr(self._app, "_agent_running", False):
-            return
-
-        # Defer while the user is actively typing or an interactive prompt/shell is open
-        while not getattr(self._app, "_exit", False):
-            if getattr(self._app, "_agent_running", False):
+        while True:
+            # Wait for any running turn, turn cleanup, typing, or interactive prompt.
+            while not getattr(self._app, "_exit", False) and self._app_busy():
+                await asyncio.sleep(0.4)
+            if getattr(self._app, "_exit", False):
                 return
-            user_typing = (
-                self._app._is_user_typing()
-                if hasattr(self._app, "_is_user_typing")
-                else False
-            )
-            shell_busy = bool(getattr(self._app, "_shell_running", False))
-            approval_open = getattr(self._app, "_pending_approval_widget", None) is not None
-            ask_open = getattr(self._app, "_pending_ask_user_widget", None) is not None
-            if not (user_typing or shell_busy or approval_open or ask_open):
-                break
-            await asyncio.sleep(0.6)
 
-        if getattr(self._app, "_exit", False) or getattr(self._app, "_agent_running", False):
-            return
+            # Serialize concurrent wakeups: one wake turn drains every pending notification.
+            async with self._wake_lock:
+                if getattr(self._app, "_exit", False):
+                    return
+                if self._app_busy():
+                    continue
+                if not await self._is_notification_pending(event):
+                    return
+                if self._app_busy():
+                    continue
+                await self._dispatch_wakeup(event)
+                return
 
+    async def _dispatch_wakeup(self, event: dict[str, Any]) -> None:
+        """Mount the wakeup banner and start a reactive agent turn for ``event``."""
         task_id = str(event.get("task_id") or "")
         command = str(event.get("command") or "")
         phase = str(event.get("phase") or "complete")

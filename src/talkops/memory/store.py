@@ -24,12 +24,9 @@ and injected into the system prompt or queried via ``/memory`` commands.
 
 from __future__ import annotations
 
-import logging
 import re
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from talkops.config.paths import DATA_DIR
 from talkops.utils.logger import get_logger

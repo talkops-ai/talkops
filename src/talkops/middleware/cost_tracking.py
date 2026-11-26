@@ -23,7 +23,6 @@ lifetime figure.
 
 from __future__ import annotations
 
-import logging
 import math
 import operator
 import threading
@@ -31,7 +30,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, NotRequired, TypedDict, override
+from typing import Annotated, Any, NotRequired, TypedDict, override
 from uuid import UUID
 
 from langchain.agents.middleware.types import (

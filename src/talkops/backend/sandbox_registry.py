@@ -266,7 +266,7 @@ class SandboxRegistry:
         return sorted(self._metadata)
 
     def available_providers(self) -> list[str]:
-        """Alias for `list_providers()` matching `dcode`."""
+        """Return all registered sandbox provider names (alias for `list_providers()`)."""
         return self.list_providers()
 
     def is_available(self, name: str) -> bool:

@@ -18,14 +18,10 @@ from typing import Any
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
 from talkops.middleware.goal_criteria import (
-    _REPOSITORY_RECURSION_LIMIT,
-    _STRUCTURED_OUTPUT_TOOL_NAME,
-    _WEB_SEARCH_CALL_LIMIT,
-    GoalAmendRequest,
     GoalCreateRequest,
     GoalCriteriaMiddleware,
     GoalProposal,
@@ -34,7 +30,6 @@ from talkops.middleware.goal_criteria import (
     create_goal_criteria_fallback_agent,
 )
 from talkops.state.goal_state_limits import (
-    GOAL_APPLICATION_CHAR_LIMIT,
     GOAL_OBJECTIVE_CHAR_LIMIT,
     RUBRIC_CHAR_LIMIT,
     GoalStateSizeError,

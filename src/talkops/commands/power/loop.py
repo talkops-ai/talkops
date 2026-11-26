@@ -141,7 +141,7 @@ class LoopManager:
     @property
     def active(self) -> list[LoopInstance]:
         """Return the active property."""
-        return [l for l in self._loops.values() if l.is_running]
+        return [item for item in self._loops.values() if item.is_running]
 
     @property
     def all(self) -> list[LoopInstance]:

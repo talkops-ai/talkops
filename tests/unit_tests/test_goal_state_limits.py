@@ -18,7 +18,6 @@ import pytest
 
 from talkops.state.goal_state_limits import (
     GOAL_APPLICATION_CHAR_LIMIT,
-    GOAL_NOTICE_TEXT_CHAR_LIMIT,
     GOAL_OBJECTIVE_CHAR_LIMIT,
     GOAL_STATUS_NOTE_CHAR_LIMIT,
     RUBRIC_CHAR_LIMIT,

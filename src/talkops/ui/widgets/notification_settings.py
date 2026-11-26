@@ -16,12 +16,9 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, ClassVar
 
 from textual.binding import Binding, BindingType
-from textual.containers import VerticalGroup
-from textual.screen import ModalScreen
 from textual.widgets import Checkbox, Static
 
 from talkops.config.settings import get_glyphs
@@ -29,7 +26,7 @@ from talkops.ui.widgets.modal_base import OpsModalScreen
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from textual.app import ComposeResult
+    pass
 
 logger = get_logger(__name__)
 

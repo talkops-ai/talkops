@@ -168,6 +168,7 @@ async def _run_headless(
     config_kwargs: dict[str, Any] = {
         "project_context": project_context,
         "model": resolved_model,
+        "explicit_model": bool(model),
         "assistant_id": assistant_id,
         "interactive": False,
         "approval_mode": str(approval_mode),
@@ -286,6 +287,7 @@ async def _run_headless(
 
         context: dict[str, Any] = {
             "model": resolved_model,
+            "explicit_model": bool(model),
             "approval_mode": str(approval_mode),
             "approval_mode_key": approval_mode_key(effective_thread),
             "thread_id": effective_thread,
@@ -347,12 +349,31 @@ async def _run_headless(
             ):
                 if mode == "messages":
                     msg = chunk[0] if isinstance(chunk, tuple) else chunk
+                    msg_meta = chunk[1] if isinstance(chunk, tuple) and len(chunk) > 1 and isinstance(chunk[1], dict) else {}
+
+                    # Skip internal rubric/goal grader subgraphs so grader JSON never pollutes output
+                    agent_label = str(msg_meta.get("lc_agent_name") or "")
+                    if agent_label in {"rubric_grader", "goal_criteria_agent"} or any(
+                        "rubric_grader" in str(seg) or "goal_criteria" in str(seg)
+                        for seg in (ns or ())
+                    ):
+                        continue
+
+                    # Only stream AI/assistant messages — never ToolMessage, HumanMessage, or SystemMessage
                     if isinstance(msg, str):
-                        content = msg
+                        is_ai_msg = True
+                        content: Any = msg
                     elif isinstance(msg, dict):
+                        m_role = str(msg.get("type") or msg.get("role") or "").lower()
+                        is_ai_msg = m_role in {"ai", "assistant", "aimessage", "aimessagechunk", ""}
                         content = msg.get("content", "")
                     else:
+                        m_type = str(getattr(msg, "type", "") or type(msg).__name__).lower()
+                        is_ai_msg = m_type in {"ai", "assistant", "aimessage", "aimessagechunk"}
                         content = getattr(msg, "content", "")
+
+                    if not is_ai_msg:
+                        continue
 
                     text_piece = ""
                     if isinstance(content, str):
@@ -373,7 +394,19 @@ async def _run_headless(
                             sys.stdout.flush()
 
                 elif mode == "updates":
-                    if _is_turn_update(chunk):
+                    if isinstance(chunk, dict):
+                        for _uk, _uv in chunk.items():
+                            if isinstance(_uv, dict) and _uv.get("_rubric_status") is not None:
+                                _rs = _uv.get("_rubric_status")
+                                if isinstance(_rs, dict) and _rs.get("result"):
+                                    rubric_status = str(_rs["result"])
+                                elif isinstance(_rs, str) and _rs:
+                                    rubric_status = _rs
+                    is_grader_ns = any(
+                        "rubric_grader" in str(seg) or "goal_criteria" in str(seg)
+                        for seg in (ns or ())
+                    )
+                    if not is_grader_ns and _is_turn_update(chunk):
                         turn_count += 1
                         logger.debug("Turn %d completed | thread_id=%s", turn_count, effective_thread)
                         if max_turns is not None and turn_count > max_turns:

@@ -337,6 +337,12 @@ class StatusBar(Horizontal):
         color: $background;
     }
 
+    StatusBar .status-auto-approve.yolo {
+        background: $error;
+        color: white;
+        text-style: bold;
+    }
+
     StatusBar .status-connection {
         width: auto;
         padding: 0 1;
@@ -686,13 +692,13 @@ class StatusBar(Horizontal):
             indicator.add_class("normal")
 
     def watch_approval_mode(self, new_value: str) -> None:
-        """Update the three-state approval indicator (manual, auto, smart)."""
+        """Update the approval indicator (manual, auto, smart, yolo)."""
         try:
             indicator = self.query_one("#auto-approve-indicator", Static)
         except NoMatches:
             return
-        indicator.remove_class("manual", "auto", "smart")
-        mode = new_value if new_value in {"manual", "auto", "smart"} else "manual"
+        indicator.remove_class("manual", "auto", "smart", "yolo")
+        mode = new_value if new_value in {"manual", "auto", "smart", "yolo"} else "manual"
         indicator.update(mode.upper())
         indicator.add_class(mode)
 
@@ -906,7 +912,7 @@ class StatusBar(Horizontal):
     @property
     def auto_approve(self) -> bool:
         """Whether autonomous approval mode is active."""
-        return self.approval_mode in {"auto", "smart"}
+        return self.approval_mode in {"auto", "smart", "yolo"}
 
     @auto_approve.setter
     def auto_approve(self, enabled: bool) -> None:
@@ -917,9 +923,9 @@ class StatusBar(Horizontal):
         """Set the approval mode.
 
         Args:
-            mode: `manual`, `auto`, or `smart`.
+            mode: `manual`, `auto`, `smart`, or `yolo`.
         """
-        self.approval_mode = mode if mode in {"manual", "auto", "smart"} else "manual"
+        self.approval_mode = mode if mode in {"manual", "auto", "smart", "yolo"} else "manual"
 
     def set_auto_approve(self, *, enabled: bool) -> None:
         """Set the autonomous approval state.

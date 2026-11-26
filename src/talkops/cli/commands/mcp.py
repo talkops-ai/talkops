@@ -37,8 +37,29 @@ def setup_mcp_parser(subparsers: Any) -> None:
         "action",
         nargs="?",
         default="list",
-        choices=["list", "ls", "status", "probe"],
+        choices=["list", "ls", "status", "probe", "lock", "verify"],
         help="Action to perform (default: list).",
+    )
+    mcp_parser.add_argument(
+        "--plugin-dir",
+        dest="plugin_dir",
+        type=str,
+        default=None,
+        help="Plugin directory where mcp.lock.json is written or verified (for lock/verify).",
+    )
+    mcp_parser.add_argument(
+        "--server",
+        dest="server",
+        type=str,
+        default=None,
+        help="MCP server key for lock/verify.",
+    )
+    mcp_parser.add_argument(
+        "--tools-json",
+        dest="tools_json",
+        type=str,
+        default=None,
+        help="JSON string or file path listing MCP tool descriptors for lock/verify.",
     )
     mcp_parser.add_argument(
         "--json",
@@ -104,6 +125,78 @@ def run_mcp_command(args: argparse.Namespace | None = None) -> int:
     if no_mcp and mcp_config:
         print("Error: --no-mcp and --mcp-config are mutually exclusive.", file=sys.stderr)
         return 2
+
+    if action in ("lock", "verify"):
+        from talkops.mcp.lockfile import (
+            generate_mcp_lockfile,
+            load_mcp_lockfile,
+            verify_mcp_lockfile,
+        )
+
+        plugin_dir_raw = getattr(args, "plugin_dir", None) if args else None
+        server_key = getattr(args, "server", None) if args else None
+        tools_json_raw = getattr(args, "tools_json", None) if args else None
+        if not plugin_dir_raw or not server_key or not tools_json_raw:
+            print(
+                f"Error: `talkops mcp {action}` requires --plugin-dir, --server, and --tools-json.",
+                file=sys.stderr,
+            )
+            return 2
+
+        p_dir = Path(plugin_dir_raw).expanduser().resolve()
+        maybe_file = Path(tools_json_raw).expanduser()
+        try:
+            tools_list = (
+                json.loads(maybe_file.read_text(encoding="utf-8"))
+                if maybe_file.is_file()
+                else json.loads(tools_json_raw)
+            )
+        except Exception as exc:
+            print(f"Error parsing --tools-json: {exc}", file=sys.stderr)
+            return 2
+
+        if not isinstance(tools_list, list):
+            print("Error: --tools-json must decode to a JSON array of tool descriptors.", file=sys.stderr)
+            return 2
+
+        lock_file = p_dir / "mcp.lock.json"
+        if action == "lock":
+            generate_mcp_lockfile({server_key: tools_list}, output_path=lock_file)
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "lockfile": str(lock_file),
+                        "server": server_key,
+                        "tools_locked": len(tools_list),
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+            sys.stdout.flush()
+            return 0
+
+        if not lock_file.is_file():
+            print(f"Error: lockfile not found at {lock_file}", file=sys.stderr)
+            return 1
+        lock_data = load_mcp_lockfile(lock_file)
+        ver = verify_mcp_lockfile(server_key, tools_list, lock_data)
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "lockfile": str(lock_file),
+                    "server": ver.server_name,
+                    "verified": ver.verified,
+                    "mismatched_tools": list(ver.mismatched_tools),
+                    "unpinned_tools": list(ver.unpinned_tools),
+                    "warnings": list(ver.warnings),
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        sys.stdout.flush()
+        return 0 if ver.verified else 1
 
     if action in ("status", "probe"):
         do_probe = True

@@ -16,15 +16,16 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import fnmatch
+import hashlib
 import json
 import os
 import re
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
+from pathlib import Path
 from typing import Any, cast
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
@@ -39,29 +40,62 @@ _DEFAULT_CONNECT_TIMEOUT = 30.0
 _CONNECT_TIMEOUT = float(os.environ.get("TALKOPS_MCP_CONNECT_TIMEOUT", str(_DEFAULT_CONNECT_TIMEOUT)))
 
 
+def _iter_exception_tree(exc: BaseException) -> list[BaseException]:
+    """Traverse nested ExceptionGroups, __cause__, and __context__ without cycles."""
+    pending: list[BaseException] = [exc]
+    visited: set[int] = set()
+    ordered: list[BaseException] = []
+    while pending:
+        current = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        ordered.append(current)
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+        for linked in (current.__cause__, current.__context__):
+            if linked is not None:
+                pending.append(linked)
+    return ordered
+
+
+def _mcp_error_code(exc: BaseException) -> int | None:
+    """Extract numeric JSON-RPC error code from MCP SDK or FastMCP exception types."""
+    err_obj = getattr(exc, "error", None)
+    code = getattr(err_obj, "code", getattr(exc, "code", None))
+    return int(code) if isinstance(code, int) and not isinstance(code, bool) else None
+
+
 def _is_transient_session_error(exc: BaseException) -> bool:
-    """Return True when exc signals the MCP session transport or stream is dead."""
+    """Return True when exc (or any nested sub-exception) signals a dead MCP transport."""
     try:
         import anyio
 
-        anyio_excs = (
+        anyio_excs: tuple[type[BaseException], ...] = (
             anyio.ClosedResourceError,
             anyio.BrokenResourceError,
             anyio.EndOfStream,
         )
     except ImportError:
         anyio_excs = ()
-    return isinstance(
-        exc,
-        (
-            *anyio_excs,
-            BrokenPipeError,
-            ConnectionAbortedError,
-            ConnectionResetError,
-            EOFError,
-            asyncio.IncompleteReadError,
-        ),
+
+    try:
+        from mcp.types import CONNECTION_CLOSED
+    except ImportError:
+        CONNECTION_CLOSED = -32000
+
+    transient_types = (
+        *anyio_excs,
+        ConnectionError,
+        EOFError,
+        asyncio.IncompleteReadError,
     )
+    for err in _iter_exception_tree(exc):
+        if isinstance(err, transient_types):
+            return True
+        if _mcp_error_code(err) == CONNECTION_CLOSED:
+            return True
+    return False
 
 
 def _normalize_mcp_arguments(arguments: dict[str, Any], input_schema: Any) -> dict[str, Any]:
@@ -178,6 +212,36 @@ def _filter_tool_name(
     return True
 
 
+def _effective_session_fingerprint(config: Mapping[str, Any]) -> str:
+    """Compute a SHA-256 digest of a server's resolved configuration and loaded `.env` state."""
+    try:
+        resolved: dict[str, Any] = resolve_mcp_server_env("__fp__", config)
+    except Exception:
+        resolved = dict(config)
+
+    transport = str(resolved.get("type") or resolved.get("transport") or "").lower()
+    url = str(resolved.get("url") or resolved.get("serverUrl") or "")
+    if not transport or transport == "stdio":
+        transport = ("sse" if "sse" in url.lower() else "http") if url else "stdio"
+
+    dotenv_state: dict[str, str] = {}
+    if transport not in ("http", "streamable_http", "sse"):
+        try:
+            from talkops.config.settings import get_dotenv_loaded_values
+
+            dotenv_state = get_dotenv_loaded_values()
+        except Exception:
+            dotenv_state = {}
+
+    payload = json.dumps(
+        {"config": resolved, "dotenv": dotenv_state},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 class _MCPSessionEntry:
     """Internal tracking entry for an active MCP session connection."""
 
@@ -188,6 +252,8 @@ class _MCPSessionEntry:
         *,
         close_event: asyncio.Event | None = None,
         owner_task: asyncio.Task[None] | None = None,
+        init_result: Any = None,
+        env_fingerprint: str | None = None,
     ) -> None:
         """Initialize tracking entry for an active MCP session.
 
@@ -196,12 +262,16 @@ class _MCPSessionEntry:
             exit_stack: AsyncExitStack managing connection cleanup.
             close_event: Optional event signalling the owner task to close the session.
             owner_task: Optional background task that entered the session context.
+            init_result: Optional MCP InitializeResult returned at handshake time.
+            env_fingerprint: Optional SHA-256 digest of resolved config and spawn env.
         """
         self.session = session
         self.exit_stack = exit_stack
         self._cached_tools: list[BaseTool] = []
         self._close_event = close_event
         self._owner_task = owner_task
+        self.init_result = init_result
+        self.env_fingerprint = env_fingerprint
 
     async def aclose(self) -> None:
         """Close the MCP session within its owning task to satisfy AnyIO cancel-scope invariants."""
@@ -364,9 +434,25 @@ def _build_cached_mcp_tool(
         else:
             original_tool_name = raw_tool_name
         lc_tool_name = f"{server_name}{name_prefix_sep}{original_tool_name}" if server_name else original_tool_name
-    description = getattr(mcp_tool, "description", "") or f"MCP tool {original_tool_name} from {server_name}"
+    raw_description = getattr(mcp_tool, "description", "") or f"MCP tool {original_tool_name} from {server_name}"
     raw_input_schema = getattr(mcp_tool, "inputSchema", None) or getattr(mcp_tool, "input_schema", None) or {}
-    input_schema = _clean_mcp_schema(raw_input_schema)
+    from talkops.mcp.lockfile import (
+        compute_mcp_tool_hash,
+        sanitize_mcp_descriptor,
+        sanitize_mcp_input_schema,
+    )
+
+    description, desc_warnings = sanitize_mcp_descriptor(raw_description)
+    cleaned_raw_schema = _clean_mcp_schema(raw_input_schema)
+    input_schema, schema_warnings = sanitize_mcp_input_schema(cleaned_raw_schema)
+    if desc_warnings or schema_warnings:
+        logger.warning(
+            "Sanitized untrusted MCP descriptor directives on %s:%s (%s)",
+            server_name,
+            original_tool_name,
+            ", ".join(sorted(set(desc_warnings + schema_warnings))),
+        )
+    tool_sha256 = compute_mcp_tool_hash(original_tool_name, description, input_schema)
 
     base_server = server_name.rsplit("__", 1)[-1] if "__" in server_name else server_name
     subagent_owner = (
@@ -393,6 +479,7 @@ def _build_cached_mcp_tool(
         "_mcp_base_server": base_server,
         "_mcp_original_name": original_tool_name,
         "_mcp_subagent_owner": subagent_owner,
+        "_mcp_tool_sha256": tool_sha256,
     }
     from talkops.mcp.semantic_profiler import MCPSemanticProfiler
 
@@ -507,11 +594,13 @@ def _build_cached_mcp_tool(
                 "duration_ms": round(duration_ms, 2),
             },
         )
+        from talkops.security.redaction import scrub_tool_payload
+
         try:
             converted = _convert_call_tool_result(result)
             if isinstance(converted, tuple) and len(converted) == 2:
-                return converted
-            return converted, None
+                return scrub_tool_payload(converted, tool_name=lc_tool_name)
+            return scrub_tool_payload(converted, tool_name=lc_tool_name), None
         except ToolException:
             # Let ToolException (including _MCPToolExecutionError) propagate to LangChain's handle_tool_error
             raise
@@ -525,8 +614,8 @@ def _build_cached_mcp_tool(
             )
             content = getattr(result, "content", None)
             if content is not None:
-                return content, None
-            return str(result), None
+                return scrub_tool_payload(content, tool_name=lc_tool_name), None
+            return scrub_tool_payload(str(result), tool_name=lc_tool_name), None
 
     return StructuredTool(
         name=lc_tool_name,
@@ -655,6 +744,243 @@ def split_enabled_tools_by_eager_lazy(
     return eager, lazy
 
 
+_DEFAULT_MAX_INLINE_RESOURCE_BYTES = 48 * 1024
+_MAX_RESOURCE_LIST_PAGES = 50
+_MIME_EXTENSION_OVERRIDES: dict[str, str] = {
+    "application/json": ".json",
+    "application/yaml": ".yaml",
+    "application/x-yaml": ".yaml",
+    "text/yaml": ".yaml",
+    "text/x-yaml": ".yaml",
+    "text/markdown": ".md",
+    "text/plain": ".txt",
+    "text/html": ".html",
+    "text/csv": ".csv",
+    "application/xml": ".xml",
+    "text/xml": ".xml",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/svg+xml": ".svg",
+}
+
+
+def _normalize_server_token(token: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", token.lower())
+
+
+def _infer_server_from_uri(
+    uri_hint: str,
+    candidates: set[str],
+    known_infos: Mapping[str, MCPServerInfo],
+) -> str | None:
+    """Infer a unique allowed MCP server for a resource URI when unambiguous."""
+    if not uri_hint or "://" not in uri_hint or not candidates:
+        return None
+    scheme = uri_hint.split("://", 1)[0].strip().lower()
+    if not scheme:
+        return None
+    norm_scheme = _normalize_server_token(scheme)
+
+    # 1. Match `<scheme>://` mentioned explicitly in server instructions (e.g. `kubernetes://` in helm instructions)
+    instr_matches: list[str] = []
+    for cand in sorted(candidates):
+        info = known_infos.get(cand)
+        instr = str(getattr(info, "instructions", "") or "").lower() if info is not None else ""
+        if instr and f"{scheme}://" in instr:
+            instr_matches.append(cand)
+    if len(instr_matches) == 1:
+        return instr_matches[0]
+
+    # 2. Match normalized base server name against URI scheme (e.g. `argorollout://` -> `...__argo-rollout`)
+    name_matches: list[str] = []
+    for cand in sorted(candidates):
+        base = cand.rsplit("__", 1)[-1] if "__" in cand else cand
+        if _normalize_server_token(base) == norm_scheme:
+            name_matches.append(cand)
+    if len(name_matches) == 1:
+        return name_matches[0]
+
+    # 3. Single resource-supporting (or single configured) server in scope
+    res_capable = [
+        cand
+        for cand in sorted(candidates)
+        if known_infos.get(cand) is not None and bool(getattr(known_infos[cand], "supports_resources", False))
+    ]
+    if len(res_capable) == 1:
+        return res_capable[0]
+    if not known_infos and len(candidates) == 1:
+        return next(iter(candidates))
+    return None
+
+
+def _resolve_mcp_server_target(
+    requested: str,
+    *,
+    tool_label: str,
+    session_manager: MCPSessionManager,
+    allowed_set: set[str] | None = None,
+    info_by_name: Mapping[str, MCPServerInfo] | None = None,
+    uri_hint: str = "",
+) -> str:
+    """Resolve a requested MCP server name (including scoped subagent suffixes and URI schemes)."""
+    from talkops.mcp.preload import get_cached_mcp_server_infos
+
+    known_infos: dict[str, MCPServerInfo] = {
+        s.name: s for s in get_cached_mcp_server_infos() if getattr(s, "name", None)
+    }
+    if info_by_name:
+        known_infos.update(info_by_name)
+
+    candidates: set[str] = (
+        set(allowed_set)
+        if allowed_set is not None
+        else (
+            set(known_infos.keys())
+            | set(session_manager._config.keys())
+            | set(session_manager._sessions.keys())
+        )
+    )
+
+    req = requested.strip()
+    if not req:
+        inferred = _infer_server_from_uri(uri_hint, candidates, known_infos)
+        if inferred is not None:
+            return inferred
+        raise ToolException(f"server_name is required for {tool_label}.")
+
+    if req in candidates:
+        return req
+
+    req_lower = req.lower()
+    req_norm = _normalize_server_token(req)
+    for cand in sorted(candidates, key=len, reverse=True):
+        cand_lower = cand.lower()
+        base_cand = cand.rsplit("__", 1)[-1] if "__" in cand else cand
+        if (
+            cand_lower == req_lower
+            or cand_lower.endswith(f"__{req_lower}")
+            or cand_lower.endswith(f"_{req_lower}")
+            or (req_norm and _normalize_server_token(base_cand) == req_norm)
+        ):
+            return cand
+
+    # If caller passed the URI scheme as server_name (e.g. server_name="kubernetes" for "kubernetes://cluster-info")
+    if uri_hint and "://" in uri_hint:
+        uri_scheme = uri_hint.split("://", 1)[0].strip().lower()
+        if req_lower == uri_scheme:
+            inferred = _infer_server_from_uri(uri_hint, candidates, known_infos)
+            if inferred is not None:
+                return inferred
+
+    if allowed_set is not None:
+        allowed_display = ", ".join(sorted(allowed_set)) or "none"
+        raise ToolException(
+            f"MCP server {req!r} is not permitted or not configured for this agent. "
+            f"Allowed servers: [{allowed_display}]."
+        )
+    return req
+
+
+def _session_explicitly_lacks_resources(session: Any, entry: Any = None) -> bool:
+    """Return True only when an authoritative MCP ServerCapabilities object omits resources."""
+    try:
+        from mcp.types import ServerCapabilities
+    except ImportError:
+        return False
+
+    init_res = getattr(entry, "init_result", None) if entry is not None else None
+    if init_res is not None:
+        caps = getattr(init_res, "capabilities", None)
+        if isinstance(caps, ServerCapabilities):
+            return caps.resources is None
+
+    get_caps = getattr(session, "get_server_capabilities", None)
+    if callable(get_caps):
+        try:
+            caps = get_caps()
+            if isinstance(caps, ServerCapabilities):
+                return caps.resources is None
+        except Exception:
+            pass
+    return False
+
+
+def _guess_resource_extension(mime_type: str | None, uri: str, *, is_binary: bool) -> str:
+    """Map resource MIME type or URI path to a safe file extension."""
+    import mimetypes
+
+    clean_mime = (mime_type or "").split(";", 1)[0].strip().lower()
+    if clean_mime in _MIME_EXTENSION_OVERRIDES:
+        return _MIME_EXTENSION_OVERRIDES[clean_mime]
+    if clean_mime:
+        guessed = mimetypes.guess_extension(clean_mime)
+        if guessed and re.fullmatch(r"\.[a-zA-Z0-9]{1,8}", guessed):
+            return guessed
+    path_part = uri.split("?", 1)[0].split("#", 1)[0].rsplit("/", 1)[-1]
+    if "." in path_part:
+        ext = "." + path_part.rsplit(".", 1)[-1].lower()
+        if re.fullmatch(r"\.[a-z0-9]{1,8}", ext):
+            return ext
+    return ".bin" if is_binary else ".txt"
+
+
+def _write_offloaded_resource_bytes(
+    data: bytes,
+    *,
+    server_name: str,
+    uri: str,
+    extension: str,
+    offload_dir: Path | None = None,
+) -> Path:
+    """Atomically write an offloaded MCP resource payload with 0600 permissions."""
+    import hashlib
+    import tempfile
+
+    if offload_dir is not None:
+        target_dir = Path(offload_dir)
+    else:
+        env_override = os.environ.get("TALKOPS_MCP_RESOURCE_OFFLOAD_DIR", "").strip()
+        if env_override:
+            target_dir = Path(env_override).expanduser()
+        else:
+            from talkops.config.paths import DATA_DIR
+
+            target_dir = DATA_DIR / "mcp_resources"
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    base_srv = server_name.rsplit("__", 1)[-1] if "__" in server_name else server_name
+    safe_srv = re.sub(r"[^a-zA-Z0-9._-]+", "_", base_srv).strip("_") or "mcp"
+    digest = hashlib.sha256(uri.encode("utf-8") + b"\0" + data[:4096]).hexdigest()[:12]
+    target_path = target_dir / f"{safe_srv}_{digest}{extension}"
+
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target_dir,
+            prefix=f".{safe_srv}_{digest}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(data)
+            temp_path = Path(handle.name)
+        try:
+            os.chmod(temp_path, 0o600)
+        except OSError:
+            pass
+        os.replace(temp_path, target_path)
+    except OSError:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+    return target_path
+
+
 def build_call_mcp_tool(
     session_manager: MCPSessionManager,
     *,
@@ -669,7 +995,11 @@ def build_call_mcp_tool(
     """
     from langchain_mcp_adapters.tools import _convert_call_tool_result
 
-    from talkops.mcp.preload import get_cached_mcp_server_infos, read_mcp_tool_schema
+    from talkops.mcp.preload import (
+        get_cached_mcp_server_infos,
+        is_mcp_server_info_cached,
+        read_mcp_tool_schema,
+    )
     from talkops.mcp.semantic_profiler import MCPSemanticProfiler
 
     allowed_set: set[str] | None = set(allowed_servers) if allowed_servers is not None else None
@@ -678,36 +1008,13 @@ def build_call_mcp_tool(
     }
 
     def _resolve_server_name(requested: str) -> str:
-        req = requested.strip()
-        if not req:
-            raise ToolException("server_name is required for call_mcp_tool.")
-
-        candidates = (
-            allowed_set
-            if allowed_set is not None
-            else (set(info_by_name.keys()) | set(session_manager._config.keys()) | set(session_manager._sessions.keys()))
+        return _resolve_mcp_server_target(
+            requested,
+            tool_label="call_mcp_tool",
+            session_manager=session_manager,
+            allowed_set=allowed_set,
+            info_by_name=info_by_name,
         )
-        if req in candidates:
-            return req
-
-        # Match scoped subagent/plugin server names by base server suffix
-        req_lower = req.lower()
-        for cand in sorted(candidates, key=len, reverse=True):
-            cand_lower = cand.lower()
-            if (
-                cand_lower == req_lower
-                or cand_lower.endswith(f"__{req_lower}")
-                or cand_lower.endswith(f"_{req_lower}")
-            ):
-                return cand
-
-        if allowed_set is not None:
-            allowed_display = ", ".join(sorted(allowed_set)) or "none"
-            raise ToolException(
-                f"MCP server {req!r} is not permitted or not configured for this agent. "
-                f"Allowed servers: [{allowed_display}]."
-            )
-        return req
 
     def _format_schema_hint(schema: Mapping[str, Any] | None) -> str:
         if not isinstance(schema, Mapping) or not schema:
@@ -726,16 +1033,43 @@ def build_call_mcp_tool(
         return f" Expected schema ({', '.join(parts)})." if parts else ""
 
     def _resolve_tool_metadata(resolved_server: str, requested_tool: str) -> tuple[str, dict[str, Any], Any]:
-        req_tool = requested_tool.strip()
+        raw_req = requested_tool.strip()
+        if not raw_req:
+            return "", {}, None
         base_srv = resolved_server.rsplit("__", 1)[-1] if "__" in resolved_server else resolved_server
-        if ":" in req_tool:
-            prefix, rest = req_tool.split(":", 1)
-            if prefix in (resolved_server, base_srv) or resolved_server.endswith(f"__{prefix}"):
-                req_tool = rest
-        for srv_prefix in (f"{resolved_server}_", f"{base_srv}_"):
-            if srv_prefix and req_tool.startswith(srv_prefix) and len(req_tool) > len(srv_prefix):
-                req_tool = req_tool[len(srv_prefix) :]
-                break
+        if ":" in raw_req:
+            prefix, rest = raw_req.split(":", 1)
+            if rest and (prefix in (resolved_server, base_srv) or resolved_server.endswith(f"__{prefix}")):
+                raw_req = rest
+
+        # Ordered candidate list: ALWAYS check exact raw_req BEFORE stripping <base_srv>_
+        # so tools whose canonical MCP names start with <base_srv>_ (e.g. helm_list_releases,
+        # kargo_promote, traefik_update_route) are never destructively stripped.
+        candidates: list[str] = []
+        if (
+            resolved_server != base_srv
+            and raw_req.startswith(f"{resolved_server}_")
+            and len(raw_req) > len(resolved_server) + 1
+        ):
+            without_scoped = raw_req[len(resolved_server) + 1 :]
+            candidates.append(without_scoped)
+        if raw_req not in candidates:
+            candidates.append(raw_req)
+
+        for seed in list(candidates):
+            for srv_prefix in (f"{resolved_server}_", f"{base_srv}_"):
+                if srv_prefix and seed.startswith(srv_prefix) and len(seed) > len(srv_prefix):
+                    stripped = seed[len(srv_prefix) :]
+                    if stripped and stripped not in candidates:
+                        candidates.append(stripped)
+
+        prefixed_fallback = (
+            f"{base_srv}_{raw_req}"
+            if base_srv and not raw_req.startswith(f"{base_srv}_")
+            else ""
+        )
+        if prefixed_fallback and prefixed_fallback not in candidates:
+            candidates.append(prefixed_fallback)
 
         info = info_by_name.get(resolved_server)
         if info is None:
@@ -743,35 +1077,59 @@ def build_call_mcp_tool(
                 if cached.name == resolved_server:
                     info = cached
                     break
+        if info is None:
+            mgr_cfg = getattr(session_manager, "_config", None)
+            srv_cfg = mgr_cfg.get(resolved_server) if isinstance(mgr_cfg, Mapping) else None
+            if isinstance(srv_cfg, Mapping) and is_mcp_server_info_cached(resolved_server, srv_cfg):
+                for cached in get_cached_mcp_server_infos():
+                    if cached.name == resolved_server:
+                        info = cached
+                        break
 
+        tool_entries: list[tuple[str, Any]] = []
         if info is not None:
             for t in info.tools:
-                orig = t.original_name or (t.name.split(":", 1)[1] if ":" in t.name else t.name)
-                if orig.startswith(f"{base_srv}_") and not t.original_name:
-                    orig = orig[len(base_srv) + 1 :]
-                if req_tool in (orig, t.name) or (
-                    t.name.endswith(f"_{req_tool}") or t.name.endswith(f":{req_tool}")
-                ):
-                    schema = t.input_schema if isinstance(t.input_schema, dict) else {}
-                    return str(orig), _clean_mcp_schema(schema), t
+                if t.original_name:
+                    orig = str(t.original_name)
+                elif ":" in t.name:
+                    orig = t.name.split(":", 1)[1]
+                elif t.name.startswith(f"{resolved_server}_") and len(t.name) > len(resolved_server) + 1:
+                    orig = t.name[len(resolved_server) + 1 :]
+                elif t.name.startswith(f"{base_srv}_") and len(t.name) > len(base_srv) + 1:
+                    orig = t.name[len(base_srv) + 1 :]
+                else:
+                    orig = t.name
+                tool_entries.append((orig, t))
 
-        disk_schema = read_mcp_tool_schema(resolved_server, req_tool)
-        if isinstance(disk_schema, dict):
-            raw_input = disk_schema.get("inputSchema")
-            orig_name = str(disk_schema.get("name") or req_tool)
-            return orig_name, _clean_mcp_schema(raw_input), disk_schema
+            # Pass 1: Exact match against orig or t.name in strict candidate priority order
+            for cand in candidates:
+                for orig, t in tool_entries:
+                    if cand in (orig, t.name):
+                        schema = t.input_schema if isinstance(t.input_schema, dict) else {}
+                        return str(orig), _clean_mcp_schema(schema), t
 
-        if info is not None and info.tools and req_tool:
-            available_names = [
-                str(t.original_name or (t.name.split(":", 1)[1] if ":" in t.name else t.name))
-                for t in info.tools
-            ]
-            req_tokens = set(re.findall(r"[a-z0-9]+", req_tool.lower()))
+            # Pass 2: Controlled suffix match on t.name (e.g. truncated 64-char tool names)
+            for cand in candidates:
+                for orig, t in tool_entries:
+                    if t.name.endswith(f"_{cand}") or t.name.endswith(f":{cand}"):
+                        schema = t.input_schema if isinstance(t.input_schema, dict) else {}
+                        return str(orig), _clean_mcp_schema(schema), t
+
+        for cand in candidates:
+            disk_schema = read_mcp_tool_schema(resolved_server, cand)
+            if isinstance(disk_schema, dict):
+                raw_input = disk_schema.get("inputSchema")
+                orig_name = str(disk_schema.get("name") or cand)
+                return orig_name, _clean_mcp_schema(raw_input), disk_schema
+
+        if info is not None and info.tools and raw_req:
+            available_names = [orig for orig, _ in tool_entries]
+            req_tokens = set(re.findall(r"[a-z0-9]+", raw_req.lower()))
             suggestions = [
                 name
                 for name in available_names
-                if req_tool.lower() in name.lower()
-                or name.lower() in req_tool.lower()
+                if raw_req.lower() in name.lower()
+                or name.lower() in raw_req.lower()
                 or bool(req_tokens & set(re.findall(r"[a-z0-9]+", name.lower())))
             ][:10]
             hint = (
@@ -780,11 +1138,11 @@ def build_call_mcp_tool(
                 else f" Available tools include: {', '.join(available_names[:15])}."
             )
             raise ToolException(
-                f"MCP tool {req_tool!r} does not exist on server {resolved_server!r}.{hint} "
+                f"MCP tool {raw_req!r} does not exist on server {resolved_server!r}.{hint} "
                 "Use call_mcp_tool with one of the server's valid tool_name values."
             )
 
-        return req_tool, {}, None
+        return candidates[0], {}, None
 
     def _coerce_arguments_dict(
         raw_args: Any,
@@ -891,6 +1249,25 @@ def build_call_mcp_tool(
                     )
         try:
             session = await session_manager.get_session(resolved_server)
+            if tool_ref is None:
+                actual_tool_name, input_schema, tool_ref = _resolve_tool_metadata(resolved_server, raw_tool)
+                if tool_ref is not None:
+                    lc_tool_name = f"{resolved_server}:{actual_tool_name}"
+                    profile = profiler.get_profile(resolved_server, actual_tool_name)
+                    if profile is None:
+                        profile = profiler.heuristic_profile(tool_ref, server_name=resolved_server)
+                        profiler.register_profile(resolved_server, actual_tool_name, profile)
+                    cleaned_args = _normalize_mcp_arguments(dict(coerced_args), input_schema)
+                    if isinstance(input_schema, Mapping):
+                        req_fields = input_schema.get("required")
+                        if isinstance(req_fields, list):
+                            missing_req = [r for r in req_fields if isinstance(r, str) and r not in cleaned_args]
+                            if missing_req:
+                                schema_hint = _format_schema_hint(input_schema)
+                                raise ToolException(
+                                    f"Missing required argument(s) {missing_req} for MCP tool {lc_tool_name!r}.{schema_hint} "
+                                    f"Retry call_mcp_tool(server_name={resolved_server!r}, tool_name={actual_tool_name!r}, arguments={{...}})."
+                                )
             result = await session.call_tool(actual_tool_name, cleaned_args)
         except (asyncio.CancelledError, KeyboardInterrupt, SystemExit, ToolException):
             raise
@@ -966,11 +1343,13 @@ def build_call_mcp_tool(
                 "duration_ms": round(duration_ms, 2),
             },
         )
+        from talkops.security.redaction import scrub_tool_payload
+
         try:
             converted = _convert_call_tool_result(result)
             if isinstance(converted, tuple) and len(converted) == 2:
-                return converted
-            return converted, None
+                return scrub_tool_payload(converted, tool_name=lc_tool_name)
+            return scrub_tool_payload(converted, tool_name=lc_tool_name), None
         except ToolException:
             raise
         except Exception as exc:
@@ -982,8 +1361,8 @@ def build_call_mcp_tool(
             )
             content = getattr(result, "content", None)
             if content is not None:
-                return content, None
-            return str(result), None
+                return scrub_tool_payload(content, tool_name=lc_tool_name), None
+            return scrub_tool_payload(str(result), tool_name=lc_tool_name), None
 
     args_schema: dict[str, Any] = {
         "type": "object",
@@ -1029,6 +1408,442 @@ def build_call_mcp_tool(
     )
 
 
+def build_list_resources_tool(
+    session_manager: MCPSessionManager,
+    *,
+    allowed_servers: Sequence[str] | set[str] | None = None,
+    server_infos: Sequence[MCPServerInfo] | None = None,
+) -> BaseTool:
+    """Build the ``list_resources`` tool for discovering static MCP resources and URI templates."""
+    from talkops.mcp.lockfile import sanitize_mcp_descriptor
+    from talkops.security.redaction import scrub_tool_payload
+
+    allowed_set: set[str] | None = set(allowed_servers) if allowed_servers is not None else None
+    info_by_name: dict[str, MCPServerInfo] = {
+        info.name: info for info in (server_infos or ()) if getattr(info, "name", None)
+    }
+
+    def _handle_tool_error(error: ToolException) -> str:
+        raw_msg = str(error) or "list_resources failed with no error detail"
+        logger.info("MCP list_resources returned error: %s", raw_msg)
+        return _enhance_mcp_error_diagnostics(raw_msg)
+
+    async def _collect_resources_from_session(
+        sess: Any,
+        resolved_server: str,
+        *,
+        include_templates: bool,
+    ) -> tuple[bool, list[dict[str, Any]], list[dict[str, Any]]]:
+        entry = session_manager._sessions.get(resolved_server)
+        if _session_explicitly_lacks_resources(sess, entry):
+            return False, [], []
+
+        resources_out: list[dict[str, Any]] = []
+        seen_cursors: set[str] = set()
+        cursor: str | None = None
+        for _ in range(_MAX_RESOURCE_LIST_PAGES):
+            try:
+                page = await (sess.list_resources(cursor=cursor) if cursor else sess.list_resources())
+            except Exception as exc:
+                if _mcp_error_code(exc) == -32601:
+                    return False, [], []
+                raise
+
+            for item in getattr(page, "resources", None) or ():
+                uri_str = str(getattr(item, "uri", "") or "")
+                if not uri_str:
+                    continue
+                entry_dict: dict[str, Any] = {"uri": uri_str}
+                name_val = str(getattr(item, "name", "") or "")
+                if name_val:
+                    entry_dict["name"] = name_val
+                desc_raw = str(getattr(item, "description", "") or "")
+                if desc_raw:
+                    clean_desc, _ = sanitize_mcp_descriptor(desc_raw)
+                    if clean_desc:
+                        entry_dict["description"] = clean_desc
+                mime_val = str(getattr(item, "mimeType", "") or "")
+                if mime_val:
+                    entry_dict["mimeType"] = mime_val
+                size_val = getattr(item, "size", None)
+                if isinstance(size_val, int) and not isinstance(size_val, bool):
+                    entry_dict["size"] = size_val
+                resources_out.append(entry_dict)
+
+            next_cursor = getattr(page, "nextCursor", None)
+            if not isinstance(next_cursor, str) or not next_cursor:
+                break
+            if next_cursor in seen_cursors:
+                raise ToolException(
+                    f"MCP server {resolved_server!r} returned a cyclic pagination cursor while listing resources."
+                )
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            raise ToolException(
+                f"Reached maximum of {_MAX_RESOURCE_LIST_PAGES} pages while listing resources on {resolved_server!r}."
+            )
+
+        templates_out: list[dict[str, Any]] = []
+        list_templates_fn = getattr(sess, "list_resource_templates", None)
+        if include_templates and callable(list_templates_fn):
+            seen_tmpl_cursors: set[str] = set()
+            tmpl_cursor: str | None = None
+            for _ in range(_MAX_RESOURCE_LIST_PAGES):
+                try:
+                    t_page = await (
+                        list_templates_fn(cursor=tmpl_cursor) if tmpl_cursor else list_templates_fn()
+                    )
+                except Exception as exc:
+                    if _is_transient_session_error(exc):
+                        raise
+                    if _mcp_error_code(exc) == -32601 or isinstance(exc, (NotImplementedError, AttributeError)):
+                        break
+                    logger.debug(
+                        "MCP list_resource_templates unsupported or failed on %s: %s",
+                        resolved_server,
+                        exc,
+                    )
+                    break
+
+                raw_templates = getattr(t_page, "resourceTemplates", None)
+                if not isinstance(raw_templates, (list, tuple)):
+                    break
+                for tmpl in raw_templates:
+                    uri_tmpl = str(getattr(tmpl, "uriTemplate", "") or "")
+                    if not uri_tmpl:
+                        continue
+                    t_dict: dict[str, Any] = {"uriTemplate": uri_tmpl}
+                    t_name = str(getattr(tmpl, "name", "") or "")
+                    if t_name:
+                        t_dict["name"] = t_name
+                    t_desc_raw = str(getattr(tmpl, "description", "") or "")
+                    if t_desc_raw:
+                        clean_t_desc, _ = sanitize_mcp_descriptor(t_desc_raw)
+                        if clean_t_desc:
+                            t_dict["description"] = clean_t_desc
+                    t_mime = str(getattr(tmpl, "mimeType", "") or "")
+                    if t_mime:
+                        t_dict["mimeType"] = t_mime
+                    templates_out.append(t_dict)
+
+                next_t_cursor = getattr(t_page, "nextCursor", None)
+                if not isinstance(next_t_cursor, str) or not next_t_cursor:
+                    break
+                if next_t_cursor in seen_tmpl_cursors:
+                    raise ToolException(
+                        f"MCP server {resolved_server!r} returned a cyclic cursor while listing resource templates."
+                    )
+                seen_tmpl_cursors.add(next_t_cursor)
+                tmpl_cursor = next_t_cursor
+
+        return True, resources_out, templates_out
+
+    async def coroutine(
+        server_name: str = "",
+        include_templates: bool = True,
+        *,
+        ServerName: str = "",
+        IncludeTemplates: bool | None = None,
+        runtime: Any = None,
+        **extra_kwargs: Any,
+    ) -> Any:
+        raw_server = server_name or ServerName or str(extra_kwargs.pop("server", "") or "")
+        effective_templates = IncludeTemplates if IncludeTemplates is not None else bool(include_templates)
+        resolved_server = _resolve_mcp_server_target(
+            raw_server,
+            tool_label="list_resources",
+            session_manager=session_manager,
+            allowed_set=allowed_set,
+            info_by_name=info_by_name,
+        )
+
+        try:
+            session = await session_manager.get_session(resolved_server)
+            supported, resources_list, templates_list = await _collect_resources_from_session(
+                session,
+                resolved_server,
+                include_templates=effective_templates,
+            )
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit, ToolException):
+            raise
+        except Exception as exc:
+            if not _is_transient_session_error(exc):
+                msg = f"Failed to list resources from MCP server {resolved_server!r}: {exc}"
+                raise ToolException(_enhance_mcp_error_diagnostics(msg)) from None
+
+            logger.info("MCP session for %r dead; retrying list_resources once", resolved_server)
+            await session_manager.invalidate(resolved_server)
+            try:
+                retry_session = await session_manager.get_session(resolved_server)
+                supported, resources_list, templates_list = await _collect_resources_from_session(
+                    retry_session,
+                    resolved_server,
+                    include_templates=effective_templates,
+                )
+            except ToolException:
+                raise
+            except Exception as retry_exc:
+                msg = f"Failed to list resources after retry on MCP server {resolved_server!r}: {retry_exc}"
+                raise ToolException(_enhance_mcp_error_diagnostics(msg)) from None
+
+        if not supported or (not resources_list and not templates_list):
+            return f"MCP server {resolved_server!r} does not have any resources.", None
+
+        payload: dict[str, Any] = {
+            "server_name": resolved_server,
+            "resources": resources_list,
+        }
+        if templates_list or effective_templates:
+            payload["resource_templates"] = templates_list
+
+        scrubbed_payload = scrub_tool_payload(payload, tool_name=f"{resolved_server}:list_resources")
+        text_out = json.dumps(scrubbed_payload, indent=2)
+        artifact = {"structured_content": scrubbed_payload} if isinstance(scrubbed_payload, dict) else None
+        return text_out, artifact
+
+    args_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "server_name": {
+                "type": "string",
+                "description": "Name of the MCP server to list available resources from.",
+            },
+            "include_templates": {
+                "type": "boolean",
+                "description": "Also include parameterized RFC 6570 resource URI templates (default: true).",
+            },
+        },
+        "required": ["server_name"],
+    }
+    metadata: dict[str, Any] = {
+        "_talkops_mcp": True,
+        "_talkops_mcp_resource_tool": True,
+        "_mcp_allowed_servers": tuple(sorted(allowed_set)) if allowed_set is not None else (),
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    return StructuredTool(
+        name="list_resources",
+        description=(
+            "Lists the available resources and parameterized URI templates from an MCP server. "
+            "Pass server_name to discover static resource URIs and {param} URI templates, "
+            "then call read_resource with a concrete URI."
+        ),
+        args_schema=args_schema,
+        coroutine=coroutine,
+        response_format="content_and_artifact",
+        metadata=metadata,
+        handle_tool_error=cast("Any", _handle_tool_error),
+    )
+
+
+def build_read_resource_tool(
+    session_manager: MCPSessionManager,
+    *,
+    allowed_servers: Sequence[str] | set[str] | None = None,
+    server_infos: Sequence[MCPServerInfo] | None = None,
+    max_inline_bytes: int = _DEFAULT_MAX_INLINE_RESOURCE_BYTES,
+    offload_dir: Any = None,
+) -> BaseTool:
+    """Build the ``read_resource`` tool for reading MCP resources with LangChain Blob conversion and offloading."""
+    from langchain_core.messages.content import create_image_block, create_text_block
+    from langchain_mcp_adapters.resources import convert_mcp_resource_to_langchain_blob
+    from mcp.types import BlobResourceContents, TextResourceContents
+    from pydantic import AnyUrl
+
+    from talkops.security.redaction import scrub_tool_payload
+
+    allowed_set: set[str] | None = set(allowed_servers) if allowed_servers is not None else None
+    info_by_name: dict[str, MCPServerInfo] = {
+        info.name: info for info in (server_infos or ()) if getattr(info, "name", None)
+    }
+
+    def _handle_tool_error(error: ToolException) -> str:
+        raw_msg = str(error) or "read_resource failed with no error detail"
+        logger.info("MCP read_resource returned error: %s", raw_msg)
+        return _enhance_mcp_error_diagnostics(raw_msg)
+
+    async def coroutine(
+        server_name: str = "",
+        uri: str = "",
+        *,
+        ServerName: str = "",
+        Uri: str = "",
+        runtime: Any = None,
+        **extra_kwargs: Any,
+    ) -> Any:
+        raw_server = server_name or ServerName or str(extra_kwargs.pop("server", "") or "")
+        raw_uri = (uri or Uri or str(extra_kwargs.pop("resource_uri", "") or "")).strip()
+        if not raw_uri:
+            raise ToolException("uri is required for read_resource.")
+
+        placeholders = re.findall(r"\{([^{}]+)\}", raw_uri)
+        if placeholders:
+            raise ToolException(
+                f"Resource URI {raw_uri!r} contains unexpanded template parameter(s) {placeholders}. "
+                "Substitute concrete parameter values before calling read_resource."
+            )
+
+        resolved_server = _resolve_mcp_server_target(
+            raw_server,
+            tool_label="read_resource",
+            session_manager=session_manager,
+            allowed_set=allowed_set,
+            info_by_name=info_by_name,
+            uri_hint=raw_uri,
+        )
+
+        try:
+            parsed_uri = AnyUrl(raw_uri)
+        except Exception as exc:
+            raise ToolException(f"Invalid MCP resource URI {raw_uri!r}: {exc}") from None
+
+        async def _read_once(sess: Any) -> Any:
+            entry = session_manager._sessions.get(resolved_server)
+            if _session_explicitly_lacks_resources(sess, entry):
+                raise ToolException(f"MCP server {resolved_server!r} does not support resources.")
+            try:
+                return await sess.read_resource(parsed_uri)
+            except Exception as exc:
+                if _mcp_error_code(exc) == -32601:
+                    raise ToolException(f"MCP server {resolved_server!r} does not support resources.") from None
+                raise
+
+        try:
+            session = await session_manager.get_session(resolved_server)
+            read_result = await _read_once(session)
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit, ToolException):
+            raise
+        except Exception as exc:
+            if not _is_transient_session_error(exc):
+                msg = f"Failed to read resource {raw_uri!r} from MCP server {resolved_server!r}: {exc}"
+                raise ToolException(_enhance_mcp_error_diagnostics(msg)) from None
+
+            logger.info("MCP session for %r dead; retrying read_resource(%r) once", resolved_server, raw_uri)
+            await session_manager.invalidate(resolved_server)
+            try:
+                retry_session = await session_manager.get_session(resolved_server)
+                read_result = await _read_once(retry_session)
+            except ToolException:
+                raise
+            except Exception as retry_exc:
+                msg = (
+                    f"Failed to read resource {raw_uri!r} after retry on MCP server "
+                    f"{resolved_server!r}: {retry_exc}"
+                )
+                raise ToolException(_enhance_mcp_error_diagnostics(msg)) from None
+
+        contents = getattr(read_result, "contents", None) or ()
+        if not contents:
+            return f"Resource {raw_uri!r} on MCP server {resolved_server!r} returned empty content.", None
+
+        content_blocks: list[Any] = []
+        tool_tag = f"{resolved_server}:read_resource"
+        for item in contents:
+            item_uri = str(getattr(item, "uri", None) or raw_uri)
+            mime_val = str(getattr(item, "mimeType", None) or "")
+            lc_blob = convert_mcp_resource_to_langchain_blob(item_uri, item)
+
+            if isinstance(item, TextResourceContents) or (
+                not isinstance(item, BlobResourceContents) and getattr(item, "text", None) is not None
+            ):
+                scrubbed_text = str(scrub_tool_payload(lc_blob.as_string(), tool_name=tool_tag))
+                encoded = scrubbed_text.encode("utf-8")
+                if max_inline_bytes > 0 and len(encoded) > max_inline_bytes:
+                    ext = _guess_resource_extension(mime_val or "text/plain", item_uri, is_binary=False)
+                    saved_path = _write_offloaded_resource_bytes(
+                        encoded,
+                        server_name=resolved_server,
+                        uri=item_uri,
+                        extension=ext,
+                        offload_dir=offload_dir,
+                    )
+                    preview = scrubbed_text[:2048]
+                    content_blocks.append(
+                        create_text_block(
+                            text=(
+                                f"{preview}\n\n"
+                                f"[Resource offloaded to {saved_path} ({len(encoded)} bytes) — "
+                                "use read_file with offset/limit or grep to inspect]"
+                            )
+                        )
+                    )
+                else:
+                    content_blocks.append(create_text_block(text=scrubbed_text))
+            else:
+                raw_bytes = lc_blob.as_bytes()
+                effective_mime = mime_val or str(lc_blob.mimetype or "application/octet-stream")
+                ext = _guess_resource_extension(effective_mime, item_uri, is_binary=True)
+                saved_path = _write_offloaded_resource_bytes(
+                    raw_bytes,
+                    server_name=resolved_server,
+                    uri=item_uri,
+                    extension=ext,
+                    offload_dir=offload_dir,
+                )
+                if effective_mime.lower().startswith("image/") and (
+                    max_inline_bytes <= 0 or len(raw_bytes) <= max_inline_bytes
+                ):
+                    b64_data = str(getattr(item, "blob", "") or "")
+                    content_blocks.append(
+                        create_text_block(
+                            text=f"[Image resource {item_uri!r} ({effective_mime}, {len(raw_bytes)} bytes) saved to {saved_path}]"
+                        )
+                    )
+                    if b64_data:
+                        content_blocks.append(create_image_block(base64=b64_data, mime_type=effective_mime))
+                else:
+                    content_blocks.append(
+                        create_text_block(
+                            text=f"[Binary resource {item_uri!r} ({effective_mime}, {len(raw_bytes)} bytes) offloaded to {saved_path}]"
+                        )
+                    )
+
+        if len(content_blocks) == 1 and isinstance(content_blocks[0], Mapping) and content_blocks[0].get("type") == "text":
+            return str(content_blocks[0].get("text", "")), None
+        return content_blocks, None
+
+    args_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "server_name": {
+                "type": "string",
+                "description": "Name of the MCP server to read the resource from.",
+            },
+            "uri": {
+                "type": "string",
+                "description": "Concrete MCP resource URI (e.g. 'helm://repositories'). Substitute {params} first.",
+            },
+        },
+        "required": ["server_name", "uri"],
+    }
+    metadata: dict[str, Any] = {
+        "_talkops_mcp": True,
+        "_talkops_mcp_resource_tool": True,
+        "_mcp_allowed_servers": tuple(sorted(allowed_set)) if allowed_set is not None else (),
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    return StructuredTool(
+        name="read_resource",
+        description=(
+            "Retrieves a specified MCP resource's contents from an MCP server. "
+            "Pass server_name and uri (e.g. 'helm://repositories'). "
+            "If the URI comes from a {param} template, substitute concrete values first."
+        ),
+        args_schema=args_schema,
+        coroutine=coroutine,
+        response_format="content_and_artifact",
+        metadata=metadata,
+        handle_tool_error=cast("Any", _handle_tool_error),
+    )
+
+
 def build_mcp_tools_from_server_infos(
     server_infos: Sequence[MCPServerInfo],
     session_manager: MCPSessionManager,
@@ -1039,15 +1854,19 @@ def build_mcp_tools_from_server_infos(
     """Build LangChain StructuredTools from preloaded/probed MCPServerInfo list.
 
     Eager/Lazy tool partitioning:
-    - Materializes every active server's tool schemas to ``~/.talkops/mcp/<server>/<tool>.json``.
+    - Materializes every active server's tool schemas to ``~/.talkops/mcp/<server>/<tool>.json``
+      and server instructions to ``~/.talkops/mcp/<server>/instructions.md``.
     - Eager tools are bound directly as individual ``StructuredTool`` objects.
     - Lazy tools are invoked on-demand through a single shared ``call_mcp_tool`` dispatcher,
       keeping thousands of lines of raw JSON schemas out of every LLM request payload.
+    - Servers advertising MCP resources (or unprobed dispatchers) also expose ``list_resources``
+      and ``read_resource``.
     """
     from talkops.mcp.preload import write_mcp_server_state
 
     tools: list[BaseTool] = []
     has_lazy_tools = False
+    has_resource_servers = False
     active_infos: list[MCPServerInfo] = []
     cfg_lookup = configs if isinstance(configs, Mapping) else getattr(session_manager, "_config", {})
 
@@ -1062,6 +1881,8 @@ def build_mcp_tools_from_server_infos(
         if not info.enabled or info.status != "ok":
             continue
         active_infos.append(info)
+        if getattr(info, "supports_resources", False):
+            has_resource_servers = True
         write_mcp_server_state(info)
         srv_cfg = cfg_lookup.get(info.name) if isinstance(cfg_lookup, Mapping) else None
         eager_tools, lazy_tools = split_enabled_tools_by_eager_lazy(
@@ -1084,19 +1905,37 @@ def build_mcp_tools_from_server_infos(
         isinstance(cfg_lookup, Mapping)
         and any(not isinstance(v, Mapping) or v.get("enabled", True) for v in cfg_lookup.values())
     )
-    if has_lazy_tools or (include_dispatcher and (active_infos or has_enabled_configs)):
+    need_dispatcher = has_lazy_tools or (include_dispatcher and (active_infos or has_enabled_configs))
+    need_resource_tools = has_resource_servers or (include_dispatcher and (active_infos or has_enabled_configs))
+    if need_dispatcher or need_resource_tools:
         allowed_servers = [i.name for i in active_infos]
         if isinstance(cfg_lookup, Mapping):
             for k, v in cfg_lookup.items():
                 if (not isinstance(v, Mapping) or v.get("enabled", True)) and str(k) not in allowed_servers:
                     allowed_servers.append(str(k))
-        tools.append(
-            build_call_mcp_tool(
-                session_manager,
-                allowed_servers=allowed_servers or None,
-                server_infos=active_infos,
+        if need_dispatcher:
+            tools.append(
+                build_call_mcp_tool(
+                    session_manager,
+                    allowed_servers=allowed_servers or None,
+                    server_infos=active_infos,
+                )
             )
-        )
+        if need_resource_tools:
+            tools.append(
+                build_list_resources_tool(
+                    session_manager,
+                    allowed_servers=allowed_servers or None,
+                    server_infos=active_infos,
+                )
+            )
+            tools.append(
+                build_read_resource_tool(
+                    session_manager,
+                    allowed_servers=allowed_servers or None,
+                    server_infos=active_infos,
+                )
+            )
     return tools
 
 
@@ -1164,16 +2003,44 @@ class MCPSessionManager:
         self._closed = False
 
     async def get_session(self, server_name: str) -> Any:
-        """Return a cached session for `server_name`, creating it if needed."""
+        """Return a cached session for `server_name`, creating or refreshing it if needed."""
         entry = self._sessions.get(server_name)
         if entry is not None:
-            return entry.session
+            entry_fp = getattr(entry, "env_fingerprint", None)
+            srv_cfg = self._config.get(server_name)
+            if isinstance(entry_fp, str) and isinstance(srv_cfg, Mapping):
+                sync_mcp_env_aliases()
+                if entry_fp != _effective_session_fingerprint(srv_cfg):
+                    logger.info(
+                        "Environment changed for MCP server '%s'; restarting session",
+                        server_name,
+                        extra={"mcp_server": server_name},
+                    )
+                    await self.invalidate(server_name)
+                    entry = None
+            if entry is not None:
+                return entry.session
 
         lock = self._get_server_lock(server_name)
         async with lock:
             entry = self._sessions.get(server_name)
             if entry is not None:
-                return entry.session
+                entry_fp = getattr(entry, "env_fingerprint", None)
+                srv_cfg = self._config.get(server_name)
+                if isinstance(entry_fp, str) and isinstance(srv_cfg, Mapping):
+                    sync_mcp_env_aliases()
+                    if entry_fp != _effective_session_fingerprint(srv_cfg):
+                        self._sessions.pop(server_name, None)
+                        try:
+                            if hasattr(entry, "aclose") and callable(entry.aclose):
+                                await entry.aclose()
+                            else:
+                                await entry.exit_stack.aclose()
+                        except Exception as exc:
+                            logger.debug("Error closing stale session %s: %s", server_name, exc)
+                        entry = None
+                if entry is not None:
+                    return entry.session
 
             srv_config = self._config.get(server_name)
             if not srv_config:
@@ -1251,6 +2118,55 @@ class MCPSessionManager:
         """Close any active session and remove configuration for server."""
         await self.invalidate(server_name)
         self.remove_server_config(server_name)
+
+    async def async_sync_active_configs(
+        self,
+        active_configs: Mapping[str, Any],
+        *,
+        purge_missing: bool = True,
+        purge_subagents: bool = True,
+    ) -> list[str]:
+        """Asynchronously synchronize active configurations and close removed/reconfigured sessions."""
+        raw_cfg = (
+            active_configs.get("mcpServers", active_configs)
+            if isinstance(active_configs, Mapping)
+            else {}
+        )
+        if not isinstance(raw_cfg, Mapping):
+            return []
+
+        removed: list[str] = []
+        if purge_missing:
+            known_names = set(self._config.keys()) | set(self._sessions.keys())
+            for name in sorted(known_names):
+                if not purge_subagents and name.startswith("subagent__"):
+                    continue
+                if name not in raw_cfg:
+                    await self.remove_server(name)
+                    self._errors.pop(name, None)
+                    removed.append(name)
+
+        sync_mcp_env_aliases()
+        for name, new_cfg in raw_cfg.items():
+            srv_name = str(name)
+            normalized_new = dict(new_cfg) if isinstance(new_cfg, Mapping) else new_cfg
+            if srv_name in self._sessions:
+                entry = self._sessions[srv_name]
+                entry_fp = getattr(entry, "env_fingerprint", None)
+                cfg_changed = self._config.get(srv_name) != normalized_new
+                env_changed = (
+                    isinstance(entry_fp, str)
+                    and isinstance(normalized_new, Mapping)
+                    and entry_fp != _effective_session_fingerprint(normalized_new)
+                )
+                if cfg_changed or env_changed:
+                    await self.invalidate(srv_name)
+                    self._errors.pop(srv_name, None)
+            self._config[srv_name] = normalized_new
+
+        if raw_cfg:
+            self._closed = False
+        return removed
 
     def sync_active_configs(self, active_configs: dict[str, Any], purge_missing: bool = False) -> list[str]:
         """Synchronize active configurations, returning names of removed servers."""
@@ -1340,7 +2256,7 @@ class MCPSessionManager:
         )
 
         loop = asyncio.get_running_loop()
-        ready_future: asyncio.Future[tuple[Any, Any, AsyncExitStack]] = loop.create_future()
+        ready_future: asyncio.Future[tuple[Any, Any, Any, AsyncExitStack]] = loop.create_future()
         close_event = asyncio.Event()
 
         async def _session_owner() -> None:
@@ -1380,12 +2296,12 @@ class MCPSessionManager:
 
                         session = await exit_stack.enter_async_context(create_session(conn))
                 async with asyncio.timeout(_CONNECT_TIMEOUT):
-                    await session.initialize()
+                    init_result = await session.initialize()
                 async with asyncio.timeout(_CONNECT_TIMEOUT):
                     tools_result = await session.list_tools()
 
                 if not ready_future.done():
-                    ready_future.set_result((session, tools_result, exit_stack))
+                    ready_future.set_result((session, init_result, tools_result, exit_stack))
                     await close_event.wait()
             except BaseException as exc:
                 if not ready_future.done():
@@ -1402,7 +2318,7 @@ class MCPSessionManager:
         owner_task.add_done_callback(self._background_tasks.discard)
 
         try:
-            session, tools_result, exit_stack = await ready_future
+            session, init_result, tools_result, exit_stack = await ready_future
             raw_tools = getattr(tools_result, "tools", []) or []
             logger.info(
                 "Discovered %d tools from MCP server '%s'",
@@ -1440,12 +2356,22 @@ class MCPSessionManager:
 
             try:
                 from talkops.mcp.preload import (
+                    _extract_init_metadata,
                     build_mcp_server_info_from_raw_tools,
                     set_cached_mcp_server_info,
+                    write_mcp_server_state,
                 )
 
-                info = build_mcp_server_info_from_raw_tools(name, resolved_config, raw_tools)
+                supports_resources, instructions = _extract_init_metadata(init_result, session)
+                info = build_mcp_server_info_from_raw_tools(
+                    name,
+                    resolved_config,
+                    raw_tools,
+                    supports_resources=supports_resources,
+                    instructions=instructions,
+                )
                 set_cached_mcp_server_info(info, config)
+                write_mcp_server_state(info)
             except Exception as cache_exc:
                 logger.debug("Failed to cache MCPServerInfo for '%s': %s", name, cache_exc)
 
@@ -1454,6 +2380,8 @@ class MCPSessionManager:
                 exit_stack,
                 close_event=close_event,
                 owner_task=owner_task,
+                init_result=init_result,
+                env_fingerprint=_effective_session_fingerprint(config),
             )
             entry._cached_tools = wrapped_tools
 

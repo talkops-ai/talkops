@@ -84,8 +84,16 @@ class AgentSessionState:
 def get_agent_session_state(app: object) -> AgentSessionState:
     """Get or create the ``AgentSessionState`` attached to an app instance."""
     existing = getattr(app, "_agent_session_state", None)
-    if not isinstance(existing, AgentSessionState):
-        app._agent_session_state = AgentSessionState()  # type: ignore[attr-defined]
+    if isinstance(existing, AgentSessionState):
+        return existing
+    if (
+        existing is not None
+        and type(existing).__name__ == "AgentSessionState"
+        and type(existing).__module__ == __name__
+    ):
+        existing.__class__ = AgentSessionState
+        return cast("AgentSessionState", existing)
+    app._agent_session_state = AgentSessionState()  # type: ignore[attr-defined]
     return app._agent_session_state  # type: ignore[attr-defined]
 
 

@@ -20,6 +20,7 @@ stacked prompt command chaining, and session re-invocation deduplication.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +123,8 @@ class CustomCommandHandler(BaseCommandHandler):
         self._aliases = tuple(
             f"/{a.lstrip('/')}" for a in definition.aliases if a.lstrip("/") and a.lstrip("/") != clean
         )
+        if definition.source == "plugin" and definition.plugin_name:
+            self._plugin_id = definition.plugin_name
 
     @property
     def name(self) -> str:
@@ -178,7 +181,8 @@ class CustomCommandHandler(BaseCommandHandler):
             invoked_registry,
         ) = _extract_context_fields(resolved_ctx, override_args=raw_args)
 
-        expanded = expand_custom_command_prompt(
+        expanded = await asyncio.to_thread(
+            expand_custom_command_prompt,
             self.definition,
             args,
             cwd=cwd,
@@ -207,6 +211,8 @@ class CustomCommandHandler(BaseCommandHandler):
             "display_text": expanded.display_text,
             "command_name": expanded.command_name,
             "source": self.definition.source,
+            "plugin_id": self.definition.plugin_id,
+            "is_agent_plugin": self.definition.is_agent_plugin,
             "file_path": str(self.definition.file_path),
             "base_dir": str(expanded.base_dir) if expanded.base_dir else None,
             "referenced_files": expanded.referenced_files,
@@ -225,8 +231,75 @@ class CustomCommandHandler(BaseCommandHandler):
         if expanded.execution_context == "fork":
             payload["forked_context"] = prepare_forked_command_context(expanded)
 
+        # Deterministic Agent-Plugin Shortcut Routing:
+        # When a command originates from an agent plugin (`is_agent_plugin=True`),
+        # route directly to that plugin's compiled subagent runnable so its dedicated
+        # MCP servers, skills, scripts, and blocking hooks are bound automatically.
+        app = getattr(resolved_ctx, "app", None)
+        if (
+            self.definition.is_agent_plugin
+            and expanded.agent
+            and app is not None
+            and hasattr(app, "_run_agent_session_request")
+        ):
+            import uuid
+
+            from talkops.commands.power.agents import (
+                _clean_short_name,
+                _discover_plugin_agents,
+                activate_agent_session,
+                get_agent_session_state,
+                resolve_plugin_agent,
+            )
+
+            full_prompt = f"{expanded.xml_command_message}\n\n{expanded.expanded_prompt}"
+            spec = resolve_plugin_agent(expanded.agent, _discover_plugin_agents(app))
+            target_full_name = str(spec.get("name") or expanded.agent) if spec else expanded.agent
+            target_short = _clean_short_name(target_full_name)
+            sess_state = get_agent_session_state(app)
+
+            if sess_state.is_active and sess_state.agent_id == target_full_name:
+                await app._run_agent_session_request(
+                    {
+                        "kind": "continue",
+                        "request_id": str(uuid.uuid4()),
+                        "agent_name": target_full_name,
+                        "plugin_id": sess_state.plugin_id or self.definition.plugin_id,
+                        "message": full_prompt,
+                    }
+                )
+            else:
+                act_res = await activate_agent_session(
+                    resolved_ctx,
+                    target_full_name,
+                    prompt=full_prompt,
+                )
+                if not act_res.success:
+                    sess_state.agent_id = target_full_name
+                    sess_state.short_name = target_short
+                    sess_state.plugin_id = self.definition.plugin_id or ""
+                    sess_state.attached = True
+                    sess_state.thread_id = session_id
+                    sess_state.needs_server_reset = False
+                    await app._run_agent_session_request(
+                        {
+                            "kind": "start",
+                            "request_id": str(uuid.uuid4()),
+                            "agent_name": target_full_name,
+                            "plugin_id": self.definition.plugin_id,
+                            "prompt": full_prompt,
+                        }
+                    )
+
+            return CommandResult(
+                success=True,
+                message=None,
+                data=payload,
+                mount_as_app_message=False,
+                notify=f"Triggered {self._name} via agent {target_short}",
+            )
+
         # If running inside the TUI app, dispatch the expanded prompt + permissions to the agent
-        app = getattr(ctx, "app", None)
         if app is not None and hasattr(app, "_send_to_agent"):
             full_prompt = f"{expanded.xml_command_message}\n\n{expanded.expanded_prompt}"
             if hasattr(app, "_run_custom_command_turn"):

@@ -146,8 +146,8 @@ def test_pool_manager_get_model_choices(pool_manager):
 
     # Candidate model specs and efforts are embedded directly in criteria for Jev
     assert "Model: google_genai:gemini-3.6-flash (effort: off)" in fast_crit
-    assert "Model: google_genai:gemini-3.8-flash (effort: medium)" in standard_crit
-    assert "Model: google_genai:gemini-3.1-pro-preview (effort: high)" in powerful_crit
+    assert "Model: google_genai:gemini-4-hydrogen (effort: medium)" in standard_crit
+    assert "Model: google_genai:gemini-4-carbon (effort: high)" in powerful_crit
 
     assert "Conversational greetings" in fast_crit
     assert "Focused single-domain" in standard_crit
@@ -220,7 +220,7 @@ async def test_middleware_sends_candidate_models_in_question_choices():
                 assert isinstance(powerful_route_crit, str)
                 assert "google_genai:gemini-3.6-flash" in fast_route_crit
                 assert "google_genai:gemini-3.7-flash" in standard_route_crit
-                assert "google_genai:gemini-3.1-pro-preview" in powerful_route_crit
+                assert "google_genai:gemini-4-carbon" in powerful_route_crit
 
 
 def test_auto_detect_provider_with_various_credentials(pool_manager):
@@ -850,7 +850,6 @@ def test_multi_provider_agent_pool_tier_discovery(tmp_path, pool_manager, monkey
     monkeypatch.setenv("ANTHROPIC_API_KEY", "mock-test-key-anthropic")
     monkeypatch.setenv("GOOGLE_API_KEY", "mock-test-key-google")
     from talkops.config.toml_config import (
-        clear_agent_pool,
         load_agent_pool,
         save_agent_pool,
     )
@@ -922,4 +921,91 @@ def test_pool_manager_validate_pool(pool_manager):
     })
     assert is_valid_unknown is True
     assert any("invalid_provider" in w for w in warn_unknown)
+
+
+def test_serve_approval_mode_defaults_to_auto_not_smart() -> None:
+    """Verify `talkops serve` defaults unattended mode to 'auto' unless --smart/settings='smart' is set."""
+    import argparse
+
+    from talkops.cli.commands.serve import _resolve_serve_approval_mode
+
+    manual_settings = MagicMock(approval_mode="manual")
+    assert _resolve_serve_approval_mode(argparse.Namespace(), manual_settings) == "auto"
+
+    smart_settings = MagicMock(approval_mode="smart")
+    assert _resolve_serve_approval_mode(argparse.Namespace(), smart_settings) == "smart"
+
+    assert _resolve_serve_approval_mode(argparse.Namespace(smart=True), manual_settings) == "smart"
+    assert _resolve_serve_approval_mode(argparse.Namespace(approval_mode="smart"), manual_settings) == "smart"
+
+
+@pytest.mark.asyncio
+async def test_webhook_incident_with_plugin_subagents_escalates_and_patches_model_identity() -> None:
+    """Verify Smart mode escalates webhook RCA orchestration with plugin subagents to 'powerful' and syncs Model Identity."""
+    from langchain_core.messages import SystemMessage
+
+    middleware = JevDynamicModelRouterMiddleware(subagent_name=None)
+    smart_runtime = DummyRuntime(
+        context={
+            "approval_mode": "smart",
+            "smart": True,
+            "webhook_provider": "alertmanager",
+            "source_addon": "webhooks",
+            "model": "google_genai:gemini-3.7-flash",
+        }
+    )
+    state = {
+        "messages": [
+            HumanMessage(
+                content="[WEBHOOK ALERT] Provider: ALERTMANAGER | Event: alert.firing\nTitle: Synthetic error spike"
+            )
+        ],
+        "_subagent_registry": {
+            "obs-specialist@marketplace": {
+                "name": "obs-specialist@marketplace",
+                "is_plugin": True,
+                "mcp_servers": ["prometheus", "loki"],
+            }
+        },
+    }
+
+    mock_choice = MagicMock(choice="standard", confidence=0.92)
+    mock_response = MagicMock(choices={"model_route": mock_choice})
+
+    with patch.object(middleware, "is_available", return_value=True):
+        with patch.object(TypeSafeClassifier, "ainvoke", new_callable=AsyncMock) as mock_inv:
+            mock_inv.return_value = mock_response
+            with patch("talkops.middleware.jev_model_router.adispatch_custom_event", new=AsyncMock()):
+                res = await middleware.abefore_agent(state, smart_runtime)
+                assert res is not None
+                assert res["_dynamic_model_route"]["route"] == "powerful"
+                assert res["_dynamic_model_route"]["tier"] == 2
+
+    # Verify awrap_model_call patches `### Model Identity` in SystemMessage to match routed model
+    sys_msg = SystemMessage(
+        content="### Model Identity\n\nYou are powered by **gemini-3.7-flash** (provider: google_genai).\n"
+    )
+    req = ModelRequest(
+        model=MagicMock(),
+        messages=state["messages"],
+        system_message=sys_msg,
+        state={**state, **(res or {})},
+        runtime=cast(Any, smart_runtime),
+    )
+    captured_req: list[ModelRequest] = []
+
+    async def _handler(r: ModelRequest) -> ModelResponse:
+        captured_req.append(r)
+        return MagicMock(spec=ModelResponse)
+
+    with patch.object(
+        middleware.pool,
+        "get_model_for_tier",
+        return_value=(MagicMock(), "google_genai:gemini-4-carbon", "high", {}),
+    ):
+        await middleware.awrap_model_call(req, _handler)
+
+    assert len(captured_req) == 1
+    assert captured_req[0].system_message is not None
+    assert "gemini-4-carbon" in str(captured_req[0].system_message.content)
 

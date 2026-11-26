@@ -181,6 +181,12 @@ def _resolve_env_var_from(env: dict[str, str], name: str) -> str | None:
 
 # Tracks values injected by _load_dotenv into os.environ (mapping key -> value)
 _dotenv_loaded_values: dict[str, str] = {}
+_dotenv_initialized: bool = False
+
+
+def get_dotenv_loaded_values() -> dict[str, str]:
+    """Return a snapshot of environment variables loaded from `.env` files."""
+    return dict(_dotenv_loaded_values)
 
 
 def _strip_dotenv_loaded_values(env: MutableMapping[str, str]) -> None:
@@ -240,6 +246,7 @@ def _load_dotenv(*, start_path: Path | None = None, refresh_loaded: bool = False
 
     Order: Shell exports > project .talkops/.env > ~/.talkops/.env > project .env.
     """
+    global _dotenv_initialized
     try:
         from dotenv import dotenv_values
     except ImportError:
@@ -335,6 +342,7 @@ def _load_dotenv(*, start_path: Path | None = None, refresh_loaded: bool = False
         if v is not None and k not in os.environ:
             os.environ[k] = v
             _dotenv_loaded_values[k] = v
+    _dotenv_initialized = True
 
 
 def parse_shell_allow_list(val: str | list[str] | None) -> list[str] | None:
@@ -867,9 +875,15 @@ class Settings:
         return written
 
     def reload_from_environment(self, start_path: Path | str | None = None) -> list[str]:
-        """Hot-reload reloadable settings (API keys, project root, etc.)."""
-        p = Path(start_path) if start_path else None
+        """Hot-reload reloadable settings (API keys, project root, .env, etc.)."""
+        had_dotenv_baseline = _dotenv_initialized
+        prev_dotenv = dict(_dotenv_loaded_values)
+        p = Path(start_path) if start_path else (self.cwd or self.project_root)
         _load_dotenv(start_path=p, refresh_loaded=True)
+        with contextlib.suppress(Exception):
+            from talkops.mcp.config import sync_mcp_env_aliases
+
+            sync_mcp_env_aliases()
 
         try:
             from talkops.config.cli_settings import get_cli_settings_manager
@@ -921,6 +935,18 @@ class Settings:
                     new_disp = str(new_val)
                 changes.append(f"{field_name}: {old_disp} -> {new_disp}")
 
+        if had_dotenv_baseline:
+            for env_key in sorted(set(prev_dotenv) | set(_dotenv_loaded_values)):
+                old_env = prev_dotenv.get(env_key)
+                new_env = _dotenv_loaded_values.get(env_key)
+                if old_env != new_env:
+                    if old_env is None:
+                        changes.append(f"{env_key}: added (.env)")
+                    elif new_env is None:
+                        changes.append(f"{env_key}: removed (.env)")
+                    else:
+                        changes.append(f"{env_key}: updated (.env)")
+
         return changes
 
 
@@ -958,10 +984,11 @@ def reload_settings() -> Settings:
 
 def reset_settings_for_testing() -> None:
     """Reset the global Settings singleton and bootstrap state (for tests)."""
-    global _settings, _glyphs_cache, _charset_mode_cache
+    global _settings, _dotenv_initialized, _glyphs_cache, _charset_mode_cache
     with _settings_lock:
         _settings = None
         _bootstrap_state.done = False
+        _dotenv_initialized = False
         _dotenv_loaded_values.clear()
         _glyphs_cache = None
         _charset_mode_cache = None

@@ -75,6 +75,8 @@ class CustomCommandDefinition:
         "commands_DEPRECATED"
     )
     plugin_name: str | None = None
+    plugin_id: str | None = None
+    is_agent_plugin: bool = False
     plugin_root: Path | None = None
     plugin_data_dir: Path | None = None
     aliases: list[str] = field(default_factory=list)

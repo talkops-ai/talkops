@@ -458,3 +458,33 @@ async def test_summary_store_write_through_fast_path_and_reconcile(
         ) as cur:
             row = await cur.fetchone()
             assert row is not None and row[0] == 0
+
+
+def test_resolve_conversation_title_model_prefers_base_spec_provider_over_foreign_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify resolve_conversation_title_model stays on google_vertexai when base_spec is google_vertexai."""
+    from talkops.model.factory import clear_model_cache
+    from talkops.state.conversation_title import resolve_conversation_title_model
+
+    monkeypatch.setenv("VERTEXAI_API_KEY", "AQ.test-dummy-vertex-express-key")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "otel-demo-499213")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.setattr(
+        "talkops.config.toml_config.load_agent_pool",
+        lambda *_a, **_kw: {
+            "provider": "multi",
+            "fast": "google_genai:gemini-3.5-flash",
+            "standard": "anthropic:claude-sonnet-4-6",
+            "powerful": "anthropic:claude-opus-4-6",
+        },
+    )
+    clear_model_cache()
+
+    model_inst, selected_spec = resolve_conversation_title_model(
+        base_spec="google_vertexai:gemini-4-argon",
+    )
+    assert selected_spec == "google_vertexai:gemini-3.5-flash-lite"
+    assert getattr(model_inst, "vertexai", None) is True
+    clear_model_cache()
+

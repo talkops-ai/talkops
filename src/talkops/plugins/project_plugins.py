@@ -179,7 +179,6 @@ def _process_agent_plugin(
     subagents: list[SubagentMetadata] = []
     warnings: list[str] = []
 
-    skill_names = _collect_skill_names(plugin.inventory)
     mcp_file_paths = [str(p) for p in plugin.inventory.mcp_files if p.is_file()]
 
     for agent_path in plugin.inventory.agents:
@@ -196,6 +195,14 @@ def _process_agent_plugin(
                     md_files.append((entry, entry.stem))
                 elif entry.is_dir():
                     agents_md = entry / "AGENTS.md"
+                    if not agents_md.is_file():
+                        named_md = entry / f"{entry.name}.md"
+                        if named_md.is_file():
+                            agents_md = named_md
+                        else:
+                            cand_mds = sorted(entry.glob("*.md"))
+                            if len(cand_mds) == 1:
+                                agents_md = cand_mds[0]
                     if agents_md.is_file():
                         md_files.append((agents_md, entry.name))
         elif agent_path.is_file() and agent_path.suffix == ".md":
@@ -206,9 +213,6 @@ def _process_agent_plugin(
             if meta is None:
                 warnings.append(f"Could not parse agent definition: {md_path}")
                 continue
-
-            if skill_names and not meta.get("skills"):
-                meta["skills"] = list(skill_names)
 
             if mcp_file_paths and not meta.get("mcp_files"):
                 meta["mcp_files"] = list(mcp_file_paths)

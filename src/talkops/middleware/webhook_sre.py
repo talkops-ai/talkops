@@ -88,9 +88,11 @@ _WEBHOOK_ALERT_HEADER_RE = re.compile(
 _DOWNSTREAM_PROMPT_MARKERS: tuple[str, ...] = (
     "\n\n## Shell paths vs. virtual paths",
     "\n\n<conversation_transcript>",
+    "\n\n<context_authority>",
     "\n\n<agent_memory>",
     "\n\n## Skills System",
     "\n\n<custom_commands>",
+    "\n\n## Code Execution & Programmatic Tool Calling",
     "\n\n### Interpreter",
     "\n\n## Local Context",
     "\n\n## Non-Blocking Background Command Execution",
@@ -203,6 +205,18 @@ def extract_webhook_metadata(
         or cfg_conf.get("channel")
     )
     cloud_provider = _ctx_lookup(ctx, "cloud_provider") or cfg_conf.get("cloud_provider")
+    service_name = (
+        _ctx_lookup(ctx, "webhook_service_name")
+        or _ctx_lookup(ctx, "service_name")
+        or cfg_meta.get("service_name")
+        or cfg_conf.get("webhook_service_name")
+        or cfg_conf.get("service_name")
+    )
+    title = (
+        _ctx_lookup(ctx, "webhook_title")
+        or cfg_meta.get("title")
+        or cfg_conf.get("webhook_title")
+    )
 
     if provider and isinstance(provider, str):
         meta["webhook_provider"] = provider.strip()
@@ -220,6 +234,10 @@ def extract_webhook_metadata(
         meta["channel"] = channel.strip()
     if cloud_provider and isinstance(cloud_provider, str):
         meta["cloud_provider"] = cloud_provider.strip()
+    if service_name and isinstance(service_name, str) and service_name.strip():
+        meta["service_name"] = service_name.strip()
+    if title and isinstance(title, str) and title.strip():
+        meta["title"] = title.strip()
 
     # Inspect human messages for `[WEBHOOK ALERT] Provider: ... | Event: ...`
     all_msgs: list[Any] = []
@@ -239,6 +257,14 @@ def extract_webhook_metadata(
                 meta["webhook_provider"] = match.group("provider").strip().lower()
             if "webhook_event_type" not in meta and match.group("event_type"):
                 meta["webhook_event_type"] = match.group("event_type").strip()
+            if "service_name" not in meta:
+                svc_match = re.search(r"(?im)^Service\s*/\s*Component:\s*(.+)$", text)
+                if svc_match and svc_match.group(1).strip():
+                    meta["service_name"] = svc_match.group(1).strip()
+            if "title" not in meta:
+                title_match = re.search(r"(?im)^Title:\s*(.+)$", text)
+                if title_match and title_match.group(1).strip():
+                    meta["title"] = title_match.group(1).strip()
             break
         if text.startswith(("[WEBHOOK ALERT]", "[INCIDENT ALERT]", "[CHANNEL ALERT]")):
             meta["has_webhook_alert_prompt"] = True
@@ -362,6 +388,7 @@ class WebhookSREMiddleware(AgentMiddleware[WebhookSREChannels, Any]):
         sandbox_type: str | None = "local",
         has_search: bool = True,
         sre_system_prompt: str | None = None,
+        enable_hypothesis_tool: bool | None = None,
     ) -> None:
         """Initialize WebhookSREMiddleware."""
         self._assistant_id = assistant_id
@@ -375,6 +402,16 @@ class WebhookSREMiddleware(AgentMiddleware[WebhookSREChannels, Any]):
         self._sandbox_type = sandbox_type
         self._has_search = has_search
         self._explicit_sre_prompt = sre_system_prompt
+        if enable_hypothesis_tool is None:
+            from talkops.addons.config import is_sre_profile_active
+
+            enable_hypothesis_tool = is_sre_profile_active()
+        if enable_hypothesis_tool:
+            from talkops.sre.hypothesis_graph import build_record_hypothesis_tool
+
+            self.tools = [build_record_hypothesis_tool()]
+        else:
+            self.tools = []
 
     def _build_sre_prompt(
         self,
@@ -407,6 +444,7 @@ class WebhookSREMiddleware(AgentMiddleware[WebhookSREChannels, Any]):
             webhook_incident_id=meta.get("webhook_incident_id"),
             source_addon=meta.get("source_addon") or meta.get("source"),
             channel=meta.get("channel"),
+            has_webhook_alert_prompt=bool(meta.get("has_webhook_alert_prompt")),
         )
 
     def before_agent(

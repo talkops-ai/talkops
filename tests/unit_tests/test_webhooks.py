@@ -821,13 +821,15 @@ def test_yolo_mode_scope_and_resolution(capsys: pytest.CaptureFixture[str], tmp_
     assert coerce_approval_mode("yolo", allow_yolo=False) == ApprovalMode.MANUAL
     assert coerce_approval_mode(ApprovalMode.YOLO, allow_yolo=False) == ApprovalMode.MANUAL
 
-    # 3. Interactive mode switcher never cycles into YOLO and exits YOLO to MANUAL
+    # 3. Mode switcher supports optional YOLO cycling and exits YOLO to MANUAL
     assert next_approval_mode(ApprovalMode.MANUAL) == ApprovalMode.AUTO
     assert next_approval_mode(ApprovalMode.AUTO) == ApprovalMode.SMART
     assert next_approval_mode(ApprovalMode.SMART) == ApprovalMode.MANUAL
+    assert next_approval_mode(ApprovalMode.SMART, yolo_switcher_enabled=True) == ApprovalMode.YOLO
+    assert next_approval_mode(ApprovalMode.YOLO, yolo_switcher_enabled=True) == ApprovalMode.MANUAL
     assert next_approval_mode(ApprovalMode.YOLO) == ApprovalMode.MANUAL
 
-    # 4. CLI headless (-p) allows --yolo and --approval-mode yolo
+    # 4. CLI headless (-p) and interactive TUI both allow --yolo and --approval-mode yolo
     parser = build_parser()
     headless_args = parser.parse_args(["-p", "check cluster health", "--yolo"])
     assert _resolve_approval_mode(headless_args) == ApprovalMode.YOLO
@@ -835,16 +837,11 @@ def test_yolo_mode_scope_and_resolution(capsys: pytest.CaptureFixture[str], tmp_
     headless_mode_args = parser.parse_args(["-p", "check cluster health", "--approval-mode", "yolo"])
     assert _resolve_approval_mode(headless_mode_args) == ApprovalMode.YOLO
 
-    # 5. Interactive TUI rejects --yolo and --approval-mode yolo with exit code 2
-    code1 = cli_main(["--yolo"])
-    assert code1 == 2
-    err1 = capsys.readouterr().err
-    assert "'yolo' approval mode is only supported in CLI headless mode" in err1
+    tui_yolo_args = parser.parse_args(["--yolo"])
+    assert _resolve_approval_mode(tui_yolo_args) == ApprovalMode.YOLO
 
-    code2 = cli_main(["--approval-mode", "yolo"])
-    assert code2 == 2
-    err2 = capsys.readouterr().err
-    assert "'yolo' approval mode is only supported in CLI headless mode" in err2
+    tui_mode_args = parser.parse_args(["--approval-mode", "yolo"])
+    assert _resolve_approval_mode(tui_mode_args) == ApprovalMode.YOLO
 
     # 6. ApprovalPolicyResolver and _should_interrupt_tool_call handle YOLO
     assert ApprovalPolicyResolver.resolve_sync({"yolo": True}) == ApprovalMode.YOLO
@@ -1116,19 +1113,21 @@ async def test_builtin_outbound_channels_slack_and_teams_one_way(monkeypatch: py
     assert status_code == 202
     await dispatcher.drain_background_tasks()
 
-    # 1. Slack parent incident card posted on `received` (`ts=1710000.0001`)
+    # 1. Slack parent incident card posted on `received` (`ts=1710000.0001`) with Red critical accent bar
     slack_posts = [b for _, u, b in posted_requests if "chat.postMessage" in u]
     assert len(slack_posts) == 2
     assert "thread_ts" not in slack_posts[0]
+    assert slack_posts[0]["attachments"][0]["color"] == "#E01E5A"
     assert slack_posts[1]["thread_ts"] == "1710000.0001"
 
-    # 2. Slack parent incident card updated in-place via `chat.update` with Root Cause Takeaway
+    # 2. Slack parent incident card updated in-place via `chat.update` (color -> Green + Takeaway)
     slack_updates = [b for _, u, b in posted_requests if "chat.update" in u]
     assert len(slack_updates) == 1
     assert slack_updates[0]["ts"] == "1710000.0001"
+    assert slack_updates[0]["attachments"][0]["color"] == "#2EB67D"
     assert any(
         "Root Cause Takeaway" in blk.get("text", {}).get("text", "")
-        for blk in slack_updates[0]["blocks"]
+        for blk in slack_updates[0]["attachments"][0]["blocks"]
     )
 
     # 3. Teams Adaptive Cards posted for both `received` and `completed`

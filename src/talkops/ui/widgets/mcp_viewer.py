@@ -30,7 +30,6 @@ from textual import events
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
-from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
 from talkops.config.settings import get_glyphs

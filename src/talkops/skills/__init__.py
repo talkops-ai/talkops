@@ -119,7 +119,10 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "MAX_SKILL_CONTENT_CHARS",
     "STATIC_SKILL_ALIASES",
+    "CodeSkillSource",
+    "DirectorySkillSource",
     "ExtendedSkillMetadata",
+    "PluginSkillSource",
     "RevokeResult",
     "SkillInvocationEnvelope",
     "SkillMetadata",

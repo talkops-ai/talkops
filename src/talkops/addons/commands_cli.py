@@ -37,7 +37,6 @@ from talkops.addons.marketplace_models import AddonInstallScope
 from talkops.addons.store import (
     AddonNotFoundError,
     load_addon_marketplace_records,
-    load_installed_addons,
 )
 
 

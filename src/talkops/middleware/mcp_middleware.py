@@ -21,9 +21,8 @@ unauthenticated MCP sessions.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
@@ -63,10 +62,8 @@ def normalize_mcp_arguments(
         return arguments
 
     required_set: set[str] = set()
-    properties: dict[str, Any] = {}
     if isinstance(input_schema, dict):
         required_set = set(input_schema.get("required") or ())
-        properties = input_schema.get("properties") or {}
 
     cleaned: dict[str, Any] = {}
     for key, value in arguments.items():
@@ -110,7 +107,7 @@ class MCPToolMiddleware(AgentMiddleware):
         )
         self._dynamic_tools_by_name: dict[str, Any] = {}
         self._lazy_tool_aliases: dict[str, Any] = {}
-        self._built_fingerprint: tuple[tuple[str, int], ...] = ()
+        self._built_fingerprint: tuple[tuple[str, int, bool], ...] = ()
 
     def _get_dynamic_mcp_tools(self) -> dict[str, Any]:
         """Build and cache StructuredTool wrappers for configured MCP servers.
@@ -141,9 +138,14 @@ class MCPToolMiddleware(AgentMiddleware):
 
             applicable = [
                 s for s in cached_by_name.values()
-                if s.enabled and s.status == "ok" and s.tools
+                if s.enabled and s.status == "ok" and (s.tools or getattr(s, "supports_resources", False))
             ]
-            fp = tuple(sorted((s.name, len(s.tools)) for s in applicable))
+            fp = tuple(
+                sorted(
+                    (s.name, len(s.tools), bool(getattr(s, "supports_resources", False)))
+                    for s in applicable
+                )
+            )
             if fp and fp != self._built_fingerprint:
                 mgr = MCPSessionManager.get_instance(self._configs)
                 mgr.register_servers(self._configs)
@@ -209,6 +211,10 @@ class MCPToolMiddleware(AgentMiddleware):
         handler: Callable[[Any], Awaitable[Any]],
     ) -> Any:
         """Intercept and wrap asynchronous model invocation."""
+        if self._configs:
+            from talkops.mcp.preload import wait_for_inflight_mcp_probes
+
+            await wait_for_inflight_mcp_probes(self._configs)
         return await handler(self._inject_dynamic_tools(request))
 
     def _is_mcp_call(self, request: ToolCallRequest) -> bool:
@@ -218,7 +224,7 @@ class MCPToolMiddleware(AgentMiddleware):
             else ""
         )
         if (
-            tool_name == "call_mcp_tool"
+            tool_name in {"call_mcp_tool", "list_resources", "read_resource"}
             or ":" in tool_name
             or tool_name.startswith(("mcp__", "plugin__", "subagent__"))
         ):

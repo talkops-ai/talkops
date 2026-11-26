@@ -33,7 +33,7 @@ from rich.segment import Segment
 from rich.style import Style as RichStyle
 from textual.binding import Binding, BindingType
 from textual.cache import LRUCache
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.content import Content
 from textual.css.query import NoMatches
 from textual.geometry import Offset, Size
@@ -53,7 +53,6 @@ from talkops._debug_buffer import (
     get_log_buffer,
     retention_bucket_for_level,
 )
-from talkops.config.settings import get_glyphs
 from talkops.security.unicode_security import sanitize_control_chars
 from talkops.ui import theme
 from talkops.ui.clipboard import copy_text_to_clipboard
@@ -838,7 +837,6 @@ class DebugConsoleScreen(OpsModalScreen[None]):
     def on_mount(self) -> None:
         """Start the refresh timer and render the current buffer contents."""
         super().on_mount()
-        glyphs = get_glyphs()
         self.set_modal_title("Debug Console", counter="live tail")
         self.set_modal_subtitle([
             ("c", "copy"),

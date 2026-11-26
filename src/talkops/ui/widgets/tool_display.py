@@ -50,6 +50,9 @@ _CUSTOM_DISPLAY_NAMES: dict[str, str] = {
     "fetch_url": "Fetch",
     "task": "task",
     "ask_user": "Ask",
+    "manage_task": "Task",
+    "list_resources": "ListResources",
+    "read_resource": "ReadResource",
 }
 
 _CUSTOM_SUMMARY_FORMATTERS: dict[str, Callable[[str], str]] = {}
@@ -283,11 +286,33 @@ def format_tool_parts(
         return ToolDisplayParts(name, scope, detail, kind)
 
     # 1. Dedicated formatters for core agent tools
+    if base_name == "list_resources":
+        srv_arg = str(args.get("server_name") or args.get("ServerName") or args.get("server") or "").strip()
+        if srv_arg:
+            scope = extract_server_scope(srv_arg) or srv_arg
+            base_srv = srv_arg.rsplit("__", 1)[-1] if "__" in srv_arg else srv_arg
+            return parts(base_srv, "value")
+        return parts("resources", "value")
+
+    if base_name == "read_resource":
+        srv_arg = str(args.get("server_name") or args.get("ServerName") or args.get("server") or "").strip()
+        uri_arg = str(args.get("uri") or args.get("Uri") or args.get("resource_uri") or "").strip()
+        if srv_arg:
+            scope = extract_server_scope(srv_arg) or srv_arg
+        return parts(uri_arg or "resource", "url")
+
     if base_name == "call_mcp_tool":
         srv_arg = str(args.get("server_name") or args.get("ServerName") or args.get("server") or "").strip()
         t_arg = str(args.get("tool_name") or args.get("ToolName") or args.get("tool") or "").strip()
         if ":" in t_arg and not srv_arg:
             srv_arg, t_arg = t_arg.split(":", 1)
+        if t_arg and srv_arg:
+            base_srv = srv_arg.rsplit("__", 1)[-1] if "__" in srv_arg else srv_arg
+            if t_arg.startswith(f"{srv_arg}_") and len(t_arg) > len(srv_arg) + 1:
+                t_arg = t_arg[len(srv_arg) + 1 :]
+            dup_prefix = f"{base_srv}_{base_srv}_"
+            if base_srv and t_arg.lower().startswith(dup_prefix.lower()) and len(t_arg) > len(dup_prefix):
+                t_arg = t_arg[len(base_srv) + 1 :]
         if t_arg:
             name = _base_display_name(t_arg)
         if srv_arg:
@@ -318,6 +343,12 @@ def format_tool_parts(
         qs = args.get("questions")
         q_count = len(qs) if isinstance(qs, list) else 1
         return parts(f"{q_count} question{'s' if q_count > 1 else ''}", "ask")
+
+    if base_name == "manage_task":
+        action = str(args.get("action") or args.get("Action") or "status").strip()
+        tid = str(args.get("task_id") or args.get("TaskId") or "").strip()
+        detail = f"{action} {tid}".strip() if tid else action
+        return parts(detail, "value")
 
     # 2. Generic Parameter Inspection Heuristics (Extensible for ANY tool)
     path_val = (

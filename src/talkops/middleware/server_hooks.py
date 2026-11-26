@@ -978,7 +978,7 @@ def _tool_call_data_from_call(
     args = {str(key): value for key, value in raw_args.items()} if isinstance(raw_args, dict) else {}
     name = str(tool_call.get("name") or "")
     resolved_mcp_server = mcp_server
-    if not resolved_mcp_server and name == "call_mcp_tool":
+    if not resolved_mcp_server and name in {"call_mcp_tool", "list_resources", "read_resource"}:
         srv_arg = str(args.get("server_name") or args.get("ServerName") or args.get("server") or "").strip()
         if not srv_arg:
             t_arg = str(args.get("tool_name") or args.get("ToolName") or args.get("tool") or "").strip()

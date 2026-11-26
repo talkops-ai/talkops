@@ -97,6 +97,30 @@ class SubagentsMiddleware(AgentMiddleware):
             or bool(meta.get("is_plugin"))
         )
 
+    @staticmethod
+    def _extract_mcp_server_names(meta: SubagentMetadata | Mapping[str, Any]) -> list[str]:
+        """Return deduplicated plain-text MCP server names declared for a subagent."""
+        explicit = meta.get("mcp_servers")
+        names: list[str] = []
+        if isinstance(explicit, Sequence) and not isinstance(explicit, (str, bytes)):
+            for item in explicit:
+                if isinstance(item, str) and item.strip() and item.strip() not in names:
+                    names.append(item.strip())
+        if names:
+            return names
+
+        mcp_cfg = meta.get("mcp_config")
+        if isinstance(mcp_cfg, Mapping):
+            inner = mcp_cfg.get("mcpServers") if isinstance(mcp_cfg.get("mcpServers"), Mapping) else mcp_cfg
+            for srv_name, srv_val in inner.items():
+                if not isinstance(srv_name, str) or not srv_name.strip() or srv_name.startswith("$"):
+                    continue
+                if isinstance(srv_val, Mapping) and srv_val.get("enabled") is False:
+                    continue
+                if srv_name not in names:
+                    names.append(srv_name)
+        return names
+
     def _build_prompt_block(self) -> str:
         """Build the system-prompt fragment dynamically listing available subagents."""
         if not self._registry:
@@ -126,74 +150,86 @@ class SubagentsMiddleware(AgentMiddleware):
                 builtin_agents.append(meta)
 
         lines: list[str] = ["\n\n## Subagent Delegation & Orchestration Architecture\n"]
-        lines.append(
-            "You have access to specialized subagents for task delegation. "
-            "Delegation channels are structured based on subagent origin:"
-        )
 
         # 1. Built-in Subagents
         if builtin_agents:
-            lines.append("\n### 1. Built-in Subagents (Direct `task` Tool)")
-            lines.append("Use the native `task` tool call directly from chat for these core subagents:\n")
+            lines.append("### 1. Built-in Subagents (Direct `task` Tool)")
+            lines.append(
+                'Invoke ONLY built-in subagents directly via `task(description="...", subagent_type="<subagent_name>")`:'
+            )
             for meta in builtin_agents:
                 name = meta.get("name", "")
                 desc = meta.get("description", "No description provided.")
                 mode_note = " *(mode: `fork` — inherits parent conversation)*" if meta.get("mode") == "fork" else ""
                 lines.append(f"- **`{name}`**: {desc}{mode_note}")
-            lines.append("\n*Invocation Format:*")
-            lines.append('`task(description="...", subagent_type="<subagent_name>")`')
 
         # 2. Plugin & Extension Subagents
         if plugin_agents:
-            lines.append("\n---\n")
-            lines.append("### 2. Plugin & Extension Subagents (Code Interpreter `js_eval`)")
+            if builtin_agents:
+                lines.append("")
+            lines.append("### 2. Plugin & Extension Subagents (Code Interpreter `js_eval` ONLY)")
             lines.append(
-                "Plugin-provided subagents MUST be triggered through the `js_eval` Code Interpreter "
-                "tool using the embedded `task()` JavaScript primitive. This enables programmatic fan-out, "
-                "batching, multi-stage filtering, and memory isolation.\n"
+                "Plugin subagents hold **isolated domain MCP servers and specialized skill playbooks that are NOT bound to the main orchestrator**. "
+                "Whenever a request, alert, or incident touches a domain covered by an installed plugin subagent below, **you MUST dispatch the matching plugin subagent(s) via `js_eval`** "
+                "(`await task({ description, subagentType })`, using `await Promise.all([...])` when multiple domains or targets apply) *before* falling back to generic `execute` CLI probes — NEVER pass plugin subagents to the direct `task` tool:"
             )
             for meta in plugin_agents:
                 name = meta.get("name", "")
                 desc = meta.get("description", "No description provided.")
                 mode_note = " *(mode: `fork` — inherits parent conversation)*" if meta.get("mode") == "fork" else ""
-                lines.append(f"- **`{name}`**: {desc}{mode_note}")
+                mcp_names = self._extract_mcp_server_names(meta)
+                mcp_note = (
+                    f" *(Isolated MCP servers — accessible ONLY via this subagent: "
+                    f"{', '.join(f'`{s}`' for s in mcp_names)})*"
+                    if mcp_names
+                    else ""
+                )
+                lines.append(f"- **`{name}`**: {desc}{mcp_note}{mode_note}")
 
-            lines.append("\n*Invocation Format (via `js_eval`):*")
-            lines.append("```javascript")
-            lines.append("const result = await task({")
-            lines.append('  description: "...",')
-            lines.append('  subagentType: "<subagent_name>"')
-            lines.append("});")
-            lines.append("result;")
-            lines.append("```")
-
-        lines.append("\n---\n")
-        lines.append("### Automatic Routing Rules\n")
-        lines.append("1. **Direct Built-in Call**: For Built-in subagents, invoke `task(...)` directly.")
-        lines.append("2. **Plugin Parallelization**: For multiple resources or files, prefer `js_eval` with `Promise.all`.")
+        lines.append("\n### Subagent Deliverable Presentation Protocol")
         lines.append(
-            "3. **Synthesize Before Delegating (No Lazy Delegation)**: Isolated subagents do not share your conversation history. "
-            "NEVER write `'based on your findings'` or `'look at the research above'`. Read prior outputs, synthesize the root cause, "
-            "and write a self-contained delegation brief containing exact file paths, line numbers, cloud resource ARNs/IDs, "
-            "account/region/namespace context, and the specific verification or remediation objective."
-        )
-        lines.append(
-            "4. **Adversarial Propose-Probe Verification**: Before recommending high-blast-radius production mutations "
-            "(e.g., IAM policy rewrites, VPC route changes, database failovers, or cluster-wide rollouts), use a 2-pass "
-            "verification pattern in `js_eval` when appropriate: have a specialist subagent propose the plan/root cause, "
-            "and a second pass verify the evidence and check for blast-radius regressions.\n"
-        )
-
-        lines.append("\n---\n")
-        lines.append("### Subagent Deliverable Presentation Protocol\n")
-        lines.append(
-            "- Subagents return authoritative, production-grade technical deliverables (detailed Markdown tables, "
-            "spend/inventory breakdowns, audit classifications, and exact remediation CLI commands).\n"
-            "- When a subagent completes, the orchestrator MUST relay and present this deliverable in its full technical richness to the user.\n"
-            "- **DO NOT compress or suppress subagent reports into brief synopsis bullets.** Retain all structured tables, regional breakdowns, resource inventories, and copy-pasteable CLI commands (`aws ...`, `kubectl ...`, `terraform ...`) in the final response."
+            "- **Self-Contained Delegation & Adversarial Propose-Probe Verification**: Isolated subagents do not share conversation history—include exact file paths, cloud ARNs/IDs, and account/region/namespace context in every brief (for high-blast-radius production mutations, use a 2-pass propose-probe verification in `js_eval`).\n"
+            "- **Preserve Full Technical Deliverables**: **DO NOT compress or suppress subagent reports into brief synopsis bullets.** Retain all structured tables, regional breakdowns, resource inventories, and copy-pasteable CLI commands (`aws ...`, `kubectl ...`, `terraform ...`) in the final response."
         )
 
         return "\n".join(lines)
+
+    def _filter_direct_task_tool_description(self, tools: Sequence[Any] | None) -> list[Any] | None:
+        """Keep plugin subagents out of the top-level `task` tool schema description so models use `js_eval`."""
+        if not tools or not self._registry:
+            return None
+        plugin_names = {
+            meta.get("name", "")
+            for meta in self._registry.values()
+            if self._is_plugin_subagent(meta) and meta.get("name")
+        }
+        if not plugin_names:
+            return None
+
+        updated_tools: list[Any] = []
+        changed = False
+        for t in tools:
+            t_name = t.get("name", "") if isinstance(t, Mapping) else getattr(t, "name", "")
+            t_desc = t.get("description", "") if isinstance(t, Mapping) else getattr(t, "description", "")
+            if t_name == "task" and isinstance(t_desc, str) and any(pn in t_desc for pn in plugin_names):
+                filtered_lines = [
+                    line
+                    for line in t_desc.splitlines()
+                    if not any(line.lstrip().startswith(f"- {pn}:") for pn in plugin_names)
+                ]
+                new_desc = (
+                    "\n".join(filtered_lines).rstrip()
+                    + "\n- Note: Plugin/extension subagents are NOT invoked via this direct `task` tool — "
+                    "dispatch them via `js_eval` using `await task({ description, subagentType })`."
+                )
+                if isinstance(t, Mapping):
+                    t = {**t, "description": new_desc}
+                    changed = True
+                elif hasattr(t, "model_copy"):
+                    t = t.model_copy(update={"description": new_desc})
+                    changed = True
+            updated_tools.append(t)
+        return updated_tools if changed else None
 
     @staticmethod
     def _is_disabled_in_runtime(runtime: Any) -> bool:
@@ -222,6 +258,8 @@ class SubagentsMiddleware(AgentMiddleware):
                     "mode": meta.get("mode", "isolated"),
                     "skills": meta.get("skills"),
                     "tools": meta.get("tools"),
+                    "mcp_servers": self._extract_mcp_server_names(meta),
+                    "keywords": meta.get("keywords"),
                     "is_plugin": self._is_plugin_subagent(meta),
                 }
                 for name, meta in self._registry.items()
@@ -244,6 +282,7 @@ class SubagentsMiddleware(AgentMiddleware):
         """Intercept and wrap synchronous model invocation."""
         if self._is_disabled_in_runtime(getattr(request, "runtime", None)):
             return handler(request)
+        overrides: dict[str, Any] = {}
         block = self._build_prompt_block()
         if block and request.system_message is not None:
             curr_content = request.system_message.content or ""
@@ -253,7 +292,12 @@ class SubagentsMiddleware(AgentMiddleware):
                 new_content = list(curr_content) + [block]
             else:
                 new_content = block
-            request = request.override(system_message=SystemMessage(content=new_content))
+            overrides["system_message"] = SystemMessage(content=new_content)
+        filtered_tools = self._filter_direct_task_tool_description(getattr(request, "tools", None))
+        if filtered_tools is not None:
+            overrides["tools"] = filtered_tools
+        if overrides:
+            request = request.override(**overrides)
         return handler(request)
 
     async def awrap_model_call(
@@ -264,6 +308,7 @@ class SubagentsMiddleware(AgentMiddleware):
         """Intercept and wrap asynchronous model invocation."""
         if self._is_disabled_in_runtime(getattr(request, "runtime", None)):
             return await handler(request)
+        overrides: dict[str, Any] = {}
         block = self._build_prompt_block()
         if block and request.system_message is not None:
             curr_content = request.system_message.content or ""
@@ -273,7 +318,12 @@ class SubagentsMiddleware(AgentMiddleware):
                 new_content = list(curr_content) + [block]
             else:
                 new_content = block
-            request = request.override(system_message=SystemMessage(content=new_content))
+            overrides["system_message"] = SystemMessage(content=new_content)
+        filtered_tools = self._filter_direct_task_tool_description(getattr(request, "tools", None))
+        if filtered_tools is not None:
+            overrides["tools"] = filtered_tools
+        if overrides:
+            request = request.override(**overrides)
         return await handler(request)
 
 

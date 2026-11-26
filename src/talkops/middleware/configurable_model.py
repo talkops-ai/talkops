@@ -395,9 +395,11 @@ class ConfigurableModelMiddleware(AgentMiddleware):
                 context_limit=model_result.context_limit,
                 unsupported_modalities=getattr(model_result, "unsupported_modalities", frozenset()),
             )
-            patched = MODEL_IDENTITY_RE.sub(new_identity, prompt, count=1)
-            if patched != prompt:
-                overrides["system_prompt"] = patched
+            match = MODEL_IDENTITY_RE.search(prompt)
+            if match is not None:
+                patched = prompt[: match.start()] + new_identity + prompt[match.end() :]
+                if patched != prompt:
+                    overrides["system_prompt"] = patched
             elif "### Model Identity" in prompt:
                 logger.warning(
                     "System prompt contains '### Model Identity' but regex did not match; "
@@ -406,7 +408,9 @@ class ConfigurableModelMiddleware(AgentMiddleware):
                 )
 
         # Sanitize cross-provider AIMessage content blocks for effective_model
-        from talkops.middleware.unified_system_message import sanitize_messages_for_model
+        from talkops.middleware.unified_system_message import (
+            sanitize_messages_for_model,
+        )
 
         sanitized_msgs = sanitize_messages_for_model(request.messages, effective_model)
         if sanitized_msgs is not None:

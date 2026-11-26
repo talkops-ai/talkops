@@ -729,7 +729,7 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         toml_keys=("effort", "default"),
         settings_field="reasoning_effort",
         default=None,
-        choices=("low", "medium", "high", "off", "none"),
+        choices=("minimal", "low", "medium", "high", "xhigh", "max", "off", "none"),
     ),
     ConfigOption(
         key="models.context_limit",

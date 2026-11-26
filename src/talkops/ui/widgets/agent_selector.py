@@ -23,15 +23,12 @@ On selection returns the agent name string.  The caller
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 from typing import ClassVar
 
 from textual.binding import Binding, BindingType
-from textual.containers import Vertical
 from textual.content import Content
 from textual.css.query import NoMatches
-from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 

@@ -47,12 +47,12 @@ import contextlib
 import json
 import os
 import re
+import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import IntEnum
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, cast
 from uuid import uuid4
@@ -67,10 +67,9 @@ from deepagents.backends.protocol import (
 from deepagents.middleware.summarization import (
     SummarizationMiddleware,
     SummarizationToolMiddleware,
-    create_summarization_middleware,
-    create_summarization_tool_middleware,
 )
 from langchain.agents.middleware.types import (
+    ExtendedModelResponse,
     ModelRequest,
     ModelResponse,
 )
@@ -562,6 +561,80 @@ def get_step_output_directory_path(
     return base / "brain" / _sanitize_thread_id(thread_id) / ".system_generated" / "steps" / str(max(1, step_index))
 
 
+def get_user_uploaded_media_dir(
+    thread_id: str | None,
+    data_dir: Path | None = None,
+) -> Path:
+    """Resolve ``<data_dir>/brain/<thread_id>/.user_uploaded``."""
+    base = data_dir if data_dir is not None else paths.DATA_DIR
+    return base / "brain" / _sanitize_thread_id(thread_id) / ".user_uploaded"
+
+
+def _extract_message_media(
+    message: Any,
+    *,
+    user_uploaded_dir: Path | None = None,
+) -> list[dict[str, str]]:
+    """Extract multimodal content blocks from ``message`` and optionally persist to ``.user_uploaded/``."""
+    kwargs = (
+        message.get("additional_kwargs", {})
+        if isinstance(message, dict)
+        else getattr(message, "additional_kwargs", {})
+    )
+    if isinstance(kwargs, dict):
+        if kwargs.get("read_file_media_result") is True:
+            return []
+        cached = kwargs.get("user_uploaded_media")
+        if isinstance(cached, list) and all(isinstance(x, dict) and "uri" in x for x in cached):
+            return [
+                {"mime_type": str(x.get("mime_type", "application/octet-stream")), "uri": str(x["uri"])}
+                for x in cached
+            ]
+
+    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+    if not isinstance(content, list):
+        return []
+
+    from talkops.media_utils import save_user_uploaded_media
+
+    media_entries: list[dict[str, str]] = []
+    media_idx = 0
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype not in {"image", "image_url", "video", "audio", "file"}:
+            continue
+        extras = block.get("extras")
+        if isinstance(extras, dict) and isinstance(extras.get("uri"), str):
+            media_entries.append(
+                {
+                    "mime_type": str(block.get("mime_type", "application/octet-stream")),
+                    "uri": extras["uri"],
+                }
+            )
+            media_idx += 1
+            continue
+        if user_uploaded_dir is not None:
+            saved = save_user_uploaded_media(block, user_uploaded_dir, index=media_idx)
+            if saved is not None:
+                media_entries.append(saved)
+                media_idx += 1
+                continue
+        if isinstance(block.get("url"), str) and not str(block["url"]).startswith("data:"):
+            media_entries.append(
+                {
+                    "mime_type": str(block.get("mime_type", "application/octet-stream")),
+                    "uri": str(block["url"]),
+                }
+            )
+            media_idx += 1
+
+    if media_entries and isinstance(kwargs, dict):
+        kwargs["user_uploaded_media"] = media_entries
+    return media_entries
+
+
 def _extract_message_text(message: Any) -> str:
     if isinstance(message, str):
         return message
@@ -648,11 +721,15 @@ def _classify_message_source_and_type(message: Any) -> tuple[str, str, str]:
     if isinstance(message, dict):
         role = str(message.get("role", message.get("type", ""))).lower()
         status_raw = str(message.get("status", "success")).lower()
+        kwargs = message.get("additional_kwargs", {})
     else:
         role = getattr(message, "type", type(message).__name__).lower()
         status_raw = str(getattr(message, "status", "success")).lower()
+        kwargs = getattr(message, "additional_kwargs", {})
 
     status = "ERROR" if status_raw == "error" else "DONE"
+    if isinstance(kwargs, dict) and kwargs.get("read_file_media_result") is True:
+        return "TOOL", "TOOL_RESPONSE", status
     if role in ("human", "user", "humanmessage"):
         return "USER_EXPLICIT", "USER_INPUT", status
     if role in ("ai", "assistant", "aimessage"):
@@ -702,6 +779,8 @@ def step_to_summary_json(
     max_tool_arg_bytes: int = DEFAULT_MAX_TOOL_ARG_BYTES,
     truncate: bool = True,
     created_at: str | None = None,
+    media: list[dict[str, str]] | None = None,
+    user_uploaded_dir: Path | None = None,
 ) -> str:
     """Serialize a conversation step into a single-line JSON string.
 
@@ -717,6 +796,11 @@ def step_to_summary_json(
     content = _extract_message_text(message)
     thinking = _extract_message_thinking(message)
     raw_tool_calls = _extract_message_tool_calls(message)
+    resolved_media = (
+        media
+        if media is not None
+        else _extract_message_media(message, user_uploaded_dir=user_uploaded_dir)
+    )
 
     truncated_fields: list[str] = []
 
@@ -765,6 +849,8 @@ def step_to_summary_json(
         record["thinking"] = thinking
     if formatted_tool_calls:
         record["tool_calls"] = formatted_tool_calls
+    if resolved_media:
+        record["media"] = resolved_media
     if truncate and truncated_fields:
         record["truncated_fields"] = truncated_fields
 
@@ -788,13 +874,23 @@ def sync_messages_to_transcript(
     """
     compact_path = get_transcript_path(thread_id, data_dir)
     full_path = get_full_transcript_path(thread_id, data_dir)
+    user_uploaded_dir = get_user_uploaded_media_dir(thread_id, data_dir)
     compact_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_count = 0
     if compact_path.exists():
-        with contextlib.suppress(Exception):
-            existing_lines = compact_path.read_text(encoding="utf-8").splitlines()
-            existing_count = len([ln for ln in existing_lines if ln.strip()])
+        with contextlib.suppress(Exception), compact_path.open("rb") as cf_read:
+            newline_count = 0
+            last_byte = b""
+            while True:
+                chunk = cf_read.read(65536)
+                if not chunk:
+                    break
+                newline_count += chunk.count(b"\n")
+                last_byte = chunk[-1:]
+            if last_byte and last_byte != b"\n":
+                newline_count += 1
+            existing_count = newline_count
 
     if len(messages) <= existing_count:
         return compact_path, full_path
@@ -806,6 +902,7 @@ def sync_messages_to_transcript(
     for idx in range(existing_count, len(messages)):
         step_index = idx + 1
         msg = messages[idx]
+        msg_media = _extract_message_media(msg, user_uploaded_dir=user_uploaded_dir)
         compact_line = step_to_summary_json(
             msg,
             step_index,
@@ -813,6 +910,7 @@ def sync_messages_to_transcript(
             max_tool_arg_bytes=max_tool_arg_bytes,
             truncate=True,
             created_at=now_iso,
+            media=msg_media,
         )
         full_line = step_to_summary_json(
             msg,
@@ -821,6 +919,7 @@ def sync_messages_to_transcript(
             max_tool_arg_bytes=max_tool_arg_bytes,
             truncate=False,
             created_at=now_iso,
+            media=msg_media,
         )
         new_compact_lines.append(compact_line)
         new_full_lines.append(full_line)
@@ -903,6 +1002,8 @@ MICROCOMPACT_COMPACTABLE_TOOLS: frozenset[str] = frozenset(
         "write_file",
         "js_eval",
         "call_mcp_tool",
+        "list_resources",
+        "read_resource",
     }
 )
 
@@ -1597,6 +1698,7 @@ async def agenerate_llm_continuation_summary(
     ]
 
     max_attempts = max(1, cfg.retry_config.max_attempts)
+    call_timeout_seconds = float(os.environ.get("TALKOPS_COMPACT_TIMEOUT_SECONDS", "45.0"))
     feedback_suffix = ""
     for attempt in range(1, max_attempts + 1):
         try:
@@ -1604,12 +1706,18 @@ async def agenerate_llm_continuation_summary(
             if feedback_suffix:
                 call_messages[-1] = HumanMessage(content=f"{prompt_text}\n\n{feedback_suffix}")
             try:
-                response = await model.ainvoke(
-                    call_messages,
-                    config={"metadata": {"lc_source": "summarization"}},
+                response = await asyncio.wait_for(
+                    model.ainvoke(
+                        call_messages,
+                        config={"metadata": {"lc_source": "summarization"}},
+                    ),
+                    timeout=call_timeout_seconds,
                 )
             except TypeError:
-                response = await model.ainvoke(call_messages)
+                response = await asyncio.wait_for(
+                    model.ainvoke(call_messages),
+                    timeout=call_timeout_seconds,
+                )
             tcs = _extract_message_tool_calls(response)
             if tcs:
                 tc_name = tcs[0].get("name", "unknown")
@@ -1634,6 +1742,8 @@ async def agenerate_llm_continuation_summary(
                 continue
 
             return _normalize_summary_tags(summary_text)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("Async LLM checkpoint generation attempt %d/%d failed: %s", attempt, max_attempts, exc)
             break
@@ -1756,13 +1866,31 @@ class RuntimeModelConfig(NamedTuple):
     context_limit: int | None
 
 
-def _runtime_model_config(runtime: ToolRuntime[Any, Any]) -> RuntimeModelConfig:
-    """Read the active model configuration from a tool runtime."""
-    context = runtime.context
+def _runtime_model_config(runtime: Any, state: Any = None) -> RuntimeModelConfig:
+    """Read the active model configuration from runtime context or routed state."""
+    routed_spec: str | None = None
+    state_params: dict[str, Any] = {}
+    if isinstance(state, dict):
+        dyn_route = state.get("_dynamic_model_route")
+        if isinstance(dyn_route, dict) and isinstance(dyn_route.get("spec"), str) and dyn_route["spec"]:
+            routed_spec = str(dyn_route["spec"])
+            if dyn_route.get("effort"):
+                state_params["reasoning_effort"] = dyn_route["effort"]
+        elif isinstance(state.get("_model_spec"), str) and state["_model_spec"]:
+            routed_spec = str(state["_model_spec"])
+            if isinstance(state.get("_model_params"), dict):
+                state_params.update(state["_model_params"])
+
+    context = getattr(runtime, "context", None) if runtime is not None else None
     if hasattr(context, "model_params"):
+        ctx_model = getattr(context, "model", None)
+        effective_spec = (
+            routed_spec
+            or (ctx_model if isinstance(ctx_model, str) and ctx_model not in {"auto", "dynamic"} else None)
+        )
         return RuntimeModelConfig(
-            model_spec=getattr(context, "model", None),
-            model_params=getattr(context, "model_params", {}),
+            model_spec=effective_spec,
+            model_params=getattr(context, "model_params", None) or state_params,
             profile_overrides=getattr(context, "profile_overrides", {}),
             context_limit=getattr(context, "model_context_limit", None),
         )
@@ -1771,13 +1899,22 @@ def _runtime_model_config(runtime: ToolRuntime[Any, Any]) -> RuntimeModelConfig:
         params = context.get("model_params")
         profile_overrides = context.get("profile_overrides")
         context_limit = context.get("model_context_limit")
+        effective_spec = (
+            routed_spec
+            or (model if isinstance(model, str) and model not in {"auto", "dynamic"} else None)
+        )
         return RuntimeModelConfig(
-            model_spec=model if isinstance(model, str) else None,
-            model_params=dict(params) if isinstance(params, dict) else {},
+            model_spec=effective_spec,
+            model_params=dict(params) if isinstance(params, dict) else state_params,
             profile_overrides=(dict(profile_overrides) if isinstance(profile_overrides, dict) else {}),
             context_limit=context_limit if isinstance(context_limit, int) else None,
         )
-    return RuntimeModelConfig(model_spec=None, model_params={}, profile_overrides={}, context_limit=None)
+    return RuntimeModelConfig(
+        model_spec=routed_spec,
+        model_params=state_params,
+        profile_overrides={},
+        context_limit=None,
+    )
 
 
 def _offload_tool_call_id(context: object) -> str | None:
@@ -1791,21 +1928,70 @@ def _offload_tool_call_id(context: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _resolve_thread_id_from_runtime(runtime: Any, state: Any = None) -> str:
+def _resolve_thread_id_from_runtime(
+    runtime: Any,
+    state: Any = None,
+    *,
+    subagent_name: str | None = None,
+) -> str:
+    """Resolve the active conversation/thread ID, isolating per-subagent trajectories."""
+    base_thread_id = "default"
+    detected_subagent = subagent_name
+    subagent_run_id: str | None = None
+
     if runtime is not None:
         ctx = getattr(runtime, "context", None)
-        if isinstance(ctx, dict) and ctx.get("thread_id"):
-            return str(ctx["thread_id"])
-        if hasattr(ctx, "thread_id") and getattr(ctx, "thread_id", None):
-            return str(getattr(ctx, "thread_id"))
+        if isinstance(ctx, dict):
+            if ctx.get("thread_id"):
+                base_thread_id = str(ctx["thread_id"])
+            if not detected_subagent and ctx.get("subagent_name"):
+                detected_subagent = str(ctx["subagent_name"])
+            if ctx.get("subagent_transcript_id"):
+                subagent_run_id = str(ctx["subagent_transcript_id"])
+        elif ctx is not None:
+            if getattr(ctx, "thread_id", None):
+                base_thread_id = str(getattr(ctx, "thread_id"))
+            if not detected_subagent and getattr(ctx, "subagent_name", None):
+                detected_subagent = str(getattr(ctx, "subagent_name"))
         cfg = getattr(runtime, "config", None)
         if isinstance(cfg, dict):
             configurable = cfg.get("configurable", {})
-            if isinstance(configurable, dict) and configurable.get("thread_id"):
-                return str(configurable["thread_id"])
-    if isinstance(state, dict) and state.get("_summarization_session_id"):
-        return str(state["_summarization_session_id"])
-    return "default"
+            if isinstance(configurable, dict):
+                if base_thread_id == "default" and configurable.get("thread_id"):
+                    base_thread_id = str(configurable["thread_id"])
+                if not subagent_run_id and configurable.get("checkpoint_ns"):
+                    subagent_run_id = str(configurable["checkpoint_ns"])
+            metadata = cfg.get("metadata", {})
+            if isinstance(metadata, dict) and not detected_subagent:
+                lc_agent = metadata.get("lc_agent_name")
+                if isinstance(lc_agent, str) and lc_agent and lc_agent not in {"agent", "main", "talkops"}:
+                    detected_subagent = lc_agent
+
+    if base_thread_id == "default" and isinstance(state, dict):
+        if state.get("thread_id"):
+            base_thread_id = str(state["thread_id"])
+        elif state.get("_summarization_session_id"):
+            base_thread_id = str(state["_summarization_session_id"])
+
+    if detected_subagent:
+        if not subagent_run_id and isinstance(state, dict):
+            if state.get("_summarization_session_id"):
+                subagent_run_id = str(state["_summarization_session_id"])
+            else:
+                msgs = state.get("messages")
+                if isinstance(msgs, list) and msgs:
+                    first_id = (
+                        msgs[0].get("id")
+                        if isinstance(msgs[0], dict)
+                        else getattr(msgs[0], "id", None)
+                    )
+                    if isinstance(first_id, str) and first_id:
+                        subagent_run_id = first_id[:12]
+        if subagent_run_id:
+            return f"{base_thread_id}.subagent.{detected_subagent}.{subagent_run_id}"
+        return f"{base_thread_id}.subagent.{detected_subagent}"
+
+    return base_thread_id
 
 
 class _ArchiveReadGuard:
@@ -1982,10 +2168,58 @@ def _extract_model_reported_tokens(messages: Sequence[Any]) -> int:
     return 0
 
 
-class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
-    """Subclass of ``SummarizationMiddleware`` implementing TalkOps's checkpoint engine.
+def manual_compaction_requested(messages: Sequence[Any]) -> tuple[bool, str]:
+    """Check whether the trajectory contains an unfulfilled user ``/compact`` request.
 
-    Ensures automatic middleware compaction and ``compact_conversation`` tool calls use:
+    Scans backwards
+    through ``messages``; if a checkpoint summary message is encountered first,
+    returns ``(False, "")``. If a human ``/compact`` or ``/offload`` message is
+    found before any subsequent checkpoint summary, returns ``(True, instructions)``.
+    """
+    for msg in reversed(messages):
+        kwargs = (
+            msg.get("additional_kwargs", {})
+            if isinstance(msg, dict)
+            else getattr(msg, "additional_kwargs", {})
+        )
+        if isinstance(kwargs, dict) and kwargs.get("lc_source") == "summarization":
+            return False, ""
+        text = _extract_message_text(msg).strip()
+        if text.startswith("<CONTEXT_SUMMARY>"):
+            return False, ""
+        _, step_type, _ = _classify_message_source_and_type(msg)
+        if step_type == "USER_INPUT":
+            req_type, instructions = parse_compact_request(text)
+            if req_type in (
+                CompactRequestType.COMPACT_NO_ARGS,
+                CompactRequestType.COMPACT_WITH_INSTRUCTIONS,
+            ):
+                return True, instructions
+    return False, ""
+
+
+def _flatten_extended_model_response(res: Any) -> Any:
+    """Flatten nested ExtendedModelResponse objects by merging their Command updates."""
+    if not isinstance(res, ExtendedModelResponse):
+        return res
+    inner = res.model_response
+    if not isinstance(inner, ExtendedModelResponse):
+        return res
+    merged_update: dict[str, Any] = {}
+    if inner.command is not None and isinstance(inner.command.update, dict):
+        merged_update.update(inner.command.update)
+    if res.command is not None and isinstance(res.command.update, dict):
+        merged_update.update(res.command.update)
+    return ExtendedModelResponse(
+        model_response=inner.model_response,
+        command=Command(update=merged_update) if merged_update else (res.command or inner.command),
+    )
+
+
+class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
+    """Subclass of ``SummarizationMiddleware`` implementing TalkOps's harness-driven checkpoint engine.
+
+    Ensures automatic harness-driven compaction uses:
     - The 6-section ``CHECKPOINT_SYSTEM_PROMPT`` + ``CONTINUATION_SUMMARY_PROMPT``
       with tool-call retry guard and ``<COMPACTED_HISTORY>`` fallback.
     - Full ``<CONTEXT_SUMMARY>`` envelope formatting (``build_context_summary_envelope``).
@@ -2009,6 +2243,7 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
         self._last_overhead_tokens: int = 0
         self._last_preserved_tokens: int = 0
         self._last_compaction_stats: dict[str, Any] = {}
+        self._pending_custom_instructions: str = ""
 
     def _capture_request_token_context(self, request: ModelRequest) -> None:
         """Record pre-compaction context tokens and system/tool overhead tokens from request."""
@@ -2021,6 +2256,19 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
             self._last_overhead_tokens = max(0, counted_overhead)
             self._last_pre_tokens = max(counted_total, reported)
 
+    def _should_summarize(self, messages: list[Any], total_tokens: int) -> bool:
+        """Determine whether harness-driven summarization should run for the current trajectory."""
+        manual_req, custom_instructions = manual_compaction_requested(messages)
+        if manual_req and len(messages) >= 2:
+            self._pending_custom_instructions = custom_instructions
+            return True
+        effective_tokens = max(
+            total_tokens,
+            self._last_pre_tokens,
+            _extract_model_reported_tokens(messages),
+        )
+        return super()._should_summarize(messages, effective_tokens)
+
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -2028,7 +2276,8 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
     ) -> Any:
         """Intercept and wrap synchronous model invocation."""
         self._capture_request_token_context(request)
-        return super().wrap_model_call(request, handler)
+        res = super().wrap_model_call(request, handler)
+        return _flatten_extended_model_response(res)
 
     async def awrap_model_call(
         self,
@@ -2037,7 +2286,8 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
     ) -> Any:
         """Intercept and wrap asynchronous model invocation."""
         self._capture_request_token_context(request)
-        return await super().awrap_model_call(request, handler)
+        res = await super().awrap_model_call(request, handler)
+        return _flatten_extended_model_response(res)
 
     def _partition_messages(
         self,
@@ -2092,6 +2342,8 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
 
     def _create_summary(self, messages_to_summarize: list[Any]) -> str:
         start_t = time.monotonic()
+        custom_instructions = self._pending_custom_instructions
+        self._pending_custom_instructions = ""
         _emit_compaction_event(
             self._active_runtime,
             {
@@ -2105,6 +2357,7 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
         raw_summary = generate_llm_continuation_summary(
             model,
             messages_to_summarize,
+            custom_instructions=custom_instructions,
             config=self._checkpoint_config,
         )
         envelope = build_context_summary_envelope(
@@ -2122,6 +2375,8 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
 
     async def _acreate_summary(self, messages_to_summarize: list[Any]) -> str:
         start_t = time.monotonic()
+        custom_instructions = self._pending_custom_instructions
+        self._pending_custom_instructions = ""
         _emit_compaction_event(
             self._active_runtime,
             {
@@ -2135,6 +2390,7 @@ class TalkOpsSummarizationMiddleware(SummarizationMiddleware):
         raw_summary = await agenerate_llm_continuation_summary(
             model,
             messages_to_summarize,
+            custom_instructions=custom_instructions,
             config=self._checkpoint_config,
         )
         envelope = build_context_summary_envelope(
@@ -2181,7 +2437,7 @@ def _create_talkops_summarization_middleware(
     *,
     thread_id: str = "default",
 ) -> TalkOpsSummarizationMiddleware:
-    """Create an ``TalkOpsSummarizationMiddleware`` honoring model profile & ``autoCompact``."""
+    """Create a ``TalkOpsSummarizationMiddleware`` honoring model checkpoint budgets & ``autoCompact``."""
     from deepagents._models import resolve_model  # noqa: PLC0415
     from deepagents.middleware.summarization import (
         compute_summarization_defaults,  # noqa: PLC0415
@@ -2201,27 +2457,29 @@ def _create_talkops_summarization_middleware(
         if isinstance(profile, dict) and isinstance(profile.get("max_output_tokens"), int)
         else 16_384
     )
-    checkpoint_cfg = get_checkpoint_config_for_model_info(
-        max_input_tokens=max_input_tokens,
-        max_output_tokens=max_output_tokens,
-    )
-
-    trigger = defaults["trigger"]
     effective_override = os.environ.get("TALKOPS_AUTO_COMPACT", "").strip()
     if not effective_override:
         with contextlib.suppress(Exception):
             effective_override = get_cli_settings_manager().get_settings().auto_compact
-    if effective_override:
-        normalized, ok = auto_compact_override(effective_override)
-        if ok and checkpoint_cfg.max_token_limit > 0:
-            trigger = ("tokens", checkpoint_cfg.max_token_limit)
+
+    checkpoint_cfg = get_checkpoint_config_for_model_info(
+        max_input_tokens=max_input_tokens,
+        max_output_tokens=max_output_tokens,
+        auto_compact_raw=effective_override or None,
+    )
+
+    trigger = (
+        ("tokens", checkpoint_cfg.max_token_limit)
+        if checkpoint_cfg.max_token_limit > 0
+        else defaults["trigger"]
+    )
 
     return TalkOpsSummarizationMiddleware(
         model=resolved_model,
         backend=backend,
         trigger=trigger,
         keep=defaults["keep"],
-        trim_tokens_to_summarize=None,
+        trim_tokens_to_summarize=min(max_input_tokens, 120_000),
         truncate_args_settings=defaults["truncate_args_settings"],
         checkpoint_config=checkpoint_cfg,
         active_thread_id=thread_id,
@@ -2229,7 +2487,31 @@ def _create_talkops_summarization_middleware(
 
 
 class CLICompactionMiddleware(SummarizationToolMiddleware):
-    """Add lossless transcript logging, tool output offloading, and conversation compaction."""
+    """Harness-driven compaction middleware with lossless transcript logging and tool output offloading.
+
+    Harness-driven compaction architecture:
+    - Exposes zero compaction tools to the LLM (``self.tools = []``); compaction is
+      100% harness-driven across both the main agent and spawned subagents.
+    - Syncs 100% of raw steps to dual line-aligned JSONL transcripts
+      (``transcript.jsonl`` and ``transcript_full.jsonl``), isolating subagent
+      trajectories into their own per-subagent conversation directories.
+    - Runs Tier-3 checkpoint evaluation on the un-microcompacted trajectory before
+      applying Tier-1 file-read deduplication and microcompaction on the model request.
+    """
+
+    def __init__(
+        self,
+        summarization: SummarizationMiddleware,
+        *,
+        system_prompt: str | None = CONVERSATION_TRANSCRIPT_SYSTEM_SECTION,
+        subagent_name: str | None = None,
+    ) -> None:
+        """Initialize harness-driven CLICompactionMiddleware without exposing compaction tools."""
+        super().__init__(summarization, system_prompt=system_prompt)
+        self.tools = []
+        self._subagent_name = subagent_name
+        self._runtime_summarizer_cache: dict[tuple[str, int | None, str], TalkOpsSummarizationMiddleware] = {}
+        self._runtime_summarizer_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -2276,7 +2558,11 @@ class CLICompactionMiddleware(SummarizationToolMiddleware):
             return rejection
         result = handler(request)
         if isinstance(result, ToolMessage):
-            thread_id = _resolve_thread_id_from_runtime(request.runtime, request.state)
+            thread_id = _resolve_thread_id_from_runtime(
+                request.runtime,
+                request.state,
+                subagent_name=self._subagent_name,
+            )
             step_index = len(request.state.get("messages", [])) + 1
             return truncate_and_offload_tool_output(result, thread_id=thread_id, step_index=step_index)
         return result
@@ -2291,7 +2577,11 @@ class CLICompactionMiddleware(SummarizationToolMiddleware):
             return rejection
         result = await handler(request)
         if isinstance(result, ToolMessage):
-            thread_id = _resolve_thread_id_from_runtime(request.runtime, request.state)
+            thread_id = _resolve_thread_id_from_runtime(
+                request.runtime,
+                request.state,
+                subagent_name=self._subagent_name,
+            )
             step_index = len(request.state.get("messages", [])) + 1
             return truncate_and_offload_tool_output(result, thread_id=thread_id, step_index=step_index)
         return result
@@ -2301,67 +2591,89 @@ class CLICompactionMiddleware(SummarizationToolMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        """Sync dual transcripts, run tier-1 microcompaction & read dedup, and run automatic summarization."""
+        """Sync dual transcripts, evaluate harness-driven checkpoint compaction, and apply Tier-1 hygiene."""
         from talkops.middleware.btw import is_btw_turn
 
         runtime = getattr(request, "runtime", None)
         if is_btw_turn(request.state, runtime):
             return handler(request)
 
-        thread_id = _resolve_thread_id_from_runtime(runtime, request.state)
+        thread_id = _resolve_thread_id_from_runtime(
+            runtime,
+            request.state,
+            subagent_name=self._subagent_name,
+        )
         with contextlib.suppress(Exception):
             messages = request.state.get("messages", []) if isinstance(request.state, dict) else []
             if messages:
                 sync_messages_to_transcript(messages, thread_id=thread_id)
 
-        req_messages = list(getattr(request, "messages", []) or [])
-        if req_messages:
-            hygiened = microcompact_tool_messages(deduplicate_unchanged_file_reads(req_messages))
-            if hygiened != req_messages and hasattr(request, "override"):
-                request = request.override(messages=hygiened)
+        def _inner_call_model(req: ModelRequest) -> ModelResponse:
+            req_messages = list(getattr(req, "messages", []) or [])
+            if req_messages:
+                hygiened = microcompact_tool_messages(deduplicate_unchanged_file_reads(req_messages))
+                if hygiened != req_messages and hasattr(req, "override"):
+                    req = req.override(messages=hygiened)
+            if self.system_prompt is not None and hasattr(req, "override"):
+                return super(CLICompactionMiddleware, self).wrap_model_call(req, handler)
+            return handler(req)
 
-        call_model = partial(super().wrap_model_call, handler=handler)
-        summarization = self._summarization_for_runtime(runtime) if runtime is not None else self._summarization
+        summarization = (
+            self._summarization_for_runtime(runtime, request.state)
+            if (runtime is not None or isinstance(request.state, dict))
+            else self._summarization
+        )
         if hasattr(summarization, "_active_thread_id"):
             cast(Any, summarization)._active_thread_id = thread_id
         if hasattr(summarization, "_active_runtime"):
             cast(Any, summarization)._active_runtime = runtime
-        return cast(ModelResponse, summarization.wrap_model_call(request, call_model))
+        return cast(ModelResponse, summarization.wrap_model_call(request, _inner_call_model))
 
     async def awrap_model_call(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        """Sync dual transcripts, run tier-1 microcompaction & read dedup, and run automatic summarization (async)."""
+        """Sync dual transcripts, evaluate harness-driven checkpoint compaction, and apply Tier-1 hygiene (async)."""
         from talkops.middleware.btw import is_btw_turn
 
         runtime = getattr(request, "runtime", None)
         if is_btw_turn(request.state, runtime):
             return await handler(request)
 
-        thread_id = _resolve_thread_id_from_runtime(runtime, request.state)
+        thread_id = _resolve_thread_id_from_runtime(
+            runtime,
+            request.state,
+            subagent_name=self._subagent_name,
+        )
         with contextlib.suppress(Exception):
             messages = request.state.get("messages", []) if isinstance(request.state, dict) else []
             if messages:
                 await asyncio.to_thread(sync_messages_to_transcript, messages, thread_id)
 
-        req_messages = list(getattr(request, "messages", []) or [])
-        if req_messages:
-            hygiened = microcompact_tool_messages(deduplicate_unchanged_file_reads(req_messages))
-            if hygiened != req_messages and hasattr(request, "override"):
-                request = request.override(messages=hygiened)
+        async def _inner_acall_model(req: ModelRequest) -> ModelResponse:
+            req_messages = list(getattr(req, "messages", []) or [])
+            if req_messages:
+                hygiened = microcompact_tool_messages(deduplicate_unchanged_file_reads(req_messages))
+                if hygiened != req_messages and hasattr(req, "override"):
+                    req = req.override(messages=hygiened)
+            if self.system_prompt is not None and hasattr(req, "override"):
+                return await super(CLICompactionMiddleware, self).awrap_model_call(req, handler)
+            return await handler(req)
 
-        call_model = partial(super().awrap_model_call, handler=handler)
-        if runtime is not None:
-            summarization = await asyncio.to_thread(self._summarization_for_runtime, runtime)
+        if runtime is not None or isinstance(request.state, dict):
+            summarization = await asyncio.to_thread(
+                self._summarization_for_runtime,
+                runtime,
+                request.state,
+            )
         else:
             summarization = self._summarization
         if hasattr(summarization, "_active_thread_id"):
             cast(Any, summarization)._active_thread_id = thread_id
         if hasattr(summarization, "_active_runtime"):
             cast(Any, summarization)._active_runtime = runtime
-        return cast(ModelResponse, await summarization.awrap_model_call(request, call_model))
+        return cast(ModelResponse, await summarization.awrap_model_call(request, _inner_acall_model))
 
     def _create_compact_tool(self) -> StructuredTool:
         middleware = self
@@ -2405,21 +2717,41 @@ class CLICompactionMiddleware(SummarizationToolMiddleware):
             backend = cast(BackendProtocol, backend_obj)
         return cast(BackendProtocol, _ArchiveReadGuard(backend))
 
-    def _summarization_for_runtime(self, runtime: ToolRuntime[Any, Any] | None) -> SummarizationMiddleware:
-        """Build a summarizer for the active runtime model when overridden."""
-        if runtime is None:
+    def _summarization_for_runtime(
+        self,
+        runtime: ToolRuntime[Any, Any] | None,
+        state: Any = None,
+    ) -> SummarizationMiddleware:
+        """Build or retrieve a cached summarizer for the active runtime/routed model when overridden."""
+        if runtime is None and state is None:
             return self._summarization
-        config = _runtime_model_config(runtime)
+        config = _runtime_model_config(runtime, state)
         if not config.model_spec:
             return self._summarization
 
+        thread_id = _resolve_thread_id_from_runtime(
+            runtime,
+            state,
+            subagent_name=self._subagent_name,
+        )
+        cache_key = (config.model_spec, config.context_limit, thread_id)
+        with self._runtime_summarizer_lock:
+            cached = self._runtime_summarizer_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         from talkops.model.factory import create_model
 
-        model = create_model(
-            config.model_spec,
-            extra_kwargs=config.model_params or None,
-            profile_overrides=config.profile_overrides or None,
-        ).model
+        try:
+            model = create_model(
+                config.model_spec,
+                extra_kwargs=config.model_params or None,
+                profile_overrides=config.profile_overrides or None,
+            ).model
+        except Exception:
+            logger.debug("Falling back to default summarizer model for spec %r", config.model_spec)
+            return self._summarization
+
         context_limit = config.context_limit
         if context_limit is not None:
             profile = getattr(model, "profile", None)
@@ -2440,13 +2772,19 @@ class CLICompactionMiddleware(SummarizationToolMiddleware):
                         exc_info=True,
                     )
         backend = self._guarded_backend(runtime)
-        thread_id = _resolve_thread_id_from_runtime(runtime)
-        return _create_talkops_summarization_middleware(model, backend, thread_id=thread_id)
+        built = _create_talkops_summarization_middleware(model, backend, thread_id=thread_id)
+        with self._runtime_summarizer_lock:
+            self._runtime_summarizer_cache[cache_key] = built
+        return built
 
     def _run_compact(self, runtime: ToolRuntime[Any, Any]) -> Command[Any]:
-        """Synchronously compact conversation via ``compact_conversation`` tool with transcript sync."""
+        """Synchronously compact conversation with transcript sync."""
         messages = runtime.state.get("messages", [])
-        thread_id = _resolve_thread_id_from_runtime(runtime, runtime.state)
+        thread_id = _resolve_thread_id_from_runtime(
+            runtime,
+            runtime.state,
+            subagent_name=self._subagent_name,
+        )
         with contextlib.suppress(Exception):
             if messages:
                 sync_messages_to_transcript(messages, thread_id=thread_id)
@@ -2457,9 +2795,13 @@ class CLICompactionMiddleware(SummarizationToolMiddleware):
         return super()._run_compact(runtime)
 
     async def _arun_compact(self, runtime: ToolRuntime[Any, Any]) -> Command[Any]:
-        """Asynchronously compact conversation via ``compact_conversation`` tool with transcript sync."""
+        """Asynchronously compact conversation with transcript sync."""
         messages = runtime.state.get("messages", [])
-        thread_id = _resolve_thread_id_from_runtime(runtime, runtime.state)
+        thread_id = _resolve_thread_id_from_runtime(
+            runtime,
+            runtime.state,
+            subagent_name=self._subagent_name,
+        )
         with contextlib.suppress(Exception):
             if messages:
                 await asyncio.to_thread(sync_messages_to_transcript, messages, thread_id)
@@ -2472,9 +2814,13 @@ class CLICompactionMiddleware(SummarizationToolMiddleware):
     def _run_forced_compact(self, runtime: ToolRuntime[Any, Any]) -> Command[Any]:
         tool_call_id = runtime.tool_call_id or ""
         try:
-            summarization = self._summarization_for_runtime(runtime)
+            summarization = self._summarization_for_runtime(runtime, runtime.state)
             messages = runtime.state.get("messages", [])
-            thread_id = _resolve_thread_id_from_runtime(runtime, runtime.state)
+            thread_id = _resolve_thread_id_from_runtime(
+                runtime,
+                runtime.state,
+                subagent_name=self._subagent_name,
+            )
             if hasattr(summarization, "_active_thread_id"):
                 cast(Any, summarization)._active_thread_id = thread_id
             if hasattr(summarization, "_active_runtime"):
@@ -2513,9 +2859,17 @@ class CLICompactionMiddleware(SummarizationToolMiddleware):
     async def _arun_forced_compact(self, runtime: ToolRuntime[Any, Any]) -> Command[Any]:
         tool_call_id = runtime.tool_call_id or ""
         try:
-            summarization = await asyncio.to_thread(self._summarization_for_runtime, runtime)
+            summarization = await asyncio.to_thread(
+                self._summarization_for_runtime,
+                runtime,
+                runtime.state,
+            )
             messages = runtime.state.get("messages", [])
-            thread_id = _resolve_thread_id_from_runtime(runtime, runtime.state)
+            thread_id = _resolve_thread_id_from_runtime(
+                runtime,
+                runtime.state,
+                subagent_name=self._subagent_name,
+            )
             if hasattr(summarization, "_active_thread_id"):
                 cast(Any, summarization)._active_thread_id = thread_id
             if hasattr(summarization, "_active_runtime"):
@@ -2572,8 +2926,10 @@ class CLICompactionMiddleware(SummarizationToolMiddleware):
 def _create_cli_compaction_middleware(
     model: str | BaseChatModel,
     backend: BackendProtocol,
+    *,
+    subagent_name: str | None = None,
 ) -> CLICompactionMiddleware:
-    """Create the TalkOps compaction middleware from the SDK configuration."""
+    """Create the harness-driven TalkOps compaction middleware for main agent or subagents."""
     profile = getattr(model, "profile", None)
     if not isinstance(model, str) and (not isinstance(profile, dict) or not profile.get("max_input_tokens")):
         default_profile = {"max_input_tokens": 128_000}
@@ -2584,18 +2940,11 @@ def _create_cli_compaction_middleware(
         except Exception:
             with contextlib.suppress(Exception):
                 cast(Any, type(model)).profile = property(lambda self: dict(default_profile))
-    sdk_middleware = create_summarization_tool_middleware(model, backend)
     talkops_summarization = _create_talkops_summarization_middleware(model, backend)
-    combined_prompt = sdk_middleware.system_prompt or ""
-    if CONVERSATION_TRANSCRIPT_SYSTEM_SECTION not in combined_prompt:
-        combined_prompt = (
-            f"{combined_prompt}\n\n{CONVERSATION_TRANSCRIPT_SYSTEM_SECTION}".strip()
-            if combined_prompt
-            else CONVERSATION_TRANSCRIPT_SYSTEM_SECTION
-        )
     return CLICompactionMiddleware(
         talkops_summarization,
-        system_prompt=combined_prompt,
+        system_prompt=CONVERSATION_TRANSCRIPT_SYSTEM_SECTION,
+        subagent_name=subagent_name,
     )
 
 
@@ -2640,6 +2989,7 @@ __all__ = [
     "get_step_output_directory_path",
     "get_transcript_path",
     "get_water_fill_allocation",
+    "manual_compaction_requested",
     "microcompact_tool_messages",
     "middle_truncate_bytes",
     "parse_compact_request",

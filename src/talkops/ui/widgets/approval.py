@@ -28,7 +28,7 @@ from textual.content import Content
 from textual.message import Message
 from textual.widgets import Button, Input, Static, TextArea
 
-from talkops.ui.widgets.modal_base import OpsModalScreen
+from talkops.ui.widgets.modal_base import ModalBodyScroll, ModalFooter, OpsModalScreen
 from talkops.ui.widgets.modal_base import escape_markup as escape
 from talkops.utils.logger import get_logger
 
@@ -974,7 +974,8 @@ class ApprovalModalScreen(OpsModalScreen[ApprovalDecided]):
     }
     ApprovalModalScreen #modal-args-scroll {
         height: auto;
-        max-height: 12;
+        min-height: 3;
+        max-height: 25vh;
         background: $background;
         border: round $panel;
         padding: 0 1;
@@ -1034,7 +1035,7 @@ class ApprovalModalScreen(OpsModalScreen[ApprovalDecided]):
             ),
             classes="modal-meta-line",
         )
-        with VerticalScroll(id="modal-args-scroll"):
+        with ModalBodyScroll(id="modal-args-scroll"):
             if rendered.diff_lines:
                 patch = "\n".join(rendered.diff_lines)
                 yield from compose_diff_lines(patch)
@@ -1049,10 +1050,11 @@ class ApprovalModalScreen(OpsModalScreen[ApprovalDecided]):
                 else:
                     details = rendered.details or [f"{k}: {v}" for k, v in self._args.items()]
                     yield Static("\n".join(details))
-        yield TextArea(placeholder="Rejection reason / comments...", id="modal-comment")
-        with Container(classes="modal-buttons"):
-            yield Button("CONFIRM EXECUTION (y)", variant="error", id="btn-modal-approve")
-            yield Button("CANCEL / REJECT (n)", variant="default", id="btn-modal-reject")
+        with ModalFooter(id="modal-approval-footer"):
+            yield TextArea(placeholder="Rejection reason / comments...", id="modal-comment")
+            with Container(classes="modal-buttons"):
+                yield Button("CONFIRM EXECUTION (y)", variant="error", id="btn-modal-approve")
+                yield Button("CANCEL / REJECT (n)", variant="default", id="btn-modal-reject")
 
     @on(Button.Pressed, "#btn-modal-approve")
     def action_approve(self) -> None:

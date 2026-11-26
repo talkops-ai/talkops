@@ -12,6 +12,7 @@ You can control TalkOps in two ways:
 [`serve`](#talkops-serve-aliases-webhook-webhooks) ·
 [`auth`](#talkops-auth) ·
 [`threads`](#talkops-threads) ·
+[`openwiki`](#talkops-openwiki-alias-wiki) ·
 [`mcp`](#talkops-mcp) ·
 [`plugin`](#talkops-plugin-alias-plugins) ·
 [`addon`](#talkops-addon-alias-addons) ·
@@ -230,6 +231,30 @@ talkops plugin list
 
 ---
 
+### `talkops openwiki` (Alias: `wiki`)
+
+Compiles, updates, and queries the durable **`openwiki/`** repository knowledge base deterministically from the terminal or CI/CD pipelines (see the full **[OpenWiki Guide](openwiki.md)**).
+
+```bash
+# Check initialization status, compiled pages, and Git drift
+talkops openwiki status --json
+
+# Scaffold and deterministically compile openwiki/ + Grounded Claims
+talkops openwiki init [--force] [--brief "Focus on Terraform & K8s"]
+
+# Incrementally refresh drifted pages and claims after new commits
+talkops openwiki update
+
+# Query compiled OpenWiki pages via BM25 + graph-expanded search
+talkops openwiki ask "How do inbound webhooks route to Slack?"
+
+# Append a standing rule to openwiki/INSTRUCTIONS.md or repair AGENTS.md/CLAUDE.md links
+talkops openwiki brief "Run pytest -q tests/unit_tests before PRs"
+talkops openwiki link
+```
+
+---
+
 ### `talkops skills`, `talkops agents`, `talkops mcp`, `talkops addon` & `talkops doctor`
 
 | Command | Common Usage | What It Does |
@@ -351,6 +376,8 @@ Every `/slash` command below works both when running locally and when connected 
 | **`/mcp`** | `/mcp` | Opens the MCP Tool Server manager to check tool health or reconnect external servers. |
 | **`/remember`** | `/remember <note>` | Saves a rule or project detail (for example, `/remember Our prod EKS cluster is in ap-south-1`) so TalkOps remembers it in future sessions. |
 | **`/memory`** | `/memory` | Views or edits what TalkOps has saved in project and personal memory. |
+| **`/openwiki`** | `/openwiki [status\|init\|update\|ask\|brief\|link]` *(aliases: `/wiki`, `/skill:openwiki`)* | Compiles, updates, or queries the durable `openwiki/` repository knowledge base with SHA-256 Grounded Claims ([OpenWiki Guide](openwiki.md)). |
+| **`/browser`** | `/browser <task>` or `/browser [status\|mode\|disconnect]` *(alias: `/web`)* | Delegates web browsing and SaaS UI tasks to the isolated Chrome/Stagehand `browser` subagent, or manages the Chrome connection ([Browser Automation Guide](browser-automation.md)). |
 
 <p align="center">
   <img src="../assets/cli-agent-persona.png" alt="TalkOps interactive TUI activating the aws-cloud-security-engineer persona via /agent:aws-cloud-security-engineer" width="100%">

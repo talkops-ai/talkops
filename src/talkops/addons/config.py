@@ -48,20 +48,109 @@ from talkops.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-ServerProfileName = Literal["default", "api-only", "webhook-worker", "enterprise-full"]
+ServerProfileName = Literal["default", "api-only", "webhook-worker", "sre", "enterprise-full"]
 
 # Built-in profiles. External packages or `addons.json` can also register/extend profiles.
 SERVER_PROFILES: dict[str, tuple[str, ...]] = {
-    "default": ("client-gateway", "core-auth", "webhooks"),
+    "default": ("client-gateway", "core-auth", "webhooks", "channels"),
     "api-only": ("client-gateway", "core-auth"),
-    "webhook-worker": ("webhooks",),
-    "enterprise-full": ("client-gateway", "core-auth", "webhooks"),
+    "webhook-worker": ("webhooks", "channels", "context-graph"),
+    "sre": (
+        "client-gateway",
+        "core-auth",
+        "webhooks",
+        "channels",
+        "context-graph",
+        "intelligence",
+    ),
+    "enterprise-full": (
+        "client-gateway",
+        "core-auth",
+        "webhooks",
+        "channels",
+        "context-graph",
+        "intelligence",
+    ),
 }
 
 
 def register_server_profile(name: str, addon_names: tuple[str, ...] | list[str]) -> None:
     """Register or override a named server profile (usable by external addon packages)."""
     SERVER_PROFILES[name.strip().lower()] = tuple(addon_names)
+
+
+def is_sre_profile_active(
+    profile: str | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Return True ONLY when an SRE server profile (`sre`, `webhook-worker`, `enterprise-full`) or SRE addon is active.
+
+    Regular TUI (`talkops`), one-shot CLI (`talkops -p`), and `default`/`api-only` server profiles
+    all return False so SRE workflow tools and middlewares never leak into standard sessions.
+    """
+    env = environ if environ is not None else os.environ
+    disabled = {
+        s.strip().lower()
+        for s in (env.get("TALKOPS_DISABLE_ADDONS") or "").split(",")
+        if s.strip()
+    }
+    explicit_addons = {
+        s.strip().lower()
+        for s in (env.get("TALKOPS_ADDONS") or "").split(",")
+        if s.strip()
+    } - disabled
+    if explicit_addons & {"context-graph", "intelligence"}:
+        return True
+
+    raw_prof = (
+        profile
+        if profile is not None
+        else (env.get("TALKOPS_SERVER_PROFILE") or env.get("TALKOPS_PROFILE") or "")
+    ).strip().lower()
+    if not raw_prof:
+        return False
+    if raw_prof in SERVER_PROFILES:
+        prof_addons = set(SERVER_PROFILES[raw_prof]) - disabled
+        return bool(prof_addons & {"context-graph", "intelligence"})
+    return "sre" in raw_prof
+
+
+def is_webhook_server_active(
+    profile: str | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Return True ONLY when running `talkops serve` with webhooks/channels enabled (never in regular TUI/CLI)."""
+    if is_sre_profile_active(profile, environ=environ):
+        return True
+    env = environ if environ is not None else os.environ
+    disabled = {
+        s.strip().lower()
+        for s in (env.get("TALKOPS_DISABLE_ADDONS") or "").split(",")
+        if s.strip()
+    }
+    explicit_addons = {
+        s.strip().lower()
+        for s in (env.get("TALKOPS_ADDONS") or "").split(",")
+        if s.strip()
+    } - disabled
+    if explicit_addons & {"webhooks", "channels"}:
+        return True
+
+    raw_prof = (
+        profile
+        if profile is not None
+        else (env.get("TALKOPS_SERVER_PROFILE") or env.get("TALKOPS_PROFILE") or "")
+    ).strip().lower()
+    is_central = str(env.get("TALKOPS_CENTRAL_SERVER") or "").strip().lower() in {"1", "true", "yes"}
+    if not raw_prof and not is_central:
+        return False
+    effective_prof = raw_prof or "default"
+    if effective_prof in SERVER_PROFILES:
+        prof_addons = set(SERVER_PROFILES[effective_prof]) - disabled
+        return bool(prof_addons & {"webhooks", "channels"})
+    return True
 
 
 class AddonSettings(BaseModel):

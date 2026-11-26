@@ -20,6 +20,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from talkops.webhooks.entities import resolve_cloudwatch_primary_service
 from talkops.webhooks.models import (
     NormalizedWebhookEvent,
     WebhookConfig,
@@ -167,6 +168,7 @@ class SNSWebhookAdapter(WebhookProviderAdapter):
         namespace = str(trigger.get("Namespace") or "")
         metric_name = str(trigger.get("MetricName") or "")
         dimensions = trigger.get("Dimensions") or []
+        resolved_service = resolve_cloudwatch_primary_service(dimensions, namespace, alarm_name)
 
         return NormalizedWebhookEvent(
             provider=self.name,
@@ -177,7 +179,7 @@ class SNSWebhookAdapter(WebhookProviderAdapter):
             summary=reason,
             severity=severity,
             status=status,
-            service_name=namespace or alarm_name,
+            service_name=resolved_service or namespace or alarm_name,
             raw_payload=outer,
             metadata={
                 "alarm_name": alarm_name,

@@ -35,7 +35,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -50,7 +50,6 @@ from talkops.server.auth import (
     auth,
     authenticate_request,
     clear_auth_caches,
-    exchange_api_key_for_temp_token,
     issue_temporary_jwt,
     on_store_access,
     on_thread_access,
@@ -68,7 +67,6 @@ from talkops.state.remote_session import (
     RemoteSessionBackend,
     clear_remote_client_context,
     get_cached_temporary_token,
-    set_remote_client_context,
 )
 
 # ── 1. LangGraph Custom Auth & Multi-User Isolation Tests ─────────────────

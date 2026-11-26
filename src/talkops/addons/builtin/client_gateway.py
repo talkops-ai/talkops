@@ -32,7 +32,6 @@ from starlette.routing import BaseRoute, Route
 from talkops.addons.config import AddonSettings
 from talkops.addons.protocol import (
     AddonCapabilities,
-    AddonContext,
     AddonHealthStatus,
     AddonTier,
     BaseServerAddon,
@@ -87,6 +86,9 @@ async def server_info_endpoint(request: Request) -> JSONResponse:
     if err_resp is not None:
         return err_resp
 
+    from talkops.server._server_config import ServerConfig
+
+    server_cfg = ServerConfig.from_env()
     storage_backend = "postgres" if get_postgres_session_uri() else "sqlite"
     addon_mgr = getattr(request.app.state, "addon_manager", None)
     active_addons = (
@@ -105,6 +107,9 @@ async def server_info_endpoint(request: Request) -> JSONResponse:
             "user_id": user_id,
             "profile": profile,
             "active_addons": active_addons,
+            "model": server_cfg.model,
+            "explicit_model": server_cfg.explicit_model,
+            "read_only": server_cfg.read_only,
         },
         status_code=200,
     )

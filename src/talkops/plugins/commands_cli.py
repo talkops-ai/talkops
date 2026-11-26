@@ -82,13 +82,15 @@ def setup_plugin_parser(
         add_output_args = add_json_output_arg
 
     def _default_help() -> None:
-        print("Usage: talkops plugin {list,install,uninstall,enable,disable,marketplace}")
+        print(
+            "Usage: talkops plugin {list,search,install,uninstall,enable,disable,refresh,test,marketplace}"
+        )
 
     parent = argparse.ArgumentParser(add_help=False)
     if make_help_action is not None:
         parent.add_argument("-h", "--help", action=make_help_action(_default_help))
     else:
-        parent.add_argument("-h", "--help", action="help")
+        parent.add_argument("-h", "--help", action="help", help="show this help message and exit")
 
     parser = subparsers.add_parser(
         "plugin",
@@ -158,6 +160,17 @@ def setup_plugin_parser(
     )
     add_output_args(refresh_parser)
 
+    test_parser = plugin_sub.add_parser(
+        "test",
+        aliases=["simulate"],
+        help="Execute synthetic & adversarial SRE simulation scenarios for a plugin or scenario file",
+    )
+    test_parser.add_argument(
+        "target",
+        help="Path to a plugin directory, simulations/ directory, or YAML/JSON scenario file",
+    )
+    add_output_args(test_parser)
+
     marketplace_parser = plugin_sub.add_parser(
         "marketplace", help="Manage plugin marketplaces"
     )
@@ -225,6 +238,7 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
             print(text)
             return text
 
+        from talkops.plugins.discovery import discover_plugins
         from talkops.plugins.store import (
             load_all_enabled_plugin_ids,
             load_installed_plugins,
@@ -235,12 +249,19 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
             include_foreign_projects=False,
         )
         enabled_ids = load_all_enabled_plugin_ids(project_root=project_root)
+        discovered_ws = [
+            p
+            for p in discover_plugins(project_root=project_root).plugins
+            if p.is_workspace_plugin and p.plugin_id not in installed_ids
+        ]
 
         lines: list[str] = []
         lines.append("Installed Plugins:")
-        if not installed_ids:
+        if not installed_ids and not discovered_ws:
             lines.append("  (none installed)")
         else:
+            for ws_p in discovered_ws:
+                lines.append(f"  • {ws_p.plugin_id} [enabled, workspace]")
             for pid in sorted(installed_ids):
                 status = "enabled" if pid in enabled_ids else "disabled"
                 lines.append(f"  • {pid} [{status}]")
@@ -567,6 +588,50 @@ def execute_plugin_command(args: argparse.Namespace) -> str | None:
         text = "\n".join(lines)
         print(text)
         return text
-    text = "Usage: talkops plugin {list,search,install,uninstall,enable,disable,refresh,marketplace}"
+    if command in {"test", "simulate"}:
+        import asyncio
+        import concurrent.futures
+        import sys
+
+        from talkops.plugins.simulator import PluginSimulator, load_simulation_scenario
+
+        target_path = Path(args.target)
+        sim = PluginSimulator()
+
+        def _run_coro(coro: Any) -> Any:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(coro)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, coro).result()
+
+        if target_path.is_dir():
+            sim_dir = (
+                target_path / "simulations"
+                if (target_path / "simulations").is_dir()
+                else target_path
+            )
+            report = _run_coro(sim.run_directory_suite(sim_dir))
+            text = json.dumps(report.to_dict(), indent=2)
+            print(text)
+            if not report.passed:
+                raise SystemExit(1)
+            return None if output_format == "json" else text
+        if target_path.is_file():
+            sc = load_simulation_scenario(target_path)
+            res = _run_coro(sim.run_scenario(sc))
+            text = json.dumps(res.to_dict(), indent=2)
+            print(text)
+            if not res.passed:
+                raise SystemExit(1)
+            return None if output_format == "json" else text
+        err_text = f"Error: simulation target not found: {target_path}"
+        print(err_text, file=sys.stderr)
+        raise SystemExit(1)
+    text = (
+        "Usage: talkops plugin "
+        "{list,search,install,uninstall,enable,disable,refresh,test,marketplace}"
+    )
     print(text)
     return text

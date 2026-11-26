@@ -53,11 +53,48 @@ def _format_tool_activity(name: str, tool_args: Mapping[str, Any] | None) -> str
         path = str(args.get("file_path") or args.get("path") or args.get("TargetFile") or args.get("AbsolutePath") or "").strip()
         return f"{name}: {path}" if path else name
 
-    if name in {"grep_search", "file_search", "glob"}:
+    if name in {"grep_search", "file_search", "glob", "grep"}:
         pattern = str(args.get("query") or args.get("pattern") or args.get("Query") or "").strip()
         if len(pattern) > 30:
             pattern = pattern[:27] + "..."
         return f"{name}: {pattern}" if pattern else name
+
+    if name == "snapshot":
+        return "browser: snapshot page"
+    if name == "screenshot":
+        return "browser: capture screenshot"
+    if name == "browser_handoff":
+        reason = str(args.get("reason") or "waiting for user").strip()
+        if len(reason) > 45:
+            reason = reason[:42] + "..."
+        return f"browser handoff: {reason}"
+    if name == "run":
+        code = str(args.get("code") or "").strip()
+        if code:
+            goto_match = re.search(r"page\.goto\(\s*['\"`]([^'\"`]+)['\"`]", code)
+            if goto_match:
+                target_url = goto_match.group(1)
+                if len(target_url) > 50:
+                    target_url = target_url[:47] + "..."
+                return f"browser: goto {target_url}"
+            first_line = code.splitlines()[0].strip()
+            if len(first_line) > 50:
+                first_line = first_line[:47] + "..."
+            return f"browser: {first_line}"
+        actions = args.get("actions")
+        if isinstance(actions, list) and actions:
+            parts: list[str] = []
+            for act in actions[:3]:
+                if isinstance(act, Mapping):
+                    op = str(act.get("op") or act.get("type") or "act")
+                    target = str(act.get("id") or act.get("ref") or act.get("url") or "")
+                    parts.append(f"{op} [{target}]" if target else op)
+            if parts:
+                summary = ", ".join(parts)
+                if len(actions) > 3:
+                    summary += f" (+{len(actions) - 3} more)"
+                return f"browser: {summary}"
+        return "browser: run"
 
     # MCP tool parsing
     server_scope: str | None = None

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, override
 
@@ -74,20 +75,10 @@ MAX_INLINE_FAST_OUTPUT_CHARS = 80_000
 
 BACKGROUND_EXEC_SYSTEM_INSTRUCTIONS = """\
 ## Non-Blocking Background Command Execution (`execute` & `manage_task`)
-- The `execute` tool supports `wait_ms_before_async` (default `5000` ms, range `100`–`10000` ms) and `is_daemon` (default `False`).
-- Commands that complete within `wait_ms_before_async` return their full output synchronously.
-- Commands still running after `wait_ms_before_async` are automatically sent to the background and return a `task_id`, `pid`, `log_path`, and partial output immediately so your turn is never blocked.
-- For interactive or known long-running commands (`terraform apply`, `kubectl rollout status`, test suites, builds), set `wait_ms_before_async` to a smaller value (e.g. `1000`–`3000` ms).
-- For persistent background services (dev servers, port-forwards, tunnels, watchers), set `is_daemon=True`.
-- **IMPORTANT — Reactive Wakeup (Do NOT Poll in a Loop)**:
-  - Never loop or repeatedly call `manage_task(action="status")` to wait for a background command to finish.
-  - Once a command is detached to the background, inform the user or proceed with other independent work and end your turn.
-  - The system automatically wakes you with a `<background_task_notification>` as soon as a non-daemon background command completes or pauses for interactive stdin input.
-- Use `manage_task` to:
-  - `list`: View all active and recent background tasks in this session.
-  - `status`: Check a specific task's status and recent log lines (`task_id`).
-  - `send_input`: Send stdin text (`input_text`) to a task waiting at an interactive prompt (`task_id`).
-  - `kill`: Terminate a running background task (`task_id`)."""
+- `execute` supports `wait_ms_before_async` (default `5000` ms, range `100`–`10000` ms; use `1000`–`3000` ms for long-running rollouts/applies/tests) and `is_daemon` (default `False`; set `True` for persistent servers, tunnels, or port-forwards).
+- Commands finishing within `wait_ms_before_async` return synchronously; commands exceeding it detach to the background and deliver a reactive `<background_task_notification>` automatically upon completion or stdin prompt.
+- **Async Termination Rule**: After launching a background task via `execute`, YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: A) proceed to other independent work, or B) briefly inform the user that the task is running in the background and end the turn. NEVER run shell `sleep` or poll `manage_task(action="status")` in a loop.
+- Use `manage_task` for `list`, `status`, `send_input` (`input_text`), or `kill` (`task_id`)."""
 
 
 class AsyncExecuteSchema(BaseModel):
@@ -108,9 +99,10 @@ class AsyncExecuteSchema(BaseModel):
         description=(
             "Milliseconds to wait before sending the command to the background "
             f"({MIN_WAIT_MS_BEFORE_ASYNC}–{MAX_WAIT_MS_BEFORE_ASYNC}ms, default "
-            f"{DEFAULT_WAIT_MS_BEFORE_ASYNC}ms). If the command finishes within this "
-            "window, its output is returned synchronously; otherwise it detaches "
-            "as a background task and notifies you when done."
+            f"{DEFAULT_WAIT_MS_BEFORE_ASYNC}ms). Commands that do not finish within "
+            "the specified wait time continue running in the background as tasks; "
+            "the system will notify you when they finish, so do not poll their "
+            "status or use a shell sleep command as a timer to check on them."
         ),
     )
     is_daemon: bool = Field(
@@ -217,6 +209,35 @@ def _format_fast_output(result: FastExecResult) -> str:
     return "\n".join(parts)
 
 
+def _format_last_progress(
+    updated_at: float | None,
+    log_path: str | Path | None = None,
+) -> str:
+    """Format human-readable duration since the task last produced output."""
+    ts: float | None = None
+    if isinstance(updated_at, (int, float)) and updated_at > 0:
+        ts = float(updated_at)
+    if log_path:
+        try:
+            p = Path(log_path)
+            if p.exists():
+                mtime = p.stat().st_mtime
+                if ts is None or mtime > ts:
+                    ts = mtime
+        except OSError:
+            pass
+    if ts is None:
+        return "never"
+    delta = max(0.0, time.time() - ts)
+    if delta < 60.0:
+        return f"{delta:.1f}s ago"
+    minutes, seconds = divmod(int(delta), 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds}s ago"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m ago"
+
+
 def _format_detached_output(result: DetachedExecResult) -> str:
     """Format the immediate ``ToolMessage`` returned when a command is detached."""
     handle = result.handle
@@ -232,9 +253,13 @@ def _format_detached_output(result: DetachedExecResult) -> str:
         "background. Use `manage_task` (`status`, `send_input`, `kill`, `list`) to inspect or stop it."
         if handle.is_daemon
         else (
-            "IMPORTANT: Do NOT poll `manage_task` in a loop to wait for completion. "
-            "You will be automatically notified when this command finishes or if it needs stdin input. "
-            "Proceed with other work or finish your turn and inform the user."
+            "YOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: "
+            "A) either proceed to other relevant independent work (if any) or, "
+            "B) simply update the user with a short message (that you have launched "
+            "the command in the background and will wait for it to finish) and end the turn.\n"
+            "DO NOTHING ELSE. Never use a shell `sleep` command as a timer or call "
+            "`manage_task(action=\"status\")` to wait for completion — the system will "
+            "automatically notify you when this background task finishes or needs stdin input."
         )
     )
     return (
@@ -336,11 +361,17 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
 
             if action == "list":
                 records = manager.list_tasks(thread_id, include_completed=True)
+                if not records and thread_id == "default":
+                    records = manager.list_tasks(None, include_completed=True)
                 state_records = (
                     dict(state.get("background_tasks") or {})
                     if isinstance(state, dict)
                     else {}
                 )
+                for tid in list(state_records.keys()):
+                    live_handle = manager.get_task(tid, thread_id=thread_id)
+                    if live_handle is not None:
+                        state_records[tid] = live_handle.to_record()
                 merged_by_id: dict[str, BackgroundTaskRecord] = {
                     **state_records,
                     **{r["task_id"]: r for r in records},
@@ -352,6 +383,13 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
                         tool_call_id=tool_call_id,
                         status="success",
                     )
+                _emit_stream_event(
+                    {
+                        "type": "task_snapshot",
+                        "thread_id": thread_id,
+                        "tasks": list(merged_by_id.values()),
+                    }
+                )
                 lines = ["### Background Tasks", ""]
                 for tid, rec in sorted(
                     merged_by_id.items(),
@@ -403,14 +441,26 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
                         log_file = Path(str(persisted.get("log_path") or ""))
                         if log_file.exists():
                             try:
-                                raw = log_file.read_text(encoding="utf-8", errors="replace")
-                                tail = "\n".join(raw.splitlines()[-tail_lines:])
+                                from talkops.tasks.manager import read_log_tail
+
+                                raw = await asyncio.to_thread(
+                                    read_log_tail,
+                                    log_file,
+                                    max(65536, tail_lines * 512),
+                                )
+                                if raw:
+                                    tail = "\n".join(raw.splitlines()[-tail_lines:])
                             except OSError:
                                 pass
+                        last_prog = _format_last_progress(
+                            persisted.get("updated_at"),
+                            persisted.get("log_path"),
+                        )
                         msg = (
                             f"Task `{clean_id}`\n"
                             f"- status: `{persisted.get('status')}`\n"
                             f"- exit_code: `{persisted.get('exit_code')}`\n"
+                            f"- last_progress: `{last_prog}`\n"
                             f"- command: `{persisted.get('command')}`\n"
                             f"- log_path: `{persisted.get('log_path')}`\n\n"
                             f"Recent output:\n{tail}"
@@ -429,12 +479,21 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
                     )
 
                 rec = handle.to_record()
+                _emit_stream_event(
+                    {
+                        "type": "background_task",
+                        "phase": "complete" if not handle.is_active() else handle.status,
+                        **rec,
+                    }
+                )
                 output = handle.get_output(tail_chars=8000, tail_lines=tail_lines).strip() or "(no output yet)"
+                last_prog = _format_last_progress(handle.updated_at, handle.log_path)
                 msg = (
                     f"Task `{handle.task_id}`\n"
                     f"- status: `{handle.status}`\n"
                     f"- pid: `{handle.pid}`\n"
                     f"- elapsed: `{handle.elapsed_seconds():.1f}s`\n"
+                    f"- last_progress: `{last_prog}`\n"
                     f"- exit_code: `{handle.exit_code}`\n"
                     f"- command: `{handle.command}`\n"
                     f"- log_path: `{handle.log_path}`\n\n"
@@ -536,7 +595,10 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
                         f"{base_desc.rstrip()}\n\n"
                         "Non-blocking execution: Specify `wait_ms_before_async` (default 5000ms) "
                         "to automatically detach long-running commands to the background without "
-                        "blocking the turn, or `is_daemon=True` for persistent background servers/watchers."
+                        "blocking the turn, or `is_daemon=True` for persistent background servers/watchers. "
+                        "Commands that do not finish within the specified wait time continue running in "
+                        "the background as tasks; the system will notify you when they finish, so do not "
+                        "poll their status or use a shell sleep command as a timer to check on them."
                     )
                 updated_tools.append(cloned)
                 tools_changed = True
@@ -547,10 +609,22 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
         new_sys_msg = sys_msg
         if sys_msg is not None:
             content = getattr(sys_msg, "content", "")
-            if isinstance(content, str) and "manage_task" not in content:
-                new_sys_msg = SystemMessage(
-                    content=f"{content.rstrip()}\n\n{BACKGROUND_EXEC_SYSTEM_INSTRUCTIONS}"
+            if isinstance(content, str):
+                if "## Non-Blocking Background Command Execution" not in content:
+                    new_sys_msg = SystemMessage(
+                        content=f"{content.rstrip()}\n\n{BACKGROUND_EXEC_SYSTEM_INSTRUCTIONS}"
+                    )
+            elif isinstance(content, list):
+                flat_text = "".join(
+                    b.get("text", "") if isinstance(b, dict) else str(b)
+                    for b in content
                 )
+                if "## Non-Blocking Background Command Execution" not in flat_text:
+                    from deepagents.middleware._utils import append_to_system_message
+
+                    new_sys_msg = append_to_system_message(
+                        sys_msg, BACKGROUND_EXEC_SYSTEM_INSTRUCTIONS
+                    )
         else:
             new_sys_msg = SystemMessage(content=BACKGROUND_EXEC_SYSTEM_INSTRUCTIONS)
 
@@ -616,6 +690,20 @@ class BackgroundCommandMiddleware(AgentMiddleware[BackgroundTaskChannels, Contex
         update: dict[str, Any] = {}
         if updated_records:
             update["background_tasks"] = updated_records
+            for rec in updated_records.values():
+                rec_status = str(rec.get("status") or "running")
+                _emit_stream_event(
+                    {
+                        "type": "background_task",
+                        "phase": (
+                            "complete"
+                            if rec_status not in {"running", "waiting_for_input"}
+                            else rec_status
+                        ),
+                        **rec,
+                    },
+                    runtime=runtime,
+                )
 
         if notifications:
             # Check if the latest message in state is already a wakeup prompt for these notifications

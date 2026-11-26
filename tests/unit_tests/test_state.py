@@ -14,9 +14,8 @@
 
 """Comprehensive unit tests for TalkOps state channels, cloud context, and sessions."""
 
-import asyncio
 from pathlib import Path
-from typing import Any, get_type_hints
+from typing import get_type_hints
 
 import pytest
 from langchain.agents.middleware.types import PrivateStateAttr
@@ -27,7 +26,6 @@ from talkops.state.base import AgentState, BaseAgentState, TalkOpsAgentState
 from talkops.state.cloud_context import (
     CloudContextState,
     CloudEnvironmentContext,
-    CloudResourceRef,
     _merge_cloud_context,
     _merge_cloud_resources,
     coerce_cloud_provider,
@@ -43,9 +41,7 @@ from talkops.state.goal_channels import (
 )
 from talkops.state.resume_state import ResumeState
 from talkops.state.service_context import (
-    ManagedService,
     ServiceContextState,
-    ServiceOperationRecord,
     _merge_managed_services,
     _merge_operations_log,
     _merge_plugin_state,
@@ -54,16 +50,11 @@ from talkops.state.service_context import (
     make_service_record,
 )
 from talkops.state.session import (
-    SessionManager,
     _count_messages_from_deltas,
-    _visible_message_count,
     delete_thread,
     find_similar_threads,
-    format_relative_timestamp,
-    format_timestamp,
     generate_thread_id,
     get_checkpointer,
-    get_db_path,
     list_threads,
     prewarm_thread_message_counts,
     set_db_path,

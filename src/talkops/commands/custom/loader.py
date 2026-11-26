@@ -164,6 +164,8 @@ def load_custom_command_file(
     source: CustomCommandSource = "userSettings",
     namespace_prefix: str | None = None,
     plugin_name: str | None = None,
+    plugin_id: str | None = None,
+    is_agent_plugin: bool = False,
     plugin_root: Path | None = None,
     plugin_data_dir: Path | None = None,
     project_dir: Path | None = None,
@@ -218,6 +220,8 @@ def load_custom_command_file(
         source=source,
         loaded_from=loaded_from,  # type: ignore[arg-type]
         plugin_name=plugin_name,
+        plugin_id=plugin_id,
+        is_agent_plugin=is_agent_plugin,
         plugin_root=plugin_root,
         plugin_data_dir=plugin_data_dir,
         aliases=aliases,
@@ -225,11 +229,53 @@ def load_custom_command_file(
     )
 
 
+def _resolve_target_agent_for_plugin_command(
+    plugin: Any,
+    explicit_agent: str | None,
+    fallback_id: str,
+) -> str:
+    """Resolve the compiled subagent identifier for an agent-plugin command shortcut."""
+    try:
+        from talkops.plugins.adapters.agents import plugin_subagents
+
+        subs = plugin_subagents((plugin,))
+    except Exception:
+        subs = []
+
+    if explicit_agent and explicit_agent.strip():
+        wanted = explicit_agent.strip()
+        wanted_low = wanted.lower()
+        for sub in subs:
+            full = str(sub.get("name") or "").strip()
+            if not full:
+                continue
+            short = full.rsplit(":", 1)[-1]
+            if "@" in short:
+                short = short.split("@", 1)[0]
+            if full.lower() == wanted_low or short.lower() == wanted_low:
+                return full
+        return wanted
+
+    if subs:
+        first_name = str(subs[0].get("name") or "").strip()
+        if first_name:
+            return first_name
+    return fallback_id
+
+
 def _discover_plugin_command_defs(
     project_dir: Path | None,
     seen_identities: set[str],
 ) -> list[CustomCommandDefinition]:
-    """Scan enabled plugins' `commands/` directories for custom commands."""
+    """Scan enabled plugins' `commands/` directories for custom commands.
+
+    Note:
+    - Agent plugins (`plugin.is_agent_plugin == True`) ONLY expose commands if
+      they explicitly ship `commands/*.md` files; their internal `skills/` are
+      never exposed here. Each discovered agent-plugin command is stamped with
+      `is_agent_plugin=True` and its owning subagent ID so execution routes
+      deterministically to the compiled plugin subagent runnable.
+    """
     from talkops.config.paths import PLUGIN_DATA_DIR
 
     results: list[CustomCommandDefinition] = []
@@ -242,18 +288,42 @@ def _discover_plugin_command_defs(
         plugins = ()
 
     for plugin in plugins:
+        is_agent_plugin = bool(getattr(plugin, "is_agent_plugin", False))
         p_name = getattr(plugin, "name", None) or getattr(getattr(plugin, "manifest", None), "name", "plugin")
+        p_id = str(getattr(plugin, "plugin_id", None) or p_name)
         p_root = Path(getattr(plugin, "root", None) or getattr(plugin, "root_path", "."))
-        p_data = PLUGIN_DATA_DIR / str(p_name)
+        p_data = Path(getattr(plugin, "data_dir", None) or (PLUGIN_DATA_DIR / str(p_name)))
 
         cmd_paths: list[Path] = []
         inv = getattr(plugin, "inventory", None)
-        if inv is not None and getattr(inv, "commands", None):
-            cmd_paths.extend(Path(p) for p in inv.commands)
+        if inv is not None:
+            if getattr(inv, "commands", None):
+                cmd_paths.extend(Path(p) for p in inv.commands)
         else:
             cmd_dir = p_root / "commands"
             if cmd_dir.exists():
                 cmd_paths.append(cmd_dir)
+
+        if not cmd_paths:
+            continue
+
+        def _finalize_plugin_cmd(cmd_def: CustomCommandDefinition | None) -> None:
+            if cmd_def is None:
+                return
+            if is_agent_plugin:
+                target_agent = _resolve_target_agent_for_plugin_command(
+                    plugin,
+                    cmd_def.frontmatter.agent,
+                    p_id,
+                )
+                cmd_def.frontmatter.agent = target_agent
+                raw_fm = cmd_def.frontmatter.raw or {}
+                if (
+                    "disable-model-invocation" not in raw_fm
+                    and "disable_model_invocation" not in raw_fm
+                ):
+                    cmd_def.frontmatter.disable_model_invocation = True
+            results.append(cmd_def)
 
         for cmd_path in cmd_paths:
             if not cmd_path.exists():
@@ -270,12 +340,13 @@ def _discover_plugin_command_defs(
                         source="plugin",
                         namespace_prefix=str(p_name),
                         plugin_name=str(p_name),
+                        plugin_id=p_id,
+                        is_agent_plugin=is_agent_plugin,
                         plugin_root=p_root,
                         plugin_data_dir=p_data,
                         project_dir=project_dir,
                     )
-                    if cmd_def is not None:
-                        results.append(cmd_def)
+                    _finalize_plugin_cmd(cmd_def)
             elif cmd_path.is_file() and cmd_path.suffix.lower() == ".md":
                 ident = _file_identity_key(cmd_path)
                 if ident in seen_identities:
@@ -287,12 +358,29 @@ def _discover_plugin_command_defs(
                     source="plugin",
                     namespace_prefix=str(p_name),
                     plugin_name=str(p_name),
+                    plugin_id=p_id,
+                    is_agent_plugin=is_agent_plugin,
                     plugin_root=p_root,
                     plugin_data_dir=p_data,
                     project_dir=project_dir,
                 )
-                if cmd_def is not None:
-                    results.append(cmd_def)
+                _finalize_plugin_cmd(cmd_def)
+
+    # Remove colliding un-namespaced short aliases across multiple plugins (e.g. `setup`)
+    # so `/plugin-a:setup` and `/plugin-b:setup` remain unambiguous while unique shortcuts work.
+    short_alias_counts: dict[str, int] = {}
+    for cmd_def in results:
+        for alias in cmd_def.aliases:
+            if ":" not in alias:
+                key = alias.lower().strip()
+                short_alias_counts[key] = short_alias_counts.get(key, 0) + 1
+    for cmd_def in results:
+        cmd_def.aliases = [
+            a
+            for a in cmd_def.aliases
+            if ":" in a or short_alias_counts.get(a.lower().strip(), 0) <= 1
+        ]
+
     return results
 
 

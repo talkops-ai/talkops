@@ -16,30 +16,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from talkops.config.settings import (
-    get_glyphs,
-    is_ascii_mode,
-)
 from talkops.ui import theme
-from talkops.ui.widgets._js_eval_display import (
-    JsEvalBlock,
-    JsEvalError,
-    JsEvalResult,
-    JsEvalStdout,
-    parse_js_eval_blocks,
-)
-from talkops.ui.widgets.diff import compose_diff_lines
-from talkops.ui.widgets.loading import format_duration
-from talkops.ui.widgets.tool_display import (
-    format_tool_display,
-)
 from talkops.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from textual.widget import Widget
+    pass
 
 logger = get_logger(__name__)
 

@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from talkops.ui.theme import DARK_COLORS, LIGHT_COLORS
+from talkops.ui.theme import DARK_COLORS
 from talkops.ui.widgets.devops_renderers import (
     AnsiblePlaybookRenderer,
     HelmDiffRenderer,

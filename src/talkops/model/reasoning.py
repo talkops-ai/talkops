@@ -27,11 +27,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from talkops.model.config import (
-    MODEL_PROFILES,
     ModelSpec,
     detect_provider,
     get_model_profiles,
-    normalize_model_spec,
 )
 from talkops.model.config import (
     get_model_profile as _config_get_model_profile,
@@ -271,7 +269,7 @@ def with_effort_model_params(model_spec: str | None, existing: dict[str, Any] | 
 
     provider = _resolve_provider(model_spec)
     if provider in ("google_genai", "google", "google_vertexai"):
-        valid_level = eff_lower if eff_lower in ("minimal", "low", "medium", "high") else "medium"
+        valid_level = eff_lower if eff_lower in ("minimal", "low", "medium", "high", "xhigh") else "medium"
         updated["reasoning_effort"] = valid_level
         updated["include_thoughts"] = True
     elif provider == "anthropic":

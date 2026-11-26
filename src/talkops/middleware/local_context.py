@@ -26,8 +26,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-import logging
-import os
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -58,7 +56,7 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from deepagents.backends.protocol import BackendProtocol, ExecuteResponse
+    from deepagents.backends.protocol import BackendProtocol
     from deepagents.middleware.summarization import SummarizationEvent
     from langgraph.runtime import Runtime
 
@@ -173,32 +171,28 @@ def _build_cloud_context() -> str:
         profile_name = ctx.profile or get_active_aws_profile()
         region_name = ctx.region or get_active_aws_region() or "us-east-1"
 
-        lines = [
-            "**AWS Operational Environment**:",
-            f"- Active Profile: `{profile_name}`",
-            f"- Region: `{region_name}`",
-            f"- Account: `{ctx.account_id or 'unknown'}`",
-            f"- Identity ARN: `{ctx.arn or 'configured'}`",
-            f"- Authentication Status: **{'Authenticated' if ctx.authenticated else ('Ambient Service Role' if profile_name == '@ambient' else 'Active Named Profile')}**",
-            f"- Execution Notice: Shell commands (`aws ...`), AWS SDK, and Terraform automatically execute under active AWS context `{profile_name}` in region `{region_name}`. You do not need to query profiles or environment variables before performing AWS operations.",
-        ]
-
-        # Append unified Multi-Cloud Operational Context
         target_info = get_cloud_target_info(active_prov, active_target)
         auth_source = (
             target_info.auth_source
             if target_info
             else ("ambient_service_role" if active_target in ("@ambient", "@in-cluster") else "local_profile")
         )
-        lines.extend([
-            "",
-            "**Multi-Cloud Operational Context**:",
-            f"- Active Cloud Provider: `{active_prov.upper()}`",
-            f"- Active Target Context: `{active_target}` ({target_info.display_name if target_info else active_target})",
-            f"- Credential Source: `{auth_source}`",
-            f"- Execution Mode: `{exec_mode}`",
-            "- Multi-Cloud Guidance: Use `cloud_list_contexts`, `cloud_get_status`, and `cloud_switch_context` tools to inspect or switch across AWS profiles, Azure subscriptions, GCP configurations, Kubernetes contexts, and ambient attached service roles (`@ambient` / `@in-cluster`). Never run global disk-mutating commands (`az account set`, `gcloud config set`, `kubectl config use-context`); TalkOps isolates cloud contexts per-process via environment variables.",
-        ])
+        auth_status = (
+            "Authenticated"
+            if ctx.authenticated
+            else ("Ambient Service Role" if profile_name == "@ambient" else "Active Named Profile")
+        )
+
+        lines = [
+            "**AWS Operational Environment**:",
+            f"- Active Profile: `{profile_name}` | Region: `{region_name}` | Account: `{ctx.account_id or 'unknown'}` | Mode: `{exec_mode}`",
+            f"- Identity ARN: `{ctx.arn or 'configured'}` (**{auth_status}**, source: `{auth_source}`)",
+            f"- Execution Notice: Shell commands (`aws ...`), AWS SDK, and Terraform automatically execute under `{profile_name}` (`{region_name}`). Do not re-query profiles or environment variables; use `cloud_list_contexts`, `cloud_get_status`, and `cloud_switch_context` to inspect or switch cloud/K8s targets without mutating global CLI configs.",
+        ]
+        if active_prov != "aws":
+            lines.append(
+                f"- Active Multi-Cloud Target: `{active_prov.upper()}` / `{active_target}` ({target_info.display_name if target_info else active_target})"
+            )
         return "\n".join(lines)
     except Exception as exc:
         logger.debug("Failed retrieving cloud context: %s", exc)
@@ -315,13 +309,102 @@ if $IN_GIT; then
 fi"""
 
 
+def _section_files() -> str:
+    return r"""# --- Files ---
+FILE_SUMMARY=$(
+  { ls -1 2>/dev/null; [ -e .talkops ] && echo .talkops; } |
+  sort -u |
+  awk '
+    BEGIN {
+      excluded["node_modules"] = excluded["__pycache__"] = 1
+      excluded[".pytest_cache"] = excluded[".mypy_cache"] = 1
+      excluded[".ruff_cache"] = excluded[".tox"] = 1
+      excluded[".coverage"] = excluded[".eggs"] = 1
+      excluded["dist"] = excluded["build"] = 1
+    }
+    !($0 in excluded) {
+      total++
+      if (shown < 20) files[++shown] = $0
+    }
+    END {
+      print total + 0
+      print shown + 0
+      for (i = 1; i <= shown; i++) print files[i]
+    }
+  '
+)
+TOTAL="${FILE_SUMMARY%%$'\n'*}"
+FILE_DETAILS="${FILE_SUMMARY#*$'\n'}"
+SHOWN="${FILE_DETAILS%%$'\n'*}"
+SHOWN_FILES="${FILE_DETAILS#*$'\n'}"
+
+if [ "$TOTAL" -gt 0 ]; then
+  if [ "$SHOWN" -lt "$TOTAL" ]; then
+    echo "**Files** (showing ${SHOWN} of ${TOTAL}):"
+  else
+    echo "**Files** (${TOTAL}):"
+  fi
+  while IFS= read -r f; do
+    if [ -d "$f" ]; then echo "- ${f}/"
+    else echo "- ${f}"
+    fi
+  done <<< "$SHOWN_FILES"
+  echo ""
+fi"""
+
+
+def _section_tree() -> str:
+    return r"""# --- Tree ---
+if command -v tree >/dev/null 2>&1; then
+  TREE_EXCL='node_modules|.venv|__pycache__|.pytest_cache'
+  TREE_EXCL="${TREE_EXCL}|.git|.mypy_cache|.ruff_cache"
+  TREE_EXCL="${TREE_EXCL}|.tox|.coverage|.eggs|dist|build"
+  T_PREVIEW=$(tree -L 3 --noreport --dirsfirst \
+    -I "$TREE_EXCL" 2>/dev/null | sed -n '1,22p;23{p;q;}')
+  if [ -n "$T_PREVIEW" ]; then
+    PREVIEW_LINES=$(printf '%s\n' "$T_PREVIEW" | awk 'END { print NR }')
+    T="$T_PREVIEW"
+    TREE_TRUNCATED=false
+    if [ "$PREVIEW_LINES" -gt 22 ]; then
+      T=$(printf '%s\n' "$T_PREVIEW" | sed -n '1,22p')
+      TREE_TRUNCATED=true
+    fi
+    echo "**Tree** (3 levels):"
+    echo '```text'
+    echo "$T"
+    $TREE_TRUNCATED && echo "... (more lines truncated)"
+    echo '```'
+    echo ""
+  fi
+fi"""
+
+
+def _section_makefile() -> str:
+    return r"""# --- Makefile ---
+MK=""
+if [ -f Makefile ]; then
+  MK="Makefile"
+elif [ -n "$ROOT" ] && [ "$ROOT" != "$CWD" ] && [ -f "${ROOT}/Makefile" ]; then
+  MK="${ROOT}/Makefile"
+fi
+if [ -n "$MK" ]; then
+  echo "**Makefile** (\`${MK}\`, first 20 lines):"
+  echo '```makefile'
+  awk 'NR <= 20 { print; next } { print "... (truncated)"; exit }' "$MK"
+  echo '```'
+fi"""
+
+
 def build_detect_script() -> str:
-    """Assemble workspace detection script (Directory, Project type, Git status)."""
+    """Assemble workspace detection script (Directory, Project type, Git status, Files, Tree, Makefile)."""
     return "\n\n".join(
         [
             _section_header(),
             _section_project(),
             _section_git(),
+            _section_files(),
+            _section_tree(),
+            _section_makefile(),
         ]
     )
 

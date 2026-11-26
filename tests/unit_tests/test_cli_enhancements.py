@@ -29,7 +29,6 @@ import argparse
 import asyncio
 import io
 import json
-import sys
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -40,7 +39,6 @@ from talkops.approval_mode import ApprovalMode
 from talkops.cli.main import (
     _apply_stdin_pipe,
     _resolve_approval_mode,
-    _validate_args,
     build_parser,
     main,
     non_negative_int,
@@ -636,6 +634,27 @@ def test_help_subcommand_and_topics(capsys):
     assert main(["help"]) == 0
     assert main(["help", "skills"]) == 0
     assert main(["help", "mcp"]) == 0
+
+
+def test_streamlined_help_removes_redundant_unformatted_blocks():
+    """Verify root and subcommand --help omit raw {cmd1,cmd2,...} and repeated metavars."""
+    parser = build_parser()
+    root_help = parser.format_help()
+
+    assert "usage: talkops [OPTIONS] [COMMAND [ARGS]...]" in root_help
+    assert "{doctor,auth," not in root_help
+    assert "Operational subcommands" not in root_help
+    assert "commands:" in root_help
+    assert "prompt & session options:" in root_help
+    assert "-p, --prompt, -n, --non-interactive PROMPT" in root_help
+
+    subparsers_action = next(
+        act for act in parser._actions if isinstance(act, argparse._SubParsersAction)
+    )
+    plugin_help = subparsers_action.choices["plugin"].format_help()
+    assert "usage: talkops plugin [OPTIONS] [COMMAND [ARGS]...]" in plugin_help
+    assert "{list,ls,search," not in plugin_help
+    assert plugin_help.index("commands:") < plugin_help.index("options:")
 
 
 def test_short_v_version_vs_verbose_flag(capsys, monkeypatch):

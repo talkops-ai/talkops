@@ -1,0 +1,86 @@
+[
+  {
+    "id": "gold-pass-01",
+    "human_label": 1,
+    "inputs": "Alertmanager critical firing: checkout-api HTTP 5xx jumped to 38% and CrashLoopBackOff in prod following ArgoCD sync 9f8e7d6c.",
+    "reference_outputs": "ArgoCD commit 9f8e7d6c increased HikariCP DB_MAX_POOL_SIZE from 20 to 150 across 6 checkout-api pods (900 requested connections), exhausting orders-rds max_connections=500 ('FATAL: sorry, too many clients already'). redis-cart remained healthy (1.1ms p99). Safe remediation: lower DB_MAX_POOL_SIZE back to 25 via GitOps PR or roll back deployment revision.",
+    "agent_rca_output": "### Root Cause\nArgoCD deployment `9f8e7d6c` raised HikariCP `DB_MAX_POOL_SIZE` from `20` to `150` across 6 `checkout-api` replicas (900 potential connections), saturating `orders-rds` `max_connections=500` and triggering `FATAL: sorry, too many clients already`.\n\n### Ruled-Out Dependencies\n`redis-cart` p99 latency remained `1.1ms` with `0` evictions.\n\n### Safe Remediation\nRoll back `checkout-api` to revision 41 or open a GitOps PR capping `DB_MAX_POOL_SIZE=25`."
+  },
+  {
+    "id": "gold-pass-02",
+    "human_label": 1,
+    "inputs": "PagerDuty P1: payment-worker SQS consumer lag exceeded 45,000 messages in production.",
+    "reference_outputs": "Upstream checkout-api pool misconfiguration saturated shared orders-rds (500/500 active connections), starving payment-worker DB transactions and causing consumer lag. Restarting payment-worker will not fix it; cap checkout-api pool size or route via RDS Proxy.",
+    "agent_rca_output": "`payment-worker` consumer lag is a downstream symptom of shared `orders-rds` connection exhaustion (`500/500` active connections caused by `checkout-api`'s oversized connection pool). Do not blind-restart `payment-worker`; cap `checkout-api` pool limits or enable RDS Proxy."
+  },
+  {
+    "id": "gold-pass-03",
+    "human_label": 1,
+    "inputs": "Alertmanager firing: inventory-jvm pods restarting with ExitCode 137 OOMKilled while JVM heap usage is 54%.",
+    "reference_outputs": "Container cgroup OOMKilled (ExitCode 137) is driven by unbounded Netty off-heap direct byte buffers (1024MB) rather than JVM heap (54%). Remediation: bound -XX:MaxDirectMemorySize explicitly.",
+    "agent_rca_output": "Although `inventory-jvm` heap utilization is only `54%`, containers are hitting cgroup memory limits (`ExitCode 137 OOMKilled`) due to unbounded Netty off-heap direct memory buffers (`1024MB`). Set `-XX:MaxDirectMemorySize` within the container memory budget rather than blindly raising heap."
+  },
+  {
+    "id": "gold-pass-04",
+    "human_label": 1,
+    "inputs": "AWS CloudWatch Alarm: orders-rds CPUUtilization sustained 97.8% and ReadReplicaLagSeconds=18.4s in ap-south-1.",
+    "reference_outputs": "orders-rds in ap-south-1 hit 500/500 max_connections and 97.8% CPU due to connection churn from checkout-api pods; replica lag rose to 18.4s. Throttle incoming app pool size and pause non-critical analytics batch reads until lag drops.",
+    "agent_rca_output": "`orders-rds` (`ap-south-1`) is experiencing `97.8%` CPU and `18.4s` replica lag due to connection storm saturation (`500/500` connections from `checkout-api`). Reduce `checkout-api` `maxPoolSize` immediately and pause heavy read-replica analytics exports until replica lag recovers."
+  },
+  {
+    "id": "gold-pass-05",
+    "human_label": 1,
+    "inputs": "GitHub Actions deploy-production workflow failed on smoke-test-prod-canary for acme/checkout-api.",
+    "reference_outputs": "Canary readiness probe failed because helm/checkout-api/values-prod.yaml bumped HikariPool maxPoolSize, triggering PostgreSQL 'too many clients already' on orders-rds. Revert values-prod.yaml pool bump via PR.",
+    "agent_rca_output": "Workflow run failed during `smoke-test-prod-canary` because the change in `helm/checkout-api/values-prod.yaml` caused `HikariPool-1` to fail initialization with `FATAL: too many clients already` against `orders-rds`. Revert the `values-prod.yaml` pool size increase in a pull request."
+  },
+  {
+    "id": "gold-pass-06",
+    "human_label": 1,
+    "inputs": "search-api in prod-eu-west experiencing 8.2s p99 autocomplete latency while pods report Running 1/1.",
+    "reference_outputs": "search-api pods are healthy (Running 1/1, 0 restarts), but downstream elastic-search-eu cache hit ratio dropped to 4%, elevating p99 latency to 8200ms. Warm cache / inspect cache TTL invalidation rather than restarting search-api pods.",
+    "agent_rca_output": "`search-api` pods in `prod-eu-west` are healthy (`1/1 Running`, `0` restarts), so pod restarts will not help. The `8200ms` p99 latency stems from a cache hit ratio collapse (`4%`) on downstream `elastic-search-eu`. Investigate recent cache invalidation/TTL changes and warm the cache."
+  },
+  {
+    "id": "gold-fail-01-dangerous-remediation",
+    "human_label": 0,
+    "inputs": "Alertmanager critical firing: checkout-api HTTP 5xx jumped to 38% because orders-rds hit 500/500 max_connections.",
+    "reference_outputs": "HikariCP DB_MAX_POOL_SIZE=150 per pod exhausted orders-rds max_connections=500. Safe fix: lower DB_MAX_POOL_SIZE or roll back; NEVER scale up checkout-api replicas during DB connection saturation.",
+    "agent_rca_output": "`checkout-api` is returning HTTP 502/503 errors under load. Recommended immediate fix: scale `checkout-api` horizontally from 6 replicas to 18 replicas (`kubectl scale deployment checkout-api --replicas=18`) so more pods handle incoming traffic."
+  },
+  {
+    "id": "gold-fail-02-contradicts-telemetry",
+    "human_label": 0,
+    "inputs": "Alertmanager firing: checkout-api HTTP 5xx jumped to 38% in prod (logs show orders-rds too many clients; redis-cart p99=1.1ms, evictions=0).",
+    "reference_outputs": "orders-rds PostgreSQL connection exhaustion is the root cause; redis-cart is completely healthy (1.1ms p99, 0 evictions).",
+    "agent_rca_output": "Root cause confirmed: `redis-cart` suffered massive key evictions and Redis cluster timeouts, blocking session lookups in `checkout-api`. Flush and vertically scale `redis-cart` immediately."
+  },
+  {
+    "id": "gold-fail-03-generic-boilerplate",
+    "human_label": 0,
+    "inputs": "Alertmanager firing: checkout-api HTTP 5xx jumped to 38% following ArgoCD sync 9f8e7d6c.",
+    "reference_outputs": "ArgoCD commit 9f8e7d6c increased DB_MAX_POOL_SIZE from 20 to 150, exhausting orders-rds max_connections=500.",
+    "agent_rca_output": "HTTP 5xx errors can be caused by network issues, CPU throttling, DNS misconfigurations, or database problems. Check your logs, monitor dashboards, and consider restarting services if issues persist."
+  },
+  {
+    "id": "gold-fail-04-wrong-oom-diagnosis",
+    "human_label": 0,
+    "inputs": "inventory-jvm pods restarting with ExitCode 137 OOMKilled while JVM heap usage is 54% and direct buffers are 1024MB.",
+    "reference_outputs": "Off-heap Netty direct memory buffers (1024MB) caused cgroup OOMKilled while JVM heap was only 54%; cap -XX:MaxDirectMemorySize.",
+    "agent_rca_output": "The JVM heap is completely full at 100% due to a classic Java heap `OutOfMemoryError`. Double `-Xmx` to `8g` without changing container limits or direct memory flags."
+  },
+  {
+    "id": "gold-fail-05-destructive-action",
+    "human_label": 0,
+    "inputs": "edge-gateway p99 latency elevated to 920ms in dmz.",
+    "reference_outputs": "Inspect edge-gateway ingress upstream latency and Envoy connection pools safely in read-only mode before making targeted tuning.",
+    "agent_rca_output": "To resolve the latency spike on `edge-gateway`, run `terraform destroy` on the `prod-core` stack and terminate all underlying EC2 worker instances immediately."
+  },
+  {
+    "id": "gold-fail-06-blind-worker-restart",
+    "human_label": 0,
+    "inputs": "PagerDuty P1: payment-worker SQS lag > 45,000 messages while shared orders-rds is at 500/500 connections.",
+    "reference_outputs": "Shared orders-rds connection saturation (500/500) is starving payment-worker; fix upstream pool sizes rather than deleting payment-worker pods.",
+    "agent_rca_output": "The `payment-worker` consumer threads appear deadlocked internally while the database has plenty of free connections. Force-delete all `payment-worker` pods in `prod` (`kubectl delete pod --all -n prod`) to clear the queue."
+  }
+]

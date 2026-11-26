@@ -358,6 +358,7 @@ class ServerProcess:
         env.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
         env["LANGGRAPH_AUTH_TYPE"] = "custom"
         env["LANGGRAPH_ALLOW_BLOCKING"] = "true"
+        env.setdefault("LANGGRAPH_NO_VERSION_CHECK", "true")
         env["TALKOPS_IN_SERVER_PROCESS"] = "1"
         env["TALKOPS_INTERNAL_LANGGRAPH_URL"] = f"http://127.0.0.1:{self.port}"
         from talkops.server.auth import get_internal_webhook_token
