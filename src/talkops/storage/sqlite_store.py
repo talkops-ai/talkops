@@ -383,8 +383,15 @@ class SqliteOperationalStore:
         conn = await self._ensure_conn()
         cursor = await conn.execute(
             """
-            WITH RECURSIVE walk(nid, depth) AS (
-                SELECT ?, 0
+            WITH RECURSIVE seeds(nid) AS (
+                SELECT ?
+                UNION
+                SELECT node_id
+                FROM talkops_topology_nodes
+                WHERE tenant_id = ? AND (node_id = ? OR LOWER(service_name) = LOWER(?))
+            ),
+            walk(nid, depth) AS (
+                SELECT nid, 0 FROM seeds
                 UNION
                 SELECT CASE WHEN e.src_id = w.nid THEN e.dst_id ELSE e.src_id END,
                        w.depth + 1
@@ -395,9 +402,9 @@ class SqliteOperationalStore:
             SELECT DISTINCT n.*
             FROM talkops_topology_nodes n
             JOIN walk w ON n.node_id = w.nid
-            WHERE n.tenant_id = ? AND n.node_id != ?
+            WHERE n.tenant_id = ? AND n.node_id NOT IN (SELECT nid FROM seeds)
             """,
-            (node_id, tenant_id, bounded_depth, tenant_id, node_id),
+            (node_id, tenant_id, node_id, node_id, tenant_id, bounded_depth, tenant_id),
         )
         rows = await cursor.fetchall()
         return [

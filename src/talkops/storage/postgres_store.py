@@ -164,8 +164,15 @@ class PostgresOperationalStore:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                WITH RECURSIVE walk(nid, depth) AS (
-                    SELECT %s::text, 0
+                WITH RECURSIVE seeds(nid) AS (
+                    SELECT %s::text
+                    UNION
+                    SELECT node_id
+                    FROM talkops_topology_nodes
+                    WHERE tenant_id = %s AND (node_id = %s OR LOWER(service_name) = LOWER(%s))
+                ),
+                walk(nid, depth) AS (
+                    SELECT nid, 0 FROM seeds
                     UNION
                     SELECT CASE WHEN e.src_id = w.nid THEN e.dst_id ELSE e.src_id END,
                            w.depth + 1
@@ -176,9 +183,9 @@ class PostgresOperationalStore:
                 SELECT DISTINCT n.*
                 FROM talkops_topology_nodes n
                 JOIN walk w ON n.node_id = w.nid
-                WHERE n.tenant_id = %s AND n.node_id <> %s
+                WHERE n.tenant_id = %s AND n.node_id NOT IN (SELECT nid FROM seeds)
                 """,
-                (node_id, tenant_id, bounded_depth, tenant_id, node_id),
+                (node_id, tenant_id, node_id, node_id, tenant_id, bounded_depth, tenant_id),
             )
             rows = await cur.fetchall()
         return [

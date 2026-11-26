@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from talkops.webhooks.entities import resolve_alertmanager_primary_service
 from talkops.webhooks.models import (
     NormalizedWebhookEvent,
     WebhookConfig,
@@ -59,8 +60,11 @@ class AlertmanagerWebhookAdapter(WebhookProviderAdapter):
         common_annotations = as_dict(data.get("commonAnnotations"))
         group_labels = as_dict(data.get("groupLabels"))
 
-        # Fall back to first alert's labels/annotations if commonLabels is empty
-        first_alert = alerts_list[0] if alerts_list else {}
+        # Prefer the first active (firing) alert's labels/annotations over resolved siblings
+        firing_alerts = [
+            a for a in alerts_list if str(a.get("status") or status_raw).strip().lower() != "resolved"
+        ]
+        first_alert = firing_alerts[0] if firing_alerts else (alerts_list[0] if alerts_list else {})
         first_labels = as_dict(first_alert.get("labels"))
         first_annotations = as_dict(first_alert.get("annotations"))
 
@@ -73,12 +77,7 @@ class AlertmanagerWebhookAdapter(WebhookProviderAdapter):
             or data.get("title")
             or "PrometheusAlert"
         )
-        service_name = (
-            merged_labels.get("service")
-            or merged_labels.get("job")
-            or merged_labels.get("app")
-            or merged_labels.get("namespace")
-        )
+        service_name = resolve_alertmanager_primary_service(merged_labels, alerts_list)
         severity_raw = merged_labels.get("severity") or merged_labels.get("priority")
         severity = WebhookSeverity.from_raw(severity_raw)
         if severity == WebhookSeverity.UNKNOWN:
@@ -107,10 +106,12 @@ class AlertmanagerWebhookAdapter(WebhookProviderAdapter):
             a_ann = as_dict(alert.get("annotations"))
             a_desc = a_ann.get("description") or a_ann.get("summary") or ""
             target = (
-                a_labels.get("pod")
-                or a_labels.get("instance")
+                a_labels.get("deployment")
+                or a_labels.get("statefulset")
+                or a_labels.get("daemonset")
+                or a_labels.get("pod")
                 or a_labels.get("node")
-                or a_labels.get("deployment")
+                or a_labels.get("instance")
                 or a_labels.get("alertname")
                 or f"alert-{idx}"
             )

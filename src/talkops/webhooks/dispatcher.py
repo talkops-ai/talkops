@@ -685,30 +685,56 @@ class WebhookDispatcher:
         delivery_id = str(uuid.uuid4())
 
         # 4b. Optional Alert Storm Sidecar Correlation (TalkOps v2)
-        if self._storm_correlator is not None and event.service_name:
-            route_decision = await self._storm_correlator.route_incoming_alert(
-                candidate_thread_id=lg_thread_id,
-                provider=event.provider,
-                dedup_key=event.effective_dedup_key,
-                service_name=event.service_name,
-                environment=str(event.metadata.get("environment") or "production"),
-                normalized_event={
-                    "incident_id": event.incident_id,
-                    "title": event.title,
-                    "summary": event.summary,
-                    "severity": str(event.severity),
-                    "service_name": event.service_name,
-                },
-            )
-            if route_decision.action == "queued_sidecar_inbox":
-                return 202, {
-                    "status": "correlated_into_active_run",
-                    "delivery_id": delivery_id,
-                    "provider": event.provider,
-                    "incident_id": event.incident_id,
-                    "thread_id": route_decision.thread_id,
-                    "matched_service": route_decision.matched_service,
-                }
+        if self._storm_correlator is not None:
+            from talkops.webhooks.entities import extract_canonical_entities
+
+            canonical_entities = extract_canonical_entities(event)
+            corr_service = canonical_entities.primary_service or event.service_name or ""
+            if corr_service or canonical_entities.entity_keys:
+                route_decision = await self._storm_correlator.route_incoming_alert(
+                    candidate_thread_id=lg_thread_id,
+                    provider=event.provider,
+                    dedup_key=event.effective_dedup_key,
+                    service_name=corr_service,
+                    environment=str(
+                        event.metadata.get("environment") or canonical_entities.environment or "production"
+                    ),
+                    entity_keys=canonical_entities.entity_keys,
+                    severity=event.severity.value,
+                    normalized_event={
+                        "incident_id": event.incident_id,
+                        "title": event.title,
+                        "summary": event.summary,
+                        "severity": str(event.severity),
+                        "service_name": corr_service or event.service_name,
+                        "entity_keys": sorted(canonical_entities.entity_keys),
+                    },
+                )
+                if route_decision.action == "queued_sidecar_inbox":
+                    return 202, {
+                        "status": "correlated_into_active_run",
+                        "delivery_id": delivery_id,
+                        "provider": event.provider,
+                        "incident_id": event.incident_id,
+                        "thread_id": route_decision.thread_id,
+                        "matched_service": route_decision.matched_service,
+                    }
+                if route_decision.action == "suppressed_cooldown":
+                    logger.info(
+                        "Suppressed trailing alert during post-RCA cooldown | provider=%s incident_id=%s thread_id=%s matched=%s",
+                        event.provider,
+                        event.incident_id,
+                        route_decision.thread_id,
+                        route_decision.matched_service,
+                    )
+                    return 202, {
+                        "status": "suppressed_recent_rca",
+                        "delivery_id": delivery_id,
+                        "provider": event.provider,
+                        "incident_id": event.incident_id,
+                        "thread_id": route_decision.thread_id,
+                        "matched_service": route_decision.matched_service,
+                    }
 
         logger.info(
             "Webhook accepted & queued | delivery_id=%s provider=%s incident_id=%s thread_id=%s caller=%s role=%s",
